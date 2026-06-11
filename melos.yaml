@@ -1,0 +1,56 @@
+name: homeric
+
+packages:
+  - packages/*
+  - examples/*
+
+# Use path-based dependency overrides for intra-monorepo packages so local
+# changes are picked up immediately without re-publishing.
+command:
+  bootstrap:
+    environment:
+      sdk: ">=3.5.0 <4.0.0"
+      flutter: ">=3.24.0"
+
+    dependencies:
+      # third-party deps for the workspace can go here in the future
+
+    # Map of package name -> path; Melos rewrites pubspecs during bootstrap.
+    dependency_overrides:
+      homeric:
+        path: packages/homeric
+      homeric_text_layout:
+        path: packages/homeric_text_layout
+      homeric_attributed_text:
+        path: packages/homeric_attributed_text
+      homeric_markdown:
+        path: packages/homeric_markdown
+
+scripts:
+  analyze:
+    description: Run `dart analyze` on all packages.
+    run: melos exec -c 1 -- "dart analyze --fatal-infos"
+
+  test:
+    description: Run all unit + widget tests.
+    run: melos exec -c 1 --dir-exists=test -- "flutter test"
+
+  format:
+    description: Format all Dart files.
+    run: melos exec -c 1 -- "dart format ."
+
+  format-check:
+    description: Verify all Dart files are formatted.
+    run: melos exec -c 1 -- "dart format --set-exit-if-changed ."
+
+  benchmark:
+    description: Run the 100k-word benchmark and write JSON results.
+    run: |
+      cd examples/benchmark_100k && \
+      flutter test integration_test/benchmark_test.dart --machine > ../../benchmarks/results/$(date +%Y-%m-%d-%H%M%S).json
+
+  benchmark-baseline:
+    description: Record a baseline result (commit this when intentionally accepting a perf change).
+    run: |
+      cd examples/benchmark_100k && \
+      flutter test integration_test/benchmark_test.dart --machine > ../../benchmarks/baseline.json

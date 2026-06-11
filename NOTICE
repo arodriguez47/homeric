@@ -1,0 +1,28 @@
+Homeric
+=======
+
+This product includes software developed by Superlist GmbH and the super_editor
+contributors. The packages under `packages/` are forks of the following
+upstream packages, vendored from
+https://github.com/superlistapp/super_editor at commit 068a20d3
+(super_editor_clipboard v0.2.5, January 28 2026), then renamed by
+`tools/rename.sh`:
+
+  - packages/homeric/                  ← super_editor/        (0.3.0-dev.51)
+  - packages/homeric_text_layout/      ← super_text_layout/   (0.1.18)
+  - packages/homeric_attributed_text/  ← attributed_text/     (0.4.5)
+  - packages/homeric_markdown/         ← super_editor_markdown/
+
+All upstream code is MIT-licensed; see LICENSE.
+
+The StepMap and DecorationSet APIs (to be added in Phase 3) are designs ported
+from ProseMirror (https://prosemirror.net), MIT-licensed, © Marijn Haverbeke
+and contributors. Implementation references:
+
+  - prosemirror-transform: https://github.com/ProseMirror/prosemirror-transform
+  - prosemirror-view (Decoration): https://github.com/ProseMirror/prosemirror-view
+  - prosemirror-changeset: https://github.com/ProseMirror/prosemirror-changeset
+
+When Homeric re-uses ProseMirror algorithms verbatim (e.g., the StepMap
+position-mapping math), the file header will cite the specific upstream file
+and commit.

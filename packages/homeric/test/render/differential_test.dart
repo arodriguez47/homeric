@@ -21,8 +21,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
 import '../transform/transform_test_utils.dart';
-
-const TextStyle style14 = TextStyle(fontSize: 14);
+import 'render_test_utils.dart' show style14;
 
 Widget emChip(SlotSegment<TextStyle> slot) => const SizedBox(
     width: 14, height: 14, child: ColoredBox(color: Color(0xFF00A000)));

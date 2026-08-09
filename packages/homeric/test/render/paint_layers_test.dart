@@ -12,38 +12,7 @@ import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
-import '../transform/transform_test_utils.dart';
-
-const TextStyle style14 = TextStyle(fontSize: 14);
-
-ParagraphSource<TextStyle> sourceOf(
-  String text, {
-  TextStyle style = style14,
-  Iterable<Decoration> decorations = const <Decoration>[],
-  BlockParagraphSpec spec = const BlockParagraphSpec(),
-}) {
-  return ParagraphSource.build(
-    block: para('a', text),
-    decorations: decorations,
-    resolveStyle: (_) => style,
-    spec: spec,
-  );
-}
-
-/// Pumps [paragraph] inside a top-left aligned box of [width].
-Widget harness(Widget paragraph, {double width = 200}) {
-  return Directionality(
-    textDirection: TextDirection.ltr,
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: SizedBox(width: width, child: paragraph),
-    ),
-  );
-}
-
-RenderHomericParagraph renderOf(WidgetTester tester, [Finder? finder]) =>
-    tester.renderObject<RenderHomericParagraph>(
-        finder ?? find.byType(HomericParagraph));
+import 'render_test_utils.dart';
 
 /// A spy [RenderHomericParagraph] that counts [markNeedsSemanticsUpdate]
 /// calls, mirroring `semantics_test.dart`'s spy — used here to pin that a
@@ -227,7 +196,7 @@ void main() {
         'including the slot', (tester) async {
       final source = sourceOf(
         'ab',
-        decorations: [Decoration.widget('a', 1, spec: 'chip')],
+        decorations: [Decoration.widget('b', 1, spec: 'chip')],
       );
       expect(source.viewText, 'a${objectReplacementCharacter}b');
 
@@ -250,7 +219,7 @@ void main() {
         (tester) async {
       final source = sourceOf(
         'ab',
-        decorations: [Decoration.widget('a', 1, spec: 'chip')],
+        decorations: [Decoration.widget('b', 1, spec: 'chip')],
       );
       final layer = PaintLayer(
         // [0, 1): ends exactly at the widget's doc anchor, so the
@@ -293,9 +262,9 @@ void main() {
         'text — rects follow view space, not the doc-length width',
         (tester) async {
       final source = sourceOf('**bold**', decorations: [
-        Decoration.replace('a', 0, 2, replacementLength: 0),
-        Decoration.replace('a', 6, 8, replacementLength: 0),
-        Decoration.inline('a', 2, 6, spec: 'bold'),
+        Decoration.replace('b', 0, 2, replacementLength: 0),
+        Decoration.replace('b', 6, 8, replacementLength: 0),
+        Decoration.inline('b', 2, 6, spec: 'bold'),
       ]);
       expect(source.viewText, 'bold', reason: 'sanity: delimiters fold away');
 

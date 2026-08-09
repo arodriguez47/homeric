@@ -10,38 +10,7 @@ import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
-import '../transform/transform_test_utils.dart';
-
-const TextStyle style14 = TextStyle(fontSize: 14);
-
-ParagraphSource<TextStyle> sourceOf(
-  String text, {
-  TextStyle style = style14,
-  Iterable<Decoration> decorations = const <Decoration>[],
-  BlockParagraphSpec spec = const BlockParagraphSpec(),
-}) {
-  return ParagraphSource.build(
-    block: para('a', text),
-    decorations: decorations,
-    resolveStyle: (_) => style,
-    spec: spec,
-  );
-}
-
-/// Pumps [paragraph] inside a top-left aligned box of [width].
-Widget harness(Widget paragraph, {double width = 200}) {
-  return Directionality(
-    textDirection: TextDirection.ltr,
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: SizedBox(width: width, child: paragraph),
-    ),
-  );
-}
-
-RenderHomericParagraph renderOf(WidgetTester tester, [Finder? finder]) =>
-    tester.renderObject<RenderHomericParagraph>(
-        finder ?? find.byType(HomericParagraph));
+import 'render_test_utils.dart';
 
 /// A fixed one-em chip: sized so its placeholder box is pixel-identical to
 /// the box a literal 1-code-unit glyph would occupy in the FlutterTest font
@@ -92,8 +61,8 @@ void main() {
     ParagraphSource<TextStyle> hiddenSource() => sourceOf(
           '**bold**',
           decorations: [
-            Decoration.replace('a', 0, 2, replacementLength: 0),
-            Decoration.replace('a', 6, 8, replacementLength: 0),
+            Decoration.replace('b', 0, 2, replacementLength: 0),
+            Decoration.replace('b', 6, 8, replacementLength: 0),
           ],
         );
 
@@ -148,7 +117,7 @@ void main() {
       // has two genuinely different visible neighbors on either side.
       final source = sourceOf(
         'a**bc',
-        decorations: [Decoration.replace('a', 1, 3, replacementLength: 0)],
+        decorations: [Decoration.replace('b', 1, 3, replacementLength: 0)],
       );
       expect(source.viewText, 'abc');
       await tester.pumpWidget(harness(HomericParagraph(source: source)));
@@ -204,8 +173,8 @@ void main() {
       final source = sourceOf(
         '**bold** and more',
         decorations: [
-          Decoration.replace('a', 0, 2, replacementLength: 0),
-          Decoration.replace('a', 6, 8, replacementLength: 0),
+          Decoration.replace('b', 0, 2, replacementLength: 0),
+          Decoration.replace('b', 6, 8, replacementLength: 0),
         ],
       );
       expect(source.viewText, 'bold and more');
@@ -227,7 +196,7 @@ void main() {
         (tester) async {
       final source = sourceOf(
         'ab',
-        decorations: [Decoration.widget('a', 1, spec: 'chip')],
+        decorations: [Decoration.widget('b', 1, spec: 'chip')],
       );
       await tester.pumpWidget(harness(HomericParagraph(
         source: source,
@@ -250,7 +219,7 @@ void main() {
     testWidgets('falls back to preferredLineHeight/Baseline', (tester) async {
       final source = sourceOf(
         'abcd',
-        decorations: [Decoration.replace('a', 0, 4, replacementLength: 0)],
+        decorations: [Decoration.replace('b', 0, 4, replacementLength: 0)],
       );
       await tester.pumpWidget(harness(HomericParagraph(source: source)));
       final render = renderOf(tester);
@@ -337,8 +306,8 @@ void main() {
       final source = sourceOf(
         'x{{id}}y',
         decorations: [
-          Decoration.replace('a', 1, 7, replacementLength: 0),
-          Decoration.widget('a', 1, spec: 'mention'),
+          Decoration.replace('b', 1, 7, replacementLength: 0),
+          Decoration.widget('b', 1, spec: 'mention'),
         ],
       );
       expect(source.viewText, 'x￼y');
@@ -358,7 +327,7 @@ void main() {
     testWidgets('empty block falls back to doc offset zero', (tester) async {
       final source = sourceOf(
         'abcd',
-        decorations: [Decoration.replace('a', 0, 4, replacementLength: 0)],
+        decorations: [Decoration.replace('b', 0, 4, replacementLength: 0)],
       );
       await tester.pumpWidget(harness(HomericParagraph(source: source)));
       final geometry = ParagraphGeometry(renderOf(tester));
@@ -376,8 +345,8 @@ void main() {
       final source = sourceOf(
         '**bold**',
         decorations: [
-          Decoration.replace('a', 0, 2, replacementLength: 0),
-          Decoration.replace('a', 6, 8, replacementLength: 0),
+          Decoration.replace('b', 0, 2, replacementLength: 0),
+          Decoration.replace('b', 6, 8, replacementLength: 0),
         ],
       );
       await tester.pumpWidget(harness(HomericParagraph(source: source)));
@@ -392,8 +361,8 @@ void main() {
       final source = sourceOf(
         'ab',
         decorations: [
-          Decoration.widget('a', 1, spec: 'w1'),
-          Decoration.widget('a', 1, spec: 'w2'),
+          Decoration.widget('b', 1, spec: 'w1'),
+          Decoration.widget('b', 1, spec: 'w2'),
         ],
       );
       await tester.pumpWidget(harness(HomericParagraph(
@@ -412,7 +381,7 @@ void main() {
         (tester) async {
       final source = sourceOf(
         'ab',
-        decorations: [Decoration.widget('a', 1, spec: 'w1')],
+        decorations: [Decoration.widget('b', 1, spec: 'w1')],
       );
       await tester.pumpWidget(harness(HomericParagraph(
         source: source,

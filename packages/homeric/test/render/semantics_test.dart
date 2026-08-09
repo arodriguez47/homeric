@@ -28,27 +28,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
 import '../transform/transform_test_utils.dart';
-
-const TextStyle style14 = TextStyle(fontSize: 14);
-
-Block textBlock(String text) =>
-    Block(id: 'b', type: 'paragraph', runs: [InlineRun(text)]);
-
-ParagraphSource<TextStyle> sourceOf(
-  String text, {
-  TextStyle style = style14,
-  Iterable<Decoration> decorations = const <Decoration>[],
-  RevealState reveal = RevealState.none,
-  BlockParagraphSpec spec = const BlockParagraphSpec(),
-}) {
-  return ParagraphSource.build(
-    block: textBlock(text),
-    decorations: decorations,
-    reveal: reveal,
-    resolveStyle: (_) => style,
-    spec: spec,
-  );
-}
+import 'render_test_utils.dart';
 
 /// A reveal-invariant semantics-only derivation: same block and
 /// decorations as a paint-time [sourceOf] call, but always with
@@ -65,17 +45,6 @@ ParagraphSource<Object?> semanticsOf(
     decorations: decorations,
     resolveStyle: (_) => null,
     spec: spec,
-  );
-}
-
-/// Pumps [paragraph] inside a top-left aligned box of [width].
-Widget harness(Widget paragraph, {double width = 200}) {
-  return Directionality(
-    textDirection: TextDirection.ltr,
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: SizedBox(width: width, child: paragraph),
-    ),
   );
 }
 
@@ -169,7 +138,7 @@ void main() {
         'reveal on for paint does not flicker the label (document text, '
         'not view text)', (tester) async {
       final handle = tester.ensureSemantics();
-      final block = textBlock('**bold**');
+      final block = para('b', '**bold**');
       final lead = Decoration.replace('b', 0, 2, replacementLength: 0);
       final trail = Decoration.replace('b', 6, 8, replacementLength: 0);
       final bold = Decoration.inline('b', 2, 6, spec: 'bold');
@@ -226,7 +195,7 @@ void main() {
         'real replacement content (e.g. an aside marker) reads as prose — '
         'never vanishes, never leaks raw delimiters', (tester) async {
       final handle = tester.ensureSemantics();
-      final block = textBlock('%%An aside%%');
+      final block = para('b', '%%An aside%%');
       final source = ParagraphSource.build(
         block: block,
         decorations: [
@@ -388,7 +357,7 @@ void main() {
       final render = captured.single;
       final afterBuild = render.semanticsUpdateCount;
 
-      final override = semanticsOf(textBlock('hi'));
+      final override = semanticsOf(para('b', 'hi'));
       await tester.pumpWidget(harness(_SpyHomericParagraph(
         source: source,
         captured: captured,

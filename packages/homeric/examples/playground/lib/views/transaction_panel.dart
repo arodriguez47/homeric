@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart' hide Decoration;
 
 import '../view_models/document_view_model.dart';
+import 'panel_row.dart';
 
 /// Buttons/fields driving [DocumentViewModel]'s builder commands.
 class TransactionPanel extends StatefulWidget {
@@ -57,7 +58,7 @@ class _TransactionPanelState extends State<TransactionPanel> {
                 ? 'Caret: none (tap a paragraph)'
                 : 'Caret: $caret  ·  doc size: ${widget.viewModel.document.size}'),
             const SizedBox(height: 12),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
@@ -70,7 +71,7 @@ class _TransactionPanelState extends State<TransactionPanel> {
                 child: const Text('insertText @ caret'),
               ),
             ]),
-            _row([
+            PanelRow([
               SizedBox(
                 width: 72,
                 child: TextField(
@@ -88,28 +89,28 @@ class _TransactionPanelState extends State<TransactionPanel> {
                 child: const Text('deleteRange (backspace @ caret)'),
               ),
             ]),
-            _row([
+            PanelRow([
               FilledButton(
                 onPressed: () => widget.viewModel.splitAtCaret(),
                 child: const Text('splitBlock @ caret'),
               ),
             ]),
             const Divider(height: 24),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
                       controller: _blockId,
                       decoration: const InputDecoration(labelText: 'blockId'))),
             ]),
-            _row([
+            PanelRow([
               FilledButton(
                 onPressed: () =>
                     widget.viewModel.joinBlockWithNext(_blockId.text),
                 child: const Text('joinBlocks (with next)'),
               ),
             ]),
-            _row([
+            PanelRow([
               OutlinedButton(
                 onPressed: () => widget.viewModel.moveBlockUp(_blockId.text),
                 child: const Text('moveBlock ↑'),
@@ -120,7 +121,7 @@ class _TransactionPanelState extends State<TransactionPanel> {
                 child: const Text('moveBlock ↓'),
               ),
             ]),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
@@ -135,7 +136,7 @@ class _TransactionPanelState extends State<TransactionPanel> {
             ]),
             const Divider(height: 24),
             Text('toggleMark', style: Theme.of(context).textTheme.labelLarge),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 64,
                   child: TextField(
@@ -156,7 +157,7 @@ class _TransactionPanelState extends State<TransactionPanel> {
                       controller: _markKey,
                       decoration: const InputDecoration(labelText: 'key'))),
             ]),
-            _row([
+            PanelRow([
               FilledButton(
                 onPressed: () {
                   final from = int.tryParse(_markFrom.text);
@@ -168,7 +169,7 @@ class _TransactionPanelState extends State<TransactionPanel> {
               ),
             ]),
             const Divider(height: 24),
-            _row([
+            PanelRow([
               OutlinedButton.icon(
                 onPressed:
                     widget.viewModel.canUndo ? widget.viewModel.undoLast : null,
@@ -181,17 +182,4 @@ class _TransactionPanelState extends State<TransactionPanel> {
       },
     );
   }
-
-  // Wrapped in a horizontal scroll view rather than relying on Expanded
-  // everywhere: some rows mix fixed-width number fields with buttons whose
-  // label text length depends on the platform, and the panel itself is a
-  // fixed-width sidebar — scrolling a row instead of overflowing it keeps
-  // every control reachable regardless of window width.
-  Widget _row(List<Widget> children) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: children),
-        ),
-      );
 }

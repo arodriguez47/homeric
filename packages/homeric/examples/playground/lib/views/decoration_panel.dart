@@ -6,6 +6,7 @@ library;
 import 'package:flutter/material.dart' hide Decoration;
 
 import '../view_models/document_view_model.dart';
+import 'panel_row.dart';
 
 /// Buttons/fields driving [DocumentViewModel]'s decoration commands.
 class DecorationPanel extends StatefulWidget {
@@ -59,7 +60,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
             const Text('Reveal-on-selection (R10): tap the caret inside a '
                 'hidden ** or %% run to see it reveal.'),
             const SizedBox(height: 12),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
@@ -78,7 +79,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
             const Divider(height: 24),
             Text('Mention wash (underlay)',
                 style: Theme.of(context).textTheme.labelLarge),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
@@ -99,7 +100,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'to'))),
             ]),
-            _row([
+            PanelRow([
               FilledButton(
                 onPressed: () {
                   final from = int.tryParse(_washFrom.text);
@@ -113,7 +114,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
             const Divider(height: 24),
             Text('Annotation underline (overlay)',
                 style: Theme.of(context).textTheme.labelLarge),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
@@ -134,7 +135,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'to'))),
             ]),
-            _row([
+            PanelRow([
               FilledButton(
                 onPressed: () {
                   final from = int.tryParse(_underlineFrom.text);
@@ -148,7 +149,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
             ]),
             const Divider(height: 24),
             Text('Widget chip', style: Theme.of(context).textTheme.labelLarge),
-            _row([
+            PanelRow([
               SizedBox(
                   width: 160,
                   child: TextField(
@@ -168,7 +169,7 @@ class _DecorationPanelState extends State<DecorationPanel> {
                       controller: _chipLabel,
                       decoration: const InputDecoration(labelText: 'label'))),
             ]),
-            _row([
+            PanelRow([
               FilledButton(
                 onPressed: () {
                   final offset = int.tryParse(_chipOffset.text);
@@ -184,14 +185,4 @@ class _DecorationPanelState extends State<DecorationPanel> {
       },
     );
   }
-
-  // See TransactionPanel._row's doc: a horizontally scrollable row keeps
-  // every control reachable in the fixed-width sidebar without overflow.
-  Widget _row(List<Widget> children) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: children),
-        ),
-      );
 }

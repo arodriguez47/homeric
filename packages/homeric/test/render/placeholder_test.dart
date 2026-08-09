@@ -14,36 +14,7 @@ import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
-const TextStyle style14 = TextStyle(fontSize: 14);
-
-Block textBlock(String text) =>
-    Block(id: 'b', type: 'paragraph', runs: [InlineRun(text)]);
-
-ParagraphSource<TextStyle> sourceOf(
-  String text, {
-  TextStyle style = style14,
-  Iterable<Decoration> decorations = const <Decoration>[],
-}) {
-  return ParagraphSource.build(
-    block: textBlock(text),
-    decorations: decorations,
-    resolveStyle: (_) => style,
-  );
-}
-
-/// Pumps [paragraph] inside a top-left aligned box of [width].
-Widget harness(Widget paragraph, {double width = 100}) {
-  return Directionality(
-    textDirection: TextDirection.ltr,
-    child: Align(
-      alignment: Alignment.topLeft,
-      child: SizedBox(width: width, child: paragraph),
-    ),
-  );
-}
-
-RenderHomericParagraph renderOf(WidgetTester tester) =>
-    tester.renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+import 'render_test_utils.dart';
 
 /// A hit-testable chip: ColoredBox hit-tests opaquely, unlike a bare
 /// SizedBox.
@@ -76,10 +47,13 @@ void main() {
       );
       expect(source.viewText, 'a${objectReplacementCharacter}b');
 
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => chip(key: chipKey),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => chip(key: chipKey),
+        ),
+        width: 100,
+      ));
 
       final paragraph = renderOf(tester).layoutParagraph;
       final boxes = paragraph.getBoxesForPlaceholders();
@@ -114,13 +88,16 @@ void main() {
       expect(source.viewText, 'x${objectReplacementCharacter}y');
       expect(source.slots, hasLength(1));
 
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (slot) {
-          expect(slot.spec, 'mention');
-          return chip(key: chipKey);
-        },
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (slot) {
+            expect(slot.spec, 'mention');
+            return chip(key: chipKey);
+          },
+        ),
+        width: 100,
+      ));
 
       final render = renderOf(tester);
       expect(render.childCount, 1);
@@ -142,14 +119,17 @@ void main() {
         'ab',
         decorations: [Decoration.widget('b', 1, spec: 'chip')],
       );
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotAlignment: PlaceholderAlignment.baseline,
-        slotBaseline: TextBaseline.alphabetic,
-        // A text-like chip: fontSize 10 → 10x10 glyph, baseline 7.5.
-        slotBuilder: (_) =>
-            const Text('x', key: chipKey, style: TextStyle(fontSize: 10)),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotAlignment: PlaceholderAlignment.baseline,
+          slotBaseline: TextBaseline.alphabetic,
+          // A text-like chip: fontSize 10 → 10x10 glyph, baseline 7.5.
+          slotBuilder: (_) =>
+              const Text('x', key: chipKey, style: TextStyle(fontSize: 10)),
+        ),
+        width: 100,
+      ));
 
       // Chip baseline (7.5 from its top) sits on the paragraph baseline
       // (10.5): top = 10.5 - 7.5 = 3. Line height stays 14 (chip descent
@@ -185,10 +165,13 @@ void main() {
       );
       expect(source.viewText, '${objectReplacementCharacter}ab');
 
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => chip(key: chipKey),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => chip(key: chipKey),
+        ),
+        width: 100,
+      ));
 
       final paragraph = renderOf(tester).layoutParagraph;
       expect(paragraph.getBoxesForPlaceholders().single.left, 0);
@@ -204,10 +187,13 @@ void main() {
       );
       expect(source.viewText, 'note$objectReplacementCharacter');
 
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => chip(key: chipKey),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => chip(key: chipKey),
+        ),
+        width: 100,
+      ));
 
       final box =
           renderOf(tester).layoutParagraph.getBoxesForPlaceholders().single;
@@ -230,12 +216,15 @@ void main() {
       expect(source.viewText,
           'a$objectReplacementCharacter${objectReplacementCharacter}b');
 
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (slot) => slot.spec == 'w1'
-            ? chip(key: firstKey, width: 20)
-            : chip(key: secondKey, width: 30),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (slot) => slot.spec == 'w1'
+              ? chip(key: firstKey, width: 20)
+              : chip(key: secondKey, width: 30),
+        ),
+        width: 100,
+      ));
 
       final render = renderOf(tester);
       expect(render.childCount, 2);
@@ -284,10 +273,13 @@ void main() {
         'ab',
         decorations: [Decoration.widget('b', 1, spec: 'tall')],
       );
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => chip(key: chipKey, height: 30),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => chip(key: chipKey, height: 30),
+        ),
+        width: 100,
+      ));
 
       // Middle-aligned 30px chip about the text midline (3.5 above the
       // baseline): ascent 3.5 + 15 = 18.5, descent 15 - 3.5 = 11.5 —
@@ -309,10 +301,13 @@ void main() {
         'ab',
         decorations: [Decoration.widget('b', 1, spec: 'empty')],
       );
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => const SizedBox.shrink(key: chipKey),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => const SizedBox.shrink(key: chipKey),
+        ),
+        width: 100,
+      ));
 
       expect(tester.takeException(), isNull);
       // A zero-size placeholder: the line keeps its text metrics and 'b'
@@ -337,10 +332,13 @@ void main() {
         'ab',
         decorations: [Decoration.widget('b', 1, spec: 'chip')],
       );
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => chip(key: chipKey),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => chip(key: chipKey),
+        ),
+        width: 100,
+      ));
       final render = renderOf(tester);
       final chipBox = tester.renderObject(find.descendant(
           of: find.byKey(chipKey), matching: find.byType(ColoredBox)));
@@ -399,10 +397,13 @@ void main() {
         'ab',
         decorations: [Decoration.widget('b', 1, spec: 'chip')],
       );
-      Widget build(double chipWidth) => harness(HomericParagraph(
-            source: source,
-            slotBuilder: (_) => chip(width: chipWidth),
-          ));
+      Widget build(double chipWidth) => harness(
+            HomericParagraph(
+              source: source,
+              slotBuilder: (_) => chip(width: chipWidth),
+            ),
+            width: 100,
+          );
 
       await tester.pumpWidget(build(20));
       final render = renderOf(tester);
@@ -472,10 +473,13 @@ void main() {
         'aaaa bb',
         decorations: [Decoration.widget('b', 7, spec: 'chip')],
       );
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        slotBuilder: (_) => chip(key: chipKey),
-      )));
+      await tester.pumpWidget(harness(
+        HomericParagraph(
+          source: source,
+          slotBuilder: (_) => chip(key: chipKey),
+        ),
+        width: 100,
+      ));
       final render = renderOf(tester);
       final live = render.layoutParagraph;
       final generation = render.layoutGeneration;

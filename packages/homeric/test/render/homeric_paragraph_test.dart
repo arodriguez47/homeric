@@ -18,35 +18,7 @@ import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
-const TextStyle style14 = TextStyle(fontSize: 14);
-
-Block textBlock(String text) =>
-    Block(id: 'b', type: 'paragraph', runs: [InlineRun(text)]);
-
-ParagraphSource<TextStyle> sourceOf(
-  String text, {
-  TextStyle style = style14,
-  Iterable<Decoration> decorations = const <Decoration>[],
-  BlockParagraphSpec spec = const BlockParagraphSpec(),
-}) {
-  return ParagraphSource.build(
-    block: textBlock(text),
-    decorations: decorations,
-    resolveStyle: (_) => style,
-    spec: spec,
-  );
-}
-
-/// Pumps [paragraph] inside a top-left aligned box of [width].
-Widget harness(Widget paragraph, {double width = 200}) {
-  return Align(
-    alignment: Alignment.topLeft,
-    child: SizedBox(width: width, child: paragraph),
-  );
-}
-
-RenderHomericParagraph renderOf(WidgetTester tester) =>
-    tester.renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+import 'render_test_utils.dart';
 
 Future<void> sendFontsChangeMessage(WidgetTester tester) async {
   await tester.binding.defaultBinaryMessenger.handlePlatformMessage(

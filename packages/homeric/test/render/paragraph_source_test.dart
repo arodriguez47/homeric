@@ -6,7 +6,6 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
-import 'package:homeric/src/render/paragraph_source.dart';
 
 import '../transform/transform_test_utils.dart';
 

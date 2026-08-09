@@ -25,3 +25,7 @@ scripts:
   format-check:
     description: Verify all Dart files are formatted.
     run: melos exec -c 1 -- "dart format --set-exit-if-changed ."
+
+  fuzz-deep:
+    description: Opt-in deep property-fuzz run (slow; not part of `melos run test`).
+    run: melos exec -c 1 --scope=homeric -- "HOMERIC_DEEP_FUZZ=1 flutter test test/property"

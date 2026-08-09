@@ -60,7 +60,10 @@ List<InlineRun>? transformRunsInRange(
     final runStart = pos;
     final runEnd = pos + run.length;
     pos = runEnd;
-    if (runEnd <= start || runStart >= end) {
+    // An empty run carries no characters, so a character-range transform
+    // must not see it — without this guard a strict mark step would fail
+    // on an (entirely legal) empty run sitting inside the range.
+    if (run.isEmpty || runEnd <= start || runStart >= end) {
       out.add(run);
       continue;
     }

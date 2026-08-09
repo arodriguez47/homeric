@@ -1,7 +1,7 @@
 ---
 title: "feat: Phase 2 — HomericParagraph render layer and playground"
 type: feat
-status: active
+status: completed
 date: 2026-08-09
 origin: https://linear.app/xana-studios/issue/HOM-4/phase-2-homericparagraph-one-block-rendered-properly
 ---

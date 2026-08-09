@@ -2,6 +2,7 @@ name: homeric
 
 packages:
   - packages/*
+  - packages/homeric/examples/*
 
 command:
   bootstrap:

@@ -35,6 +35,8 @@ See [`STRATEGY.md`](STRATEGY.md) for the strategy this serves.
 homeric/
 ├── packages/
 │   └── homeric/                    # the editor library (from scratch)
+│       └── examples/
+│           └── playground/         # interactive editing-primitives demo app
 ├── tools/
 │   └── corpus/                     # generated long-form text fixtures for benchmarks
 ├── benchmarks/                     # benchmark baselines and results
@@ -52,6 +54,21 @@ dart pub global activate melos
 melos bootstrap
 melos run analyze
 melos run test
+```
+
+### Run the playground
+
+`packages/homeric/examples/playground` is a runnable Flutter app that renders
+documents through `HomericParagraph` and drives every Phase 1 transaction
+builder (`insertText`, `deleteRange`, `splitBlock`, `joinBlocks`, `moveBlock`,
+`setBlockType`, `toggleMark`) plus decoration/reveal-on-selection demos by
+hand — the fastest way to poke at the editor's editing primitives before
+Phase 3 gives it a keyboard. It imports only `package:homeric/homeric.dart`.
+
+```bash
+cd packages/homeric/examples/playground
+flutter pub get
+flutter run -d macos   # or any other configured device
 ```
 
 ## License

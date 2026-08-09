@@ -16,7 +16,7 @@ See [`STRATEGY.md`](STRATEGY.md) for the strategy this serves.
 
 ## Status
 
-**Pre-alpha. Not yet usable.** The from-scratch core is being planned; see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Pre-alpha. Not yet usable.** Phase 1 (document model, positions, StepMap, DecorationSet) is in progress — plan at [`docs/plans/`](docs/plans/), phases tracked in Linear (team Homeric) and mirrored in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Platforms
 
@@ -40,7 +40,8 @@ homeric/
 ├── benchmarks/                     # benchmark baselines and results
 └── docs/
     ├── ROADMAP.md
-    └── PERF_BUDGET.md
+    ├── PERF_BUDGET.md
+    └── plans/                      # implementation plans (ce-plan)
 ```
 
 ## Getting started

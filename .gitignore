@@ -19,6 +19,9 @@ build/
 .vscode/
 *.iml
 
+# Claude Code agent worktrees
+.claude/worktrees/
+
 # Lockfiles (library packages don't commit them)
 pubspec.lock
 **/pubspec.lock

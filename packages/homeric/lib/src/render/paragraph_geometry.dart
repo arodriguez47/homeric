@@ -1,0 +1,596 @@
+/// ParagraphGeometry: the document-coordinate geometry service (U4) — the
+/// API a `SelectableMixin`-shaped seam delegates to.
+///
+/// Every public query takes and returns **document** offsets/ranges — the
+/// block-local content coordinates `Decoration`, `Block.contentLength`, and
+/// `ViewMap.docToView`/`viewToDoc` already use. View-text offsets (the
+/// `ui.Paragraph`'s own coordinate system) are an implementation detail of
+/// this file: they are computed, passed to `dart:ui` query methods, and
+/// mapped back before anything crosses this module's public surface. This
+/// is the Nexus postmortem's rule ("classify every offset consumer as
+/// document-space or view-space before wiring the map") applied at the
+/// render-layer boundary: [DocOffset] and [DocRange] are distinct types
+/// specifically so a view-text `int` can never be passed where a document
+/// offset is expected, or vice versa, without an explicit, visible
+/// conversion through a [RenderHomericParagraph.viewMap] call.
+///
+/// [DocOffset] is a zero-cost `extension type` over `int` — chosen over a
+/// full wrapper class because the query surface below does a lot of
+/// arithmetic on offsets and a class would make every call site noisier
+/// for no safety gain over the extension type (both are equally "not an
+/// int" to the type checker; `DocOffset` values are never assignable from a
+/// bare `int` without going through the constructor). It intentionally
+/// declares no `==`/`hashCode`/`toString` overrides: on the Dart version
+/// this package targets, extension types forward [Object] members to their
+/// representation (`int`) by default, which is exactly the value equality
+/// this type wants, and (empirically, see the analyzer crash this
+/// discovery avoided) explicit overrides on a non-`implements` extension
+/// type are unreliable on this SDK. Comparison/arithmetic operators are
+/// declared explicitly because those are not `Object` members and would
+/// not otherwise exist on the type.
+///
+/// Generation staleness (R9): every query result is a [GeometryResult]
+/// stamped with [RenderHomericParagraph.layoutGeneration] at query time.
+/// Reading [GeometryResult.value] after a later relayout — i.e. consuming a
+/// result computed against a `ui.Paragraph` that no longer exists — trips a
+/// debug assert. This catches the class of bug where a caller caches a
+/// caret rect across a frame that changed the block's content or width.
+///
+/// Provenance (framework sources read, not copied): `TextPainter`'s
+/// `_computeCaretMetrics` (GlyphInfo-based caret placement: anchor-to-
+/// leading/trailing-edge by affinity, the zero-size-placeholder recursion
+/// workaround for https://github.com/flutter/flutter/issues/120836, the
+/// end-of-text fallback) and `getOffsetForCaret`'s content-width clamp
+/// (trailing-whitespace caret behavior); `RenderEditable`'s selection box
+/// style defaults. See also `../view/view_map.dart` for the `assoc`
+/// convention this file reuses verbatim (`-1` associates with content
+/// before a position, `1` — the default — with content after it) rather
+/// than introducing a second, competing affinity vocabulary: the same
+/// value both chooses the visible edge of a folded doc span
+/// (`ViewMap.docToView`) and, threaded into `dart:ui`'s `TextAffinity`,
+/// disambiguates a view offset that also happens to sit at a line-wrap
+/// point. This is deliberate, not incidental — see [wordBoundaryAt] and
+/// [lineBoundaryAt].
+library;
+
+import 'dart:ui' as ui;
+
+import 'package:flutter/rendering.dart'
+    show Offset, Rect, TextAlign, TextDirection;
+
+import '../view/view_map.dart';
+import 'homeric_paragraph.dart';
+import 'paragraph_source.dart' show ParagraphDirection;
+
+/// A document-content offset, block-local, in `[0, docLength]` — never a
+/// view-text offset. See the library documentation for why this is a
+/// distinct type rather than a bare `int`.
+extension type const DocOffset(int value) {
+  /// Offset zero.
+  static const DocOffset zero = DocOffset(0);
+
+  /// Offset shifted by [delta] (which may be negative).
+  DocOffset operator +(int delta) => DocOffset(value + delta);
+
+  /// The (possibly negative) distance from [other] to this offset.
+  int operator -(DocOffset other) => value - other.value;
+
+  bool operator <(DocOffset other) => value < other.value;
+  bool operator <=(DocOffset other) => value <= other.value;
+  bool operator >(DocOffset other) => value > other.value;
+  bool operator >=(DocOffset other) => value >= other.value;
+}
+
+/// A half-open document-content range `[start, end)`, block-local.
+final class DocRange {
+  /// Creates a range. Throws [ArgumentError] if [end] precedes [start].
+  DocRange(this.start, this.end) {
+    if (end < start) {
+      throw ArgumentError.value(
+          end, 'end', 'must not precede start (${start.value})');
+    }
+  }
+
+  /// A collapsed range at [offset] — the doc-range shape of a caret.
+  factory DocRange.collapsed(DocOffset offset) => DocRange(offset, offset);
+
+  /// Start of the range (inclusive).
+  final DocOffset start;
+
+  /// End of the range (exclusive).
+  final DocOffset end;
+
+  /// Whether the range is empty (a caret position).
+  bool get isCollapsed => start == end;
+
+  /// The range's length in document content units.
+  int get length => end - start;
+
+  @override
+  bool operator ==(Object other) =>
+      other is DocRange && other.start == start && other.end == end;
+
+  @override
+  int get hashCode => Object.hash(start.value, end.value);
+
+  @override
+  String toString() => 'DocRange([${start.value}, ${end.value}))';
+}
+
+/// Thrown when a [DocOffset] passed to a [ParagraphGeometry] query lies
+/// outside `[0, docLength]` for the block being queried.
+final class DocOffsetOutOfRangeError extends Error {
+  /// Creates the error for [offset] against a block whose content is
+  /// [docLength] units long.
+  DocOffsetOutOfRangeError(this.offset, this.docLength);
+
+  /// The offending offset.
+  final int offset;
+
+  /// The block's document content length at the time of the failed query.
+  final int docLength;
+
+  @override
+  String toString() => 'DocOffsetOutOfRangeError: offset $offset is outside '
+      'the document range [0, $docLength]';
+}
+
+/// Thrown when a slot is addressed by an index or spec identity that does
+/// not exist among the paragraph's current slots.
+final class UnknownSlotError extends Error {
+  /// Creates the error. Exactly one of [index] or [spec] is set, matching
+  /// which lookup failed.
+  UnknownSlotError({this.index, this.spec})
+      : assert((index == null) != (spec == null),
+            'exactly one of index/spec identifies the failed lookup');
+
+  /// The out-of-range slot index, if that was the failed lookup.
+  final int? index;
+
+  /// The unmatched slot spec identity, if that was the failed lookup.
+  final Object? spec;
+
+  @override
+  String toString() => index != null
+      ? 'UnknownSlotError: no slot at index $index'
+      : 'UnknownSlotError: no slot with spec identity '
+          '${Error.safeToString(spec)}';
+}
+
+/// A geometry query result stamped with the [RenderHomericParagraph.
+/// layoutGeneration] current when it was computed (R9).
+///
+/// [value] asserts, in debug mode, that the owning paragraph has not been
+/// relaid out since — the mechanism that turns a stale-geometry bug (a
+/// cached rect surviving a relayout) into an assert instead of a silently
+/// wrong pixel position. [isStale] offers a non-asserting check for callers
+/// that want to detect and re-query rather than crash (release builds skip
+/// the assert entirely, matching every other debug assert in this
+/// library).
+final class GeometryResult<T> {
+  const GeometryResult._(this._value, this.generation, this._owner);
+
+  final T _value;
+  final ParagraphGeometry _owner;
+
+  /// The layout generation this result was computed against.
+  final int generation;
+
+  /// Whether the owning paragraph has been relaid out since this result was
+  /// computed.
+  bool get isStale => generation != _owner.generation;
+
+  /// The computed value.
+  ///
+  /// Asserts (debug mode only) that [generation] still matches the owning
+  /// paragraph's current layout generation. Consuming a stale result in a
+  /// release build returns the value as computed — geometry from a
+  /// superseded layout, not a crash — since only debug builds pay for the
+  /// check.
+  T get value {
+    assert(
+        !isStale,
+        'Stale ParagraphGeometry result: computed at generation $generation '
+        'but the paragraph is now at generation ${_owner.generation}. '
+        'Re-query after relayout instead of holding a result across it.');
+    return _value;
+  }
+
+  @override
+  String toString() =>
+      'GeometryResult<$T>(gen $generation${isStale ? ', STALE' : ''}, '
+      '$_value)';
+}
+
+/// The document-coordinate geometry service over one [RenderHomericParagraph]
+/// — every query in, and every result out, in document offsets/ranges; the
+/// block's [ViewMap] is an internal implementation detail (R2).
+///
+/// A thin, stateless wrapper: nothing here is cached beyond what
+/// [RenderHomericParagraph] itself caches (the live `ui.Paragraph`), so
+/// constructing one is free and re-querying after a relayout is simply
+/// calling the method again.
+class ParagraphGeometry {
+  /// Wraps [render] — construct fresh per query burst; cheap.
+  const ParagraphGeometry(this._render);
+
+  final RenderHomericParagraph _render;
+
+  /// The render object's current layout generation — see [GeometryResult].
+  int get generation => _render.layoutGeneration;
+
+  ViewMap get _viewMap => _render.viewMap;
+  ui.Paragraph get _paragraph => _render.layoutParagraph;
+  String get _viewText => _render.source.viewText;
+
+  GeometryResult<T> _stamp<T>(T value) =>
+      GeometryResult<T>._(value, generation, this);
+
+  /// The document content length of the block this geometry serves.
+  ///
+  /// Derived from the block's own [ViewMap], not threaded in separately:
+  /// `viewToDoc` extrapolates positions beyond the last folded span by the
+  /// cumulative length delta (see `StepMap.mapResult`'s trailing-range
+  /// formula) — exactly the document length, since the paragraph's view
+  /// text tail beyond every fold is a 1:1 copy of the document's tail.
+  int get docLength => _viewMap.viewToDoc(_viewText.length, assoc: 1);
+
+  void _checkOffset(DocOffset offset) {
+    final length = docLength;
+    if (offset.value < 0 || offset.value > length) {
+      throw DocOffsetOutOfRangeError(offset.value, length);
+    }
+  }
+
+  void _checkRange(DocRange range) {
+    _checkOffset(range.start);
+    _checkOffset(range.end);
+  }
+
+  /// Maps a document range to the view range covering exactly its visible
+  /// content — the same "shrink to visible" convention `deriveViewText`
+  /// uses for styled ranges: [DocRange.start] associates forward (`assoc:
+  /// 1`, the edge after anything folded there) and [DocRange.end]
+  /// backward (`assoc: -1`, the edge before). A range entirely inside one
+  /// folded span collapses to an empty view range.
+  (int, int) _viewRangeOf(DocRange range) => (
+        _viewMap.docToView(range.start.value, assoc: 1),
+        _viewMap.docToView(range.end.value, assoc: -1),
+      );
+
+  /// Maps a view range back to a document range with the **expand**
+  /// convention — deliberately the opposite of [_viewRangeOf]: the start
+  /// edge looks backward (`assoc: -1`, into whatever is folded
+  /// immediately before it) and the end edge looks forward (`assoc: 1`,
+  /// into whatever is folded immediately after it).
+  ///
+  /// This is the documented "view-space word/line" residual: word- and
+  /// line-boundary analysis runs over view text, which has no notion of
+  /// the hidden document content sitting at its edges. A hidden delimiter
+  /// run immediately adjacent to (i.e. touching) a UAX#29 word's view-text
+  /// boundary is swallowed into the mapped document range rather than
+  /// left dangling outside it — e.g. double-clicking the word "bold" in
+  /// "**bold**" with the delimiters hidden selects the whole `**bold**`
+  /// document span, not just `bold`, matching the classic hidden-markdown
+  /// editor UX (deleting the "word" should not orphan the syntax). Use
+  /// [_viewRangeOf]'s shrink convention instead for anything that must
+  /// stay inside visible content (selection rects; a range cannot draw a
+  /// box over text that was never emitted).
+  DocRange _docRangeOf(int viewStart, int viewEnd) => DocRange(
+        DocOffset(_viewMap.viewToDoc(viewStart, assoc: -1)),
+        DocOffset(_viewMap.viewToDoc(viewEnd, assoc: 1)),
+      );
+
+  // --- Block / slot geometry ---------------------------------------------
+
+  /// The paragraph's own bounding box, in its local coordinate space
+  /// (`Offset.zero & size`).
+  GeometryResult<Rect> get blockRect => _stamp(Offset.zero & _render.size);
+
+  /// The rect of the slot at [slotIndex] (the `addPlaceholder` order —
+  /// same as [RenderHomericParagraph.source]'s `slots` list index).
+  ///
+  /// Throws [UnknownSlotError] if no slot exists at that index, or if the
+  /// paragraph has fewer placeholder boxes than slots this layout (a
+  /// future ellipsis case — U3 already tolerates it for children, this
+  /// query surfaces it instead of returning a wrong box).
+  GeometryResult<Rect> slotRectAt(int slotIndex) {
+    final slots = _render.source.slots;
+    if (slotIndex < 0 || slotIndex >= slots.length) {
+      throw UnknownSlotError(index: slotIndex);
+    }
+    final boxes = _paragraph.getBoxesForPlaceholders();
+    if (slotIndex >= boxes.length) {
+      throw UnknownSlotError(index: slotIndex);
+    }
+    return _stamp(boxes[slotIndex].toRect());
+  }
+
+  /// The rect of the slot whose decoration carries [spec] as its stable
+  /// identity (see `SlotSegment.spec`).
+  ///
+  /// Throws [UnknownSlotError] if no current slot carries that identity.
+  GeometryResult<Rect> slotRectForSpec(Object? spec) {
+    final slots = _render.source.slots;
+    final index = slots.indexWhere((slot) => slot.spec == spec);
+    if (index == -1) {
+      throw UnknownSlotError(spec: spec);
+    }
+    return slotRectAt(index);
+  }
+
+  // --- Caret ---------------------------------------------------------------
+
+  /// The caret rect for document offset [doc], with [assoc] choosing both
+  /// the visible edge of any folded span [doc] sits inside ("no phantom
+  /// caret slots" — see `ViewMap`) and, when the resulting view offset
+  /// also happens to fall at a line-wrap point, which line the caret
+  /// belongs to.
+  ///
+  /// The rect is zero-width (`left == right`), positioned at the exact
+  /// caret x — painting an actual cursor stroke of some width is the
+  /// consumer's layer, matching `TextPainter.getOffsetForCaret`'s split
+  /// from `RenderEditable`'s cursor painting.
+  ///
+  /// An empty block (zero laid-out lines) falls back to
+  /// [RenderHomericParagraph.preferredLineHeight] /
+  /// [RenderHomericParagraph.preferredLineBaseline] — the only case this
+  /// method does not derive from `GlyphInfo`, because there is no glyph.
+  ///
+  /// Throws [DocOffsetOutOfRangeError] if [doc] is outside `[0,
+  /// docLength]`.
+  GeometryResult<Rect> caretRect(DocOffset doc, {int assoc = 1}) {
+    _checkOffset(doc);
+    final viewOffset = _viewMap.docToView(doc.value, assoc: assoc);
+    return _stamp(_caretRectForView(viewOffset, assoc));
+  }
+
+  Rect _caretRectForView(int viewOffset, int assoc) {
+    if (_paragraph.numberOfLines == 0) {
+      return _emptyBlockCaretRect();
+    }
+    final metrics = _caretMetrics(viewOffset, assoc);
+    return Rect.fromLTRB(metrics.x, metrics.top, metrics.x, metrics.bottom);
+  }
+
+  /// The caret rect for an empty (glyph-less) paragraph: the full
+  /// preferred line height at the paragraph's start edge. Unlike every
+  /// other caret rect in this file, there is no `GlyphInfo` to derive this
+  /// from — [RenderHomericParagraph.preferredLineHeight] (from the
+  /// space-glyph layout template, see that file's docs) is the only
+  /// source of a caret-capable height here.
+  Rect _emptyBlockCaretRect() {
+    final x = _startEdgeX();
+    return Rect.fromLTRB(x, 0, x, _render.preferredLineHeight);
+  }
+
+  /// The x-coordinate of the paragraph's start edge — where a caret in an
+  /// empty (glyph-less) paragraph belongs, honoring alignment and
+  /// direction exactly as an aligned line of text would (mirrors
+  /// `TextPainter._computePaintOffsetFraction`, read not copied).
+  double _startEdgeX() {
+    final direction = switch (_render.source.spec.direction) {
+      ParagraphDirection.ltr => TextDirection.ltr,
+      ParagraphDirection.rtl => TextDirection.rtl,
+    };
+    final fraction = switch ((_render.textAlign, direction)) {
+      (TextAlign.left, _) => 0.0,
+      (TextAlign.right, _) => 1.0,
+      (TextAlign.center, _) => 0.5,
+      (TextAlign.start || TextAlign.justify, TextDirection.ltr) => 0.0,
+      (TextAlign.start || TextAlign.justify, TextDirection.rtl) => 1.0,
+      (TextAlign.end, TextDirection.ltr) => 1.0,
+      (TextAlign.end, TextDirection.rtl) => 0.0,
+    };
+    return fraction == 0.0 ? 0.0 : fraction * _render.size.width;
+  }
+
+  bool _isNewlineBefore(int viewOffset) =>
+      viewOffset > 0 &&
+      viewOffset <= _viewText.length &&
+      _viewText.codeUnitAt(viewOffset - 1) == 0x0A;
+
+  /// GlyphInfo-based caret placement, mirroring `TextPainter.
+  /// _computeCaretMetrics` (provenance in the library doc comment): anchor
+  /// to the leading edge of the grapheme at [viewOffset] for a downstream
+  /// -like [assoc], or the trailing edge of the previous grapheme for an
+  /// upstream-like one — except at the very start of the text or right
+  /// after a hard line break, which always anchor downstream (there is no
+  /// "previous" grapheme on this line to trail).
+  _CaretMetrics _caretMetrics(int viewOffset, int assoc) {
+    final (int anchorOffset, bool leading) = switch (viewOffset) {
+      0 => (0, true),
+      _ when assoc >= 0 => (viewOffset, true),
+      _ when _isNewlineBefore(viewOffset) => (viewOffset, true),
+      _ => (viewOffset - 1, false),
+    };
+    return _caretMetricsAt(anchorOffset, leading);
+  }
+
+  _CaretMetrics _caretMetricsAt(int anchorOffset, bool leading) {
+    final info = _paragraph.getGlyphInfoAt(anchorOffset);
+    if (info == null) {
+      return _endOfTextCaretMetrics();
+    }
+    final range = info.graphemeClusterCodeUnitRange;
+    if (range.start == range.end) {
+      // Works around a SkParagraph bug where zero-size placeholders (a
+      // real Homeric case — U3's "empty slot child") report a collapsed
+      // (0, 0) range regardless of their true offset: retry one code unit
+      // later, matching TextPainter's workaround for the same bug
+      // (flutter/flutter#120836).
+      return _caretMetricsAt(anchorOffset + 1, true);
+    }
+    if (leading && range.start != anchorOffset) {
+      // anchorOffset lands mid-grapheme (a multi-code-unit character):
+      // there is no valid caret there, so treat it as landing right after.
+      return _caretMetricsAt(range.end, true);
+    }
+    final boxes = _paragraph.getBoxesForRange(range.start, range.end,
+        boxHeightStyle: ui.BoxHeightStyle.strut);
+    final anchorToLeft = switch (info.writingDirection) {
+      TextDirection.ltr => leading,
+      TextDirection.rtl => !leading,
+    };
+    final box = anchorToLeft ? boxes.first : boxes.last;
+    return _CaretMetrics(
+        x: anchorToLeft ? box.left : box.right,
+        top: box.top,
+        bottom: box.bottom);
+  }
+
+  /// The caret at the very end of a non-empty paragraph: anchored to the
+  /// trailing edge of the last grapheme, clamped to the line's own content
+  /// width so a caret placed past trailing whitespace shows immediately
+  /// after the last visible glyph instead of past the whitespace — the
+  /// framework's documented trailing-whitespace behavior
+  /// (`TextPainter.getOffsetForCaret`'s content-width clamp), reproduced
+  /// here as a per-line clamp since Homeric has no separate paint-offset
+  /// concept to clamp against.
+  _CaretMetrics _endOfTextCaretMetrics() {
+    final text = _viewText;
+    // No block text ever embeds a hard line break (Homeric splits
+    // paragraphs into separate blocks instead — see block.dart), so the
+    // last grapheme is always on the paragraph's last line.
+    final lastGraphemeStart = _paragraph
+        .getGlyphInfoAt(text.length - 1)!
+        .graphemeClusterCodeUnitRange
+        .start;
+    final info = _paragraph.getGlyphInfoAt(lastGraphemeStart)!;
+    final range = info.graphemeClusterCodeUnitRange;
+    final boxes = _paragraph.getBoxesForRange(range.start, range.end,
+        boxHeightStyle: ui.BoxHeightStyle.strut);
+    final trailingLtr = info.writingDirection == TextDirection.ltr;
+    final box = trailingLtr ? boxes.last : boxes.first;
+    final line = _paragraph.getLineMetricsAt(_paragraph.numberOfLines - 1)!;
+    final contentRight = line.left + line.width;
+    final x = trailingLtr
+        ? (box.right > contentRight ? contentRight : box.right)
+        : (box.left < line.left ? line.left : box.left);
+    return _CaretMetrics(x: x, top: box.top, bottom: box.bottom);
+  }
+
+  // --- Selection rects -----------------------------------------------------
+
+  /// The fragment-correct rects covering document range [range]: one
+  /// `TextBox` per visually-contiguous fragment (bidi runs and slot
+  /// placeholders never merge into a neighboring fragment — that is a
+  /// property of `ui.Paragraph.getBoxesForRange` this method deliberately
+  /// does not post-process away), each still carrying its own
+  /// [ui.TextBox.direction] for callers that must render per-fragment
+  /// (e.g. a bidi selection where two adjacent boxes read in opposite
+  /// directions).
+  ///
+  /// [heightStyle]/[widthStyle] default to `includeLineSpacingMiddle` /
+  /// `max` — AppFlowy's own default, and the shape that yields gapless
+  /// selection rects across a wrapped line.
+  ///
+  /// Throws [DocOffsetOutOfRangeError] if either end of [range] is outside
+  /// `[0, docLength]`.
+  GeometryResult<List<ui.TextBox>> rectsForRange(
+    DocRange range, {
+    ui.BoxHeightStyle heightStyle = ui.BoxHeightStyle.includeLineSpacingMiddle,
+    ui.BoxWidthStyle widthStyle = ui.BoxWidthStyle.max,
+  }) {
+    _checkRange(range);
+    final (viewStart, viewEnd) = _viewRangeOf(range);
+    if (viewEnd <= viewStart) {
+      return _stamp(const <ui.TextBox>[]);
+    }
+    return _stamp(_paragraph.getBoxesForRange(viewStart, viewEnd,
+        boxHeightStyle: heightStyle, boxWidthStyle: widthStyle));
+  }
+
+  // --- Hit testing -----------------------------------------------------------
+
+  /// The document position closest to local point [point] — grapheme-aware
+  /// (`getClosestGlyphInfoForOffset`), landing on whichever half of the
+  /// closest grapheme's box [point] falls in, then mapped back to document
+  /// coordinates through [ViewMap.viewToDoc].
+  ///
+  /// Every point resolves to a real document position: one of the two
+  /// boundary edges of whatever folded/view-only content (a hidden
+  /// delimiter run, a widget slot) the point happens to land on or near.
+  /// There is no "position inside a replacement" or "position inside a
+  /// slot" — neither exists in the document, so a point query never
+  /// invents one; it always answers with the nearest edge that does.
+  ///
+  /// An empty paragraph (no glyphs at all — e.g. a whole-block replace)
+  /// has no geometry to be closest to and falls back to document offset
+  /// zero.
+  GeometryResult<DocOffset> positionForPoint(Offset point) {
+    final info = _paragraph.getClosestGlyphInfoForOffset(point);
+    if (info == null) {
+      return _stamp(DocOffset.zero);
+    }
+    final range = info.graphemeClusterCodeUnitRange;
+    final bounds = info.graphemeClusterLayoutBounds;
+    final midX = bounds.left + bounds.width / 2;
+    final leading = switch (info.writingDirection) {
+      TextDirection.ltr => point.dx <= midX,
+      TextDirection.rtl => point.dx >= midX,
+    };
+    final viewOffset = leading ? range.start : range.end;
+    final assoc = leading ? -1 : 1;
+    return _stamp(DocOffset(_viewMap.viewToDoc(viewOffset, assoc: assoc)));
+  }
+
+  // --- Word / line boundary -------------------------------------------------
+
+  /// The document range of the word at document offset [doc] (UAX#29 word
+  /// boundaries, computed over **view text** and mapped back).
+  ///
+  /// Word analysis runs over what is on screen, not the document: a hidden
+  /// delimiter run strictly inside a view-text word is part of that word's
+  /// mapped document range (there is no view content on either side of it
+  /// to break the word there), even though the delimiter itself is
+  /// invisible. This view-space-word semantics is intentional (documented
+  /// residual, not a bug) — Nexus features that need document-word
+  /// boundaries insensitive to decoration should be built on document text
+  /// directly, not this query.
+  GeometryResult<DocRange> wordBoundaryAt(DocOffset doc, {int assoc = 1}) {
+    _checkOffset(doc);
+    final view = _viewMap.docToView(doc.value, assoc: assoc);
+    final position = ui.TextPosition(
+        offset: view,
+        affinity:
+            assoc < 0 ? ui.TextAffinity.upstream : ui.TextAffinity.downstream);
+    final range = _paragraph.getWordBoundary(position);
+    return _stamp(_docRangeOf(range.start, range.end));
+  }
+
+  /// The document range of the line at document offset [doc].
+  ///
+  /// [assoc] is threaded as the query's `TextAffinity` as well as the
+  /// `ViewMap` fold association — deliberately the same value for both
+  /// (see the library doc comment): a document offset that maps to a view
+  /// offset sitting exactly at a wrap point needs exactly one more bit to
+  /// disambiate "end of this line" from "start of the next", and the
+  /// caller's `assoc` (upstream = stay on the content before the position,
+  /// downstream = move to the content after) is precisely that bit. This
+  /// is `dart:ui`'s own `Paragraph.getLineBoundary`, which already
+  /// resolves the affinity correctly for a given view `TextPosition` — no
+  /// extra patching was needed after threading `assoc` through as
+  /// `TextAffinity` (see `geometry_test.dart`'s wrap-boundary-affinity
+  /// test, written first per the plan's risk note).
+  GeometryResult<DocRange> lineBoundaryAt(DocOffset doc, {int assoc = 1}) {
+    _checkOffset(doc);
+    final view = _viewMap.docToView(doc.value, assoc: assoc);
+    final position = ui.TextPosition(
+        offset: view,
+        affinity:
+            assoc < 0 ? ui.TextAffinity.upstream : ui.TextAffinity.downstream);
+    final range = _paragraph.getLineBoundary(position);
+    return _stamp(_docRangeOf(range.start, range.end));
+  }
+}
+
+/// One caret's geometric anchor: an x-coordinate and a vertical span.
+final class _CaretMetrics {
+  const _CaretMetrics(
+      {required this.x, required this.top, required this.bottom});
+
+  final double x;
+  final double top;
+  final double bottom;
+}

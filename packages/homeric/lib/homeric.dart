@@ -13,6 +13,7 @@ export 'src/model/document.dart';
 export 'src/model/inline_run.dart';
 export 'src/model/position.dart';
 export 'src/render/homeric_paragraph.dart';
+export 'src/render/paragraph_geometry.dart';
 export 'src/render/paragraph_source.dart';
 export 'src/transform/attr_step.dart';
 export 'src/transform/builders.dart';

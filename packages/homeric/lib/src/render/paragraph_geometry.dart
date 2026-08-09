@@ -30,11 +30,18 @@
 /// not otherwise exist on the type.
 ///
 /// Generation staleness (R9): every query result is a [GeometryResult]
-/// stamped with [RenderHomericParagraph.layoutGeneration] at query time.
+/// stamped with the [RenderHomericParagraph.layoutGeneration] current when
+/// the owning [ParagraphGeometry] was *constructed* — not read live from
+/// the render object at query time (see [ParagraphGeometry.generation]).
 /// Reading [GeometryResult.value] after a later relayout — i.e. consuming a
 /// result computed against a `ui.Paragraph` that no longer exists — trips a
-/// debug assert. This catches the class of bug where a caller caches a
-/// caret rect across a frame that changed the block's content or width.
+/// debug assert, and so does querying a held [ParagraphGeometry] instance
+/// itself after its render object has relaid out (the instance's own
+/// `_docLength`/placeholder-box caches would otherwise answer from
+/// pre-relayout state while silently claiming to be current). This catches
+/// the class of bug where a caller caches a caret rect, or the geometry
+/// service instance itself, across a frame that changed the block's
+/// content or width.
 ///
 /// Provenance (framework sources read, not copied): `TextPainter`'s
 /// `_computeCaretMetrics` (GlyphInfo-based caret placement: anchor-to-
@@ -119,7 +126,15 @@ final class DocRange {
 
 /// Thrown when a [DocOffset] passed to a [ParagraphGeometry] query lies
 /// outside `[0, docLength]` for the block being queried.
-final class DocOffsetOutOfRangeError extends Error {
+///
+/// An [Exception], not an [Error]: an out-of-range document offset is an
+/// expected, recoverable condition a caller can be handed (e.g. a caret
+/// position computed against a document that changed underneath it before
+/// the query ran) — not a programmer bug the way [UnknownSlotError] is.
+/// Callers are expected to catch this and recover (see
+/// `examples/playground/lib/views/editor_page.dart`'s caret-overlay build,
+/// which does exactly that), matching Dart's Error-vs-Exception convention.
+final class DocOffsetOutOfRangeError implements Exception {
   /// Creates the error for [offset] against a block whose content is
   /// [docLength] units long.
   DocOffsetOutOfRangeError(this.offset, this.docLength);
@@ -176,23 +191,33 @@ final class GeometryResult<T> {
   /// The layout generation this result was computed against.
   final int generation;
 
-  /// Whether the owning paragraph has been relaid out since this result was
-  /// computed.
-  bool get isStale => generation != _owner.generation;
+  /// Whether the owning render object has been relaid out since this
+  /// result was computed.
+  ///
+  /// Deliberately compares against [ParagraphGeometry._render]'s **live**
+  /// `layoutGeneration` — not [ParagraphGeometry.generation], which is
+  /// fixed at the owning instance's construction time (see that getter's
+  /// doc comment) and so cannot, by itself, detect a relayout that happens
+  /// after this result was already computed. The two staleness checks in
+  /// this file are complementary, not redundant: [ParagraphGeometry]'s own
+  /// `_checkNotStale` catches a *held instance* queried after a relayout;
+  /// this getter catches a *held result* consumed after one.
+  bool get isStale => generation != _owner._render.layoutGeneration;
 
   /// The computed value.
   ///
   /// Asserts (debug mode only) that [generation] still matches the owning
-  /// paragraph's current layout generation. Consuming a stale result in a
-  /// release build returns the value as computed — geometry from a
+  /// render object's current layout generation. Consuming a stale result in
+  /// a release build returns the value as computed — geometry from a
   /// superseded layout, not a crash — since only debug builds pay for the
   /// check.
   T get value {
     assert(
         !isStale,
         'Stale ParagraphGeometry result: computed at generation $generation '
-        'but the paragraph is now at generation ${_owner.generation}. '
-        'Re-query after relayout instead of holding a result across it.');
+        'but the paragraph is now at generation '
+        '${_owner._render.layoutGeneration}. Re-query after relayout '
+        'instead of holding a result across it.');
     return _value;
   }
 
@@ -206,25 +231,75 @@ final class GeometryResult<T> {
 /// — every query in, and every result out, in document offsets/ranges; the
 /// block's [ViewMap] is an internal implementation detail (R2).
 ///
-/// A thin, stateless wrapper: nothing here is cached beyond what
-/// [RenderHomericParagraph] itself caches (the live `ui.Paragraph`), so
-/// constructing one is free and re-querying after a relayout is simply
-/// calling the method again.
+/// A thin wrapper: nothing here is cached beyond what
+/// [RenderHomericParagraph] itself caches (the live `ui.Paragraph`) plus a
+/// couple of per-instance memoizations (see [docLength],
+/// [_placeholderBoxes]) that trade "always fresh" for "cheap within one
+/// paint's query burst." Construct fresh per query burst — cheap — and
+/// discard before the next relayout: holding one across a relayout of its
+/// render object is a bug this class catches for you (debug asserts, see
+/// [_checkNotStale]), not a supported cache-reuse pattern.
 class ParagraphGeometry {
-  /// Wraps [render] — construct fresh per query burst; cheap.
-  ParagraphGeometry(this._render);
+  /// Wraps [render] — construct fresh per query burst; cheap. Captures
+  /// [RenderHomericParagraph.layoutGeneration] at this exact moment (see
+  /// [generation]); every query against this instance is checked against
+  /// that captured value, not the render object's current one.
+  ParagraphGeometry(this._render)
+      : _constructedGeneration = _render.layoutGeneration;
 
   final RenderHomericParagraph _render;
 
-  /// The render object's current layout generation — see [GeometryResult].
-  int get generation => _render.layoutGeneration;
+  /// The layout generation captured when this [ParagraphGeometry] was
+  /// constructed.
+  final int _constructedGeneration;
+
+  /// The layout generation every [GeometryResult] from this instance is
+  /// stamped with (R9) — fixed at construction time via
+  /// [_constructedGeneration], deliberately **not** a live read of
+  /// [RenderHomericParagraph.layoutGeneration].
+  ///
+  /// A live read here would defeat R9 for exactly the seam this class
+  /// exists to support: a caller that holds one [ParagraphGeometry]
+  /// instance across a relayout of its render object (e.g. a
+  /// `SelectableMixin`-shaped adapter reusing one instance for its whole
+  /// lifetime) would have every result silently re-stamped with the
+  /// render object's *current* generation on each query, so
+  /// [GeometryResult.isStale] could never observe the relayout — even
+  /// though [docLength] and [_placeholderBoxes] below are still answering
+  /// from state memoized before that relayout happened. See
+  /// [_checkNotStale] for the complementary guard that makes querying such
+  /// a held instance fail loudly instead.
+  int get generation => _constructedGeneration;
 
   ViewMap get _viewMap => _render.viewMap;
   ui.Paragraph get _paragraph => _render.layoutParagraph;
   String get _viewText => _render.source.viewText;
 
-  GeometryResult<T> _stamp<T>(T value) =>
-      GeometryResult<T>._(value, generation, this);
+  /// Asserts (debug builds only) that [_render] has not been relaid out
+  /// since this [ParagraphGeometry] was constructed.
+  ///
+  /// Every public query funnels through here — the [GeometryResult]-
+  /// returning ones via [_stamp], and [docLength] (the one public query
+  /// that is not itself wrapped in a [GeometryResult]) directly — so a
+  /// stale-instance query fails loudly in debug builds instead of silently
+  /// answering from this instance's pre-relayout memoized state
+  /// ([_docLength], [_placeholderBoxes]) while claiming, via
+  /// [GeometryResult.isStale], to be current.
+  void _checkNotStale() {
+    assert(
+        _render.layoutGeneration == _constructedGeneration,
+        'Stale ParagraphGeometry: this instance was constructed at layout '
+        'generation $_constructedGeneration but its render object is now '
+        'at generation ${_render.layoutGeneration}. A ParagraphGeometry '
+        'must not be queried after a relayout of the render object it '
+        'wraps — construct a fresh one instead of holding this one across '
+        'the relayout.');
+  }
+
+  GeometryResult<T> _stamp<T>(T value) {
+    _checkNotStale();
+    return GeometryResult<T>._(value, generation, this);
+  }
 
   /// The document content length of the block this geometry serves.
   ///
@@ -241,7 +316,11 @@ class ParagraphGeometry {
   /// serves within a single paint (`rectsForRange`/`caretRect`/
   /// `wordBoundaryAt`/`lineBoundaryAt` each call `_checkOffset`/
   /// `_checkRange`, which read [docLength]).
-  int get docLength => _docLength;
+  int get docLength {
+    _checkNotStale();
+    return _docLength;
+  }
+
   late final int _docLength = _viewMap.viewToDoc(_viewText.length, assoc: 1);
 
   void _checkOffset(DocOffset offset) {

@@ -734,6 +734,7 @@ class RenderHomericParagraph extends RenderBox
   /// Render-layer internal: consumed by the U4 geometry service (and
   /// tests, as the paragraph-identity debug hook). Not part of homeric's
   /// stable public API. Never call `layout` or `dispose` on it.
+  @internal
   ui.Paragraph get layoutParagraph {
     assert(!_disposed, 'layoutParagraph used after dispose()');
     assert(!debugNeedsLayout,
@@ -743,6 +744,7 @@ class RenderHomericParagraph extends RenderBox
 
   /// The source's document↔view offset map, for same-library geometry
   /// callers (U4). Render-layer internal.
+  @internal
   ViewMap get viewMap => _source.viewMap;
 
   /// The height of one line in the base style — the caret-capable line

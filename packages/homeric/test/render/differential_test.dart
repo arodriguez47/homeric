@@ -153,6 +153,11 @@ bool caretsMatch(
         final baselineRect =
             baselineGeometry.caretRect(DocOffset(view), assoc: assoc).value;
         if (!_rectsEqual(decoratedRect, baselineRect)) return false;
+      } on DocOffsetOutOfRangeError {
+        // A corrupted ViewMap can map a doc offset to a view offset the
+        // baseline (an undecorated paragraph) doesn't have — treat that as
+        // desync, same as a mismatched rect, rather than a test error.
+        return false;
       } on Error {
         return false;
       }
@@ -191,6 +196,10 @@ bool rangesMatch(
               .rectsForRange(DocRange(DocOffset(viewStart), DocOffset(viewEnd)))
               .value;
       if (!_boxesEqual(decoratedBoxes, baselineBoxes)) return false;
+    } on DocOffsetOutOfRangeError {
+      // See the matching comment in caretsMatch: a corrupted ViewMap can
+      // map into a view range the baseline doesn't have.
+      return false;
     } on Error {
       return false;
     }

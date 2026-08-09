@@ -431,6 +431,56 @@ void main() {
       expect(result.isStale, isTrue);
       expect(() => result.value, throwsAssertionError);
     });
+
+    testWidgets(
+        'querying a held instance after a relayout asserts, not just its '
+        'results', (tester) async {
+      final source = sourceOf('abc');
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final render = renderOf(tester);
+      final geometry = ParagraphGeometry(render);
+
+      // Sanity: the instance is fully usable before the relayout, and its
+      // per-instance caches (docLength, placeholder boxes) get populated.
+      expect(geometry.docLength, 3);
+      expect(geometry.caretRect(const DocOffset(1)).value, isNotNull);
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf('help'))));
+
+      // The render object has relaid out under this held instance. Every
+      // public query on it — not just a previously-returned
+      // GeometryResult's .value — must fail loudly rather than silently
+      // answering from the pre-relayout docLength/placeholder-box caches.
+      expect(() => geometry.docLength, throwsAssertionError);
+      expect(
+          () => geometry.caretRect(const DocOffset(1)), throwsAssertionError);
+      expect(() => geometry.blockRect, throwsAssertionError);
+    });
+
+    testWidgets(
+        'a fresh instance constructed after the relayout works normally',
+        (tester) async {
+      final source = sourceOf('abc');
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final render = renderOf(tester);
+      final stale = ParagraphGeometry(render);
+      expect(stale.docLength, 3);
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf('help'))));
+
+      // The old instance is now stale...
+      expect(() => stale.docLength, throwsAssertionError);
+
+      // ...but a fresh instance constructed against the same (now
+      // relaid-out) render object behaves exactly as if nothing unusual
+      // happened.
+      final fresh = ParagraphGeometry(render);
+      expect(fresh.docLength, 4);
+      expect(fresh.caretRect(const DocOffset(4)).value, isNotNull);
+      expect(fresh.caretRect(const DocOffset(4)).isStale, isFalse);
+    });
   });
 
   group('SelectableMixin adapter contract (seam-readiness proof)', () {

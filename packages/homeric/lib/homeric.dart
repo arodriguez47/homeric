@@ -20,3 +20,5 @@ export 'src/transform/replace_step.dart';
 export 'src/transform/step.dart';
 export 'src/transform/step_map.dart';
 export 'src/transform/transaction.dart';
+export 'src/view/view_map.dart';
+export 'src/view/view_text.dart';

@@ -1,6 +1,6 @@
 /// HomericParagraph: the render-layer lifecycle core (U2) — a [RenderBox]
-/// owning exactly one live `ui.Paragraph` per block, plus a minimal
-/// leaf widget wrapper.
+/// owning exactly one live `ui.Paragraph` per block — plus inline widget
+/// children for `widget` decoration slots (U3).
 ///
 /// The render object consumes a [ParagraphSource] whose style handles are
 /// painting-layer [TextStyle]s: that is the builder-input adapter from
@@ -16,11 +16,33 @@
 ///   rebuild + relayout (the paragraph is dropped and rebuilt);
 /// * width-only change → relayout of the **same** `ui.Paragraph`
 ///   (identity stable, observable via [RenderHomericParagraph.layoutParagraph]);
+/// * slot dimension change (an inline child measured to a new size) →
+///   content-level: rebuild + relayout, detected during `performLayout`;
 /// * paint-only changes ([RenderHomericParagraph.paintStyler], the U5
 ///   repaint band) → deferred rebuild inside `paint()` with a
 ///   layout-identity assert — never inside layout;
 /// * system font change → caches dropped + relayout
 ///   ([RelayoutWhenSystemFontsChangeMixin]).
+///
+/// Inline widget children (U3) follow the framework's placeholder dance,
+/// copied — not mixin-reused, because
+/// `RenderInlineChildrenContainerDefaults` assumes `PlaceholderSpan`
+/// parent data and Homeric has no `InlineSpan` tree:
+///
+/// 1. children are laid out **once**, before text layout, with
+///    `BoxConstraints(maxWidth: wrapWidth)` only (unconstrained height —
+///    no feedback loop, children are never re-laid-out after the
+///    paragraph is);
+/// 2. their sizes (plus a baseline via `getDistanceToBaseline` /
+///    `getDryBaseline`, only for baseline alignment) become
+///    [PlaceholderDimensions] → `addPlaceholder(w, h, alignment,
+///    scale: 1.0)` in view-text order — `scale` is always 1.0; any
+///    [TextScaler] concern belongs to the child's own build;
+/// 3. after paragraph layout, `getBoxesForPlaceholders` yields one box
+///    per placeholder in `addPlaceholder` order; each child's paint
+///    offset is its box's top-left, stored in parent data — a missing
+///    box (fewer boxes than children; future ellipsis) leaves the
+///    offset null and the child is skipped in paint and hit-testing.
 ///
 /// Empty view text (e.g. a whole-block replace) has **no** caret-capable
 /// line on this engine: a paragraph with no text lays out with
@@ -33,14 +55,23 @@
 ///
 /// Provenance (framework sources read, not copied):
 ///
-/// * `flutter/lib/src/rendering/paragraph.dart` (`RenderParagraph`): the
+/// * `flutter/lib/src/rendering/paragraph.dart` (`RenderParagraph`,
+///   `TextParentData`, `RenderInlineChildrenContainerDefaults`): the
 ///   property-setter invalidation table, the separate-intrinsics-painter
 ///   pattern (intrinsic/dry queries must never clobber the live layout),
+///   the inline-children dance (`layoutInlineChildren` →
+///   `positionInlineChildren` → `paintInlineChildren` /
+///   `hitTestInlineChildren` / `defaultApplyPaintTransform`, including
+///   the nullable parent-data offset and the intrinsic-width children
+///   measured as `Size(child.get{Min,Max}IntrinsicWidth(∞), 0.0)`),
 ///   `systemFontsDidChange`, and the dispose discipline.
-/// * `flutter/lib/src/painting/text_painter.dart` (`TextPainter`): the
-///   deferred paint-only rebuild (`_rebuildParagraphForPaint`), the
-///   infinite-max-width second layout pass, and the space-glyph layout
-///   template for empty-text metrics.
+/// * `flutter/lib/src/painting/text_painter.dart` (`TextPainter`,
+///   `PlaceholderDimensions`): the deferred paint-only rebuild
+///   (`_rebuildParagraphForPaint`), the infinite-max-width second layout
+///   pass, and the space-glyph layout template for empty-text metrics.
+/// * `flutter/lib/src/widgets/widget_span.dart` (`WidgetSpan.build`):
+///   the `addPlaceholder` call shape (dimensions + alignment + baseline
+///   + baselineOffset).
 library;
 
 import 'dart:ui' as ui;
@@ -66,15 +97,58 @@ import 'paragraph_source.dart';
 /// pass the same function instance while nothing changed.
 typedef PaintOnlyStyler = TextStyle Function(TextSegment<TextStyle> segment);
 
+/// Builds the inline child widget for one slot of a [HomericParagraph].
+///
+/// Called once per slot per widget build, in slot-index (view-text)
+/// order; the slot's stable identity is [SlotSegment.spec].
+typedef SlotWidgetBuilder = Widget Function(SlotSegment<TextStyle> slot);
+
+/// Parent data for [RenderHomericParagraph]'s inline slot children.
+///
+/// Mirrors the framework's `TextParentData`: not a [BoxParentData],
+/// because a child may have **no** paint offset for the current layout
+/// (its placeholder box is missing — e.g. ellipsized away in a future
+/// unit), which a nullable [offset] expresses and a `BoxParentData`
+/// cannot.
+class HomericSlotParentData extends ParentData
+    with ContainerParentDataMixin<RenderBox> {
+  /// The offset at which to paint the child within the paragraph, or
+  /// null when the child has no placeholder box this layout — such a
+  /// child is skipped in paint and hit-testing.
+  Offset? get offset => _offset;
+  Offset? _offset;
+
+  @override
+  void detach() {
+    _offset = null;
+    super.detach();
+  }
+
+  @override
+  String toString() => offset == null
+      ? 'not positioned; ${super.toString()}'
+      : 'offset: '
+          '$offset; ${super.toString()}';
+}
+
 /// The render box owning one live `ui.Paragraph` for a block's
-/// [ParagraphSource].
+/// [ParagraphSource], with one inline [RenderBox] child per widget slot.
 ///
 /// Layout happens at the wrap width (the incoming max width constraint);
 /// alignment is expressed exclusively through `ui.ParagraphStyle`
 /// ([textAlign] + the source's direction), so painting is a single
-/// `drawParagraph` at the box origin with no paint-offset arithmetic.
+/// `drawParagraph` at the box origin (plus the slot children at their
+/// placeholder boxes) with no paint-offset arithmetic.
+///
+/// Children correspond 1:1, in order, to the source's slots; the count
+/// invariant is enforced both ways (children == slots == placeholders
+/// emitted). A childless render object falls back to [slotDimensions] /
+/// [provisionalSlotDimensions] so slots still occupy space (the U2
+/// behavior).
 class RenderHomericParagraph extends RenderBox
-    with RelayoutWhenSystemFontsChangeMixin {
+    with
+        ContainerRenderObjectMixin<RenderBox, HomericSlotParentData>,
+        RelayoutWhenSystemFontsChangeMixin {
   /// Creates the render object. See the property setters for invalidation
   /// semantics.
   RenderHomericParagraph({
@@ -83,22 +157,48 @@ class RenderHomericParagraph extends RenderBox
     TextAlign textAlign = TextAlign.start,
     TextScaler textScaler = TextScaler.noScaling,
     List<Size>? slotDimensions,
+    ui.PlaceholderAlignment slotAlignment = ui.PlaceholderAlignment.middle,
+    TextBaseline? slotBaseline,
     PaintOnlyStyler? paintStyler,
-  })  : _source = source,
+    List<RenderBox>? children,
+  })  : assert(!_requiresBaseline(slotAlignment) || slotBaseline != null,
+            'slotBaseline is required for $slotAlignment slot alignment'),
+        _source = source,
         _baseStyle = baseStyle,
         _textAlign = textAlign,
         _textScaler = textScaler,
         _slotDimensions = slotDimensions,
-        _paintStyler = paintStyler;
+        _slotAlignment = slotAlignment,
+        _slotBaseline = slotBaseline,
+        _paintStyler = paintStyler {
+    addAll(children);
+  }
 
-  /// Fixed provisional placeholder dimensions for widget slots until U3
-  /// measures real render children into them.
+  /// Fixed provisional placeholder dimensions, used for slots when the
+  /// render object has no inline children and no [slotDimensions].
   ///
-  /// Slots must still occupy real space so every other glyph's geometry is
-  /// correct; U3 replaces these with measured [PlaceholderDimensions]-style
-  /// values (scaled by the [textScaler] at child-measure time) through
-  /// [slotDimensions].
+  /// Slots must still occupy real space so every other glyph's geometry
+  /// is correct; real children replace these with measured sizes.
   static const Size provisionalSlotDimensions = Size(14.0, 14.0);
+
+  static bool _requiresBaseline(ui.PlaceholderAlignment alignment) =>
+      switch (alignment) {
+        ui.PlaceholderAlignment.baseline ||
+        ui.PlaceholderAlignment.aboveBaseline ||
+        ui.PlaceholderAlignment.belowBaseline =>
+          true,
+        ui.PlaceholderAlignment.top ||
+        ui.PlaceholderAlignment.bottom ||
+        ui.PlaceholderAlignment.middle =>
+          false,
+      };
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! HomericSlotParentData) {
+      child.parentData = HomericSlotParentData();
+    }
+  }
 
   // --- Inputs -----------------------------------------------------------
 
@@ -153,6 +253,10 @@ class RenderHomericParagraph extends RenderBox
   /// The text scaler, applied by scaling font sizes at paragraph build
   /// time ([TextStyle.getTextStyle] calls `TextScaler.scale`). Change →
   /// rebuild + relayout.
+  ///
+  /// Slot children are **not** scaled by the render object: a chip
+  /// widget that should track the text scale reads its own
+  /// [MediaQuery]; its measured size then already reflects the scale.
   TextScaler get textScaler => _textScaler;
   TextScaler _textScaler;
   set textScaler(TextScaler value) {
@@ -163,9 +267,11 @@ class RenderHomericParagraph extends RenderBox
     _markNeedsRebuild();
   }
 
-  /// Per-slot placeholder dimensions in slot-index order, or null for
-  /// [provisionalSlotDimensions] everywhere — the U3 seam: inline children
-  /// will be measured and fed through here. Change → rebuild + relayout.
+  /// Per-slot placeholder dimensions in slot-index order for a
+  /// **childless** render object, or null for
+  /// [provisionalSlotDimensions] everywhere. Ignored while inline
+  /// children are attached — measured child sizes always win. Change →
+  /// rebuild + relayout.
   ///
   /// A non-null list whose length disagrees with the source's slot count
   /// throws a descriptive [FlutterError] at build time.
@@ -176,6 +282,35 @@ class RenderHomericParagraph extends RenderBox
       return;
     }
     _slotDimensions = value;
+    _markNeedsRebuild();
+  }
+
+  /// How slot placeholders align vertically with the surrounding text
+  /// (every slot of the block shares one alignment). Change → rebuild +
+  /// relayout.
+  ///
+  /// Defaults to [ui.PlaceholderAlignment.middle]; the baseline-relative
+  /// alignments require [slotBaseline].
+  ui.PlaceholderAlignment get slotAlignment => _slotAlignment;
+  ui.PlaceholderAlignment _slotAlignment;
+  set slotAlignment(ui.PlaceholderAlignment value) {
+    if (_slotAlignment == value) {
+      return;
+    }
+    _slotAlignment = value;
+    _markNeedsRebuild();
+  }
+
+  /// The text baseline slot placeholders align to, required by (and only
+  /// meaningful for) the baseline-relative [slotAlignment]s. Change →
+  /// rebuild + relayout.
+  TextBaseline? get slotBaseline => _slotBaseline;
+  TextBaseline? _slotBaseline;
+  set slotBaseline(TextBaseline? value) {
+    if (_slotBaseline == value) {
+      return;
+    }
+    _slotBaseline = value;
     _markNeedsRebuild();
   }
 
@@ -202,6 +337,8 @@ class RenderHomericParagraph extends RenderBox
   ui.Paragraph? _paragraph;
   ui.Paragraph? _intrinsicsParagraph;
   ui.Paragraph? _lineTemplate;
+  List<PlaceholderDimensions>? _liveDimensions;
+  List<PlaceholderDimensions>? _intrinsicsDimensions;
   bool _rebuildForPaint = false;
   int _layoutGeneration = 0;
   bool _disposed = false;
@@ -223,8 +360,10 @@ class RenderHomericParagraph extends RenderBox
   void _dropParagraphs() {
     _paragraph?.dispose();
     _paragraph = null;
+    _liveDimensions = null;
     _intrinsicsParagraph?.dispose();
     _intrinsicsParagraph = null;
+    _intrinsicsDimensions = null;
     _lineTemplate?.dispose();
     _lineTemplate = null;
     _rebuildForPaint = false;
@@ -252,9 +391,45 @@ class RenderHomericParagraph extends RenderBox
     );
   }
 
-  /// Builds a fresh `ui.Paragraph` from [source] — the
-  /// `pushStyle`/`addText`/`addPlaceholder` loop over U1's segments.
-  ui.Paragraph _buildParagraph() {
+  // --- Slot dimensions ------------------------------------------------------
+
+  PlaceholderDimensions _placeholderFor(Size size, double? baselineOffset) {
+    assert(!_requiresBaseline(_slotAlignment) || _slotBaseline != null,
+        'slotBaseline is required for $_slotAlignment slot alignment');
+    return PlaceholderDimensions(
+      size: size,
+      alignment: _slotAlignment,
+      baseline: _slotBaseline,
+      baselineOffset: baselineOffset,
+    );
+  }
+
+  /// The children, in slot order, with the child↔slot count invariant
+  /// enforced (the other direction — placeholders emitted == slots — is
+  /// asserted in [_buildParagraph]).
+  List<RenderBox> _slotChildren() {
+    final children = <RenderBox>[];
+    for (var child = firstChild; child != null; child = childAfter(child)) {
+      children.add(child);
+    }
+    if (children.length != _source.slots.length) {
+      throw FlutterError.fromParts(<DiagnosticsNode>[
+        ErrorSummary('HomericParagraph slot child count mismatch.'),
+        ErrorDescription(
+            'The paragraph source derives ${_source.slots.length} widget '
+            'slot(s) for view text ${Error.safeToString(_source.viewText)}, '
+            'but ${children.length} inline child(ren) are attached.'),
+        ErrorHint('Provide exactly one child per slot in slot-index order '
+            '(e.g. via HomericParagraph.slotBuilder), or none to fall back '
+            'to slotDimensions.'),
+      ]);
+    }
+    return children;
+  }
+
+  /// Childless fallback: [slotDimensions] (count-checked) or
+  /// [provisionalSlotDimensions].
+  List<PlaceholderDimensions> _externalDimensions() {
     final source = _source;
     final dims = _slotDimensions;
     if (dims != null && dims.length != source.slots.length) {
@@ -269,6 +444,67 @@ class RenderHomericParagraph extends RenderBox
             'null to use the provisional dimensions.'),
       ]);
     }
+    return <PlaceholderDimensions>[
+      for (var i = 0; i < source.slots.length; i++)
+        _placeholderFor(dims?[i] ?? provisionalSlotDimensions, null),
+    ];
+  }
+
+  /// Really lays the children out (width-only constraint, one pass) and
+  /// returns their measured placeholder dimensions. `performLayout` only.
+  List<PlaceholderDimensions> _measureChildren(double maxWidth) {
+    final constraints = BoxConstraints(maxWidth: maxWidth);
+    return <PlaceholderDimensions>[
+      for (final child in _slotChildren()) _measureChild(child, constraints),
+    ];
+  }
+
+  PlaceholderDimensions _measureChild(
+      RenderBox child, BoxConstraints constraints) {
+    child.layout(constraints, parentUsesSize: true);
+    final baselineOffset = _slotAlignment == ui.PlaceholderAlignment.baseline
+        ? child.getDistanceToBaseline(_slotBaseline!)
+        : null;
+    return _placeholderFor(child.size, baselineOffset);
+  }
+
+  /// Dry-measures the children (never mutates their layout) for
+  /// intrinsic-height, dry-layout, and dry-baseline queries.
+  List<PlaceholderDimensions> _dryMeasureChildren(double maxWidth) {
+    final constraints = BoxConstraints(maxWidth: maxWidth);
+    return <PlaceholderDimensions>[
+      for (final child in _slotChildren())
+        _placeholderFor(
+          child.getDryLayout(constraints),
+          _slotAlignment == ui.PlaceholderAlignment.baseline
+              ? child.getDryBaseline(constraints, _slotBaseline!)
+              : null,
+        ),
+    ];
+  }
+
+  /// Children as width-only dimensions for intrinsic-width queries: the
+  /// height is irrelevant on a single unbounded line, so it is faked as
+  /// 0.0 — RenderParagraph.computeM{in,ax}IntrinsicWidth's dummy.
+  List<PlaceholderDimensions> _intrinsicWidthDimensions(
+      double Function(RenderBox child) widthOf) {
+    return <PlaceholderDimensions>[
+      for (final child in _slotChildren())
+        _placeholderFor(Size(widthOf(child), 0.0), null),
+    ];
+  }
+
+  List<PlaceholderDimensions> _dryDimensions(double maxWidth) =>
+      childCount > 0 ? _dryMeasureChildren(maxWidth) : _externalDimensions();
+
+  // --- Paragraph build ------------------------------------------------------
+
+  /// Builds a fresh `ui.Paragraph` from [source] — the
+  /// `pushStyle`/`addText`/`addPlaceholder` loop over U1's segments, with
+  /// one [PlaceholderDimensions] per slot in slot-index order.
+  ui.Paragraph _buildParagraph(List<PlaceholderDimensions> dimensions) {
+    final source = _source;
+    assert(dimensions.length == source.slots.length);
     final builder = ui.ParagraphBuilder(_paragraphStyle());
     final base = _baseStyle;
     if (base != null) {
@@ -284,12 +520,18 @@ class RenderHomericParagraph extends RenderBox
           builder.addText(text.text);
           builder.pop();
         case final SlotSegment<TextStyle> slot:
-          final size = dims?[slot.slotIndex] ?? provisionalSlotDimensions;
-          // scale: 1.0 always — the TextScaler is applied to the
-          // dimensions themselves (U3), never to the placeholder scale.
+          final dims = dimensions[slot.slotIndex];
+          // scale: 1.0 always — placeholder sizes are real measured
+          // pixels; the TextScaler never multiplies them again
+          // (WidgetSpan.build's addPlaceholder shape).
           builder.addPlaceholder(
-              size.width, size.height, ui.PlaceholderAlignment.bottom,
-              scale: 1.0);
+            dims.size.width,
+            dims.size.height,
+            dims.alignment,
+            scale: 1.0,
+            baseline: dims.baseline,
+            baselineOffset: dims.baselineOffset,
+          );
       }
     }
     assert(
@@ -373,52 +615,104 @@ class RenderHomericParagraph extends RenderBox
 
   @override
   void performLayout() {
-    if (_paragraph == null) {
-      _paragraph = _buildParagraph();
+    // Children first, one pass, width-only constraint — they are never
+    // re-laid-out after the text is (no feedback loop).
+    final dimensions = childCount > 0
+        ? _measureChildren(constraints.maxWidth)
+        : _externalDimensions();
+    var paragraph = _paragraph;
+    if (paragraph != null && !listEquals(dimensions, _liveDimensions)) {
+      // A slot changed size: content-level change, rebuild.
+      paragraph.dispose();
+      _paragraph = paragraph = null;
+    }
+    if (paragraph == null) {
+      _paragraph = paragraph = _buildParagraph(dimensions);
       // A fresh build already reflects the current paintStyler.
       _rebuildForPaint = false;
     }
-    final natural = _layoutAt(_paragraph!, constraints.maxWidth);
+    _liveDimensions = dimensions;
+    final natural = _layoutAt(paragraph, constraints.maxWidth);
     _layoutGeneration += 1;
     size = constraints.constrain(natural);
+    _positionChildren(paragraph);
+  }
+
+  /// Stamps each child's paint offset from `getBoxesForPlaceholders`
+  /// (boxes come back in `addPlaceholder` order — slot-index order).
+  /// Children beyond the boxes get a null offset and are skipped in
+  /// paint/hit-test (RenderInlineChildrenContainerDefaults.
+  /// positionInlineChildren's contract).
+  void _positionChildren(ui.Paragraph paragraph) {
+    if (childCount == 0) {
+      return;
+    }
+    final boxes = paragraph.getBoxesForPlaceholders();
+    var index = 0;
+    for (var child = firstChild; child != null; child = childAfter(child)) {
+      final parentData = child.parentData! as HomericSlotParentData;
+      parentData._offset = index < boxes.length
+          ? Offset(boxes[index].left, boxes[index].top)
+          : null;
+      index += 1;
+    }
   }
 
   /// The separate intrinsics paragraph: intrinsic and dry queries must
   /// never clobber the live paragraph's layout (RenderParagraph's
-  /// documented trap — its `_textIntrinsics` painter).
-  ui.Paragraph get _intrinsics => _intrinsicsParagraph ??= _buildParagraph();
+  /// documented trap — its `_textIntrinsics` painter). Rebuilt only when
+  /// the requested placeholder dimensions differ from the cached ones.
+  ui.Paragraph _intrinsicsFor(List<PlaceholderDimensions> dimensions) {
+    final cached = _intrinsicsParagraph;
+    if (cached != null && listEquals(_intrinsicsDimensions, dimensions)) {
+      return cached;
+    }
+    cached?.dispose();
+    _intrinsicsDimensions = dimensions;
+    return _intrinsicsParagraph = _buildParagraph(dimensions);
+  }
 
   @override
   double computeMinIntrinsicWidth(double height) {
-    final paragraph = _intrinsics
+    final dimensions = childCount > 0
+        ? _intrinsicWidthDimensions(
+            (child) => child.getMinIntrinsicWidth(double.infinity))
+        : _externalDimensions();
+    final paragraph = _intrinsicsFor(dimensions)
       ..layout(const ui.ParagraphConstraints(width: double.infinity));
     return paragraph.minIntrinsicWidth;
   }
 
   @override
   double computeMaxIntrinsicWidth(double height) {
-    final paragraph = _intrinsics
+    final dimensions = childCount > 0
+        ? _intrinsicWidthDimensions(
+            (child) => child.getMaxIntrinsicWidth(double.infinity))
+        : _externalDimensions();
+    final paragraph = _intrinsicsFor(dimensions)
       ..layout(const ui.ParagraphConstraints(width: double.infinity));
     return paragraph.maxIntrinsicWidth;
   }
 
   @override
   double computeMinIntrinsicHeight(double width) =>
-      _layoutAt(_intrinsics, width).height;
+      _layoutAt(_intrinsicsFor(_dryDimensions(width)), width).height;
 
   @override
   double computeMaxIntrinsicHeight(double width) =>
-      _layoutAt(_intrinsics, width).height;
+      _layoutAt(_intrinsicsFor(_dryDimensions(width)), width).height;
 
   @override
   @protected
   Size computeDryLayout(covariant BoxConstraints constraints) =>
-      constraints.constrain(_layoutAt(_intrinsics, constraints.maxWidth));
+      constraints.constrain(_layoutAt(
+          _intrinsicsFor(_dryDimensions(constraints.maxWidth)),
+          constraints.maxWidth));
 
   @override
   double? computeDryBaseline(
       covariant BoxConstraints constraints, TextBaseline baseline) {
-    final paragraph = _intrinsics;
+    final paragraph = _intrinsicsFor(_dryDimensions(constraints.maxWidth));
     _layoutAt(paragraph, constraints.maxWidth);
     return paragraph.numberOfLines == 0
         ? preferredLineBaseline
@@ -444,8 +738,10 @@ class RenderHomericParagraph extends RenderBox
     if (_rebuildForPaint) {
       // Deferred paint-only rebuild: the engine has no in-place attribute
       // update, so the paragraph is recreated here — never during layout
-      // (TextPainter.paint's _rebuildParagraphForPaint path).
-      final rebuilt = _buildParagraph()
+      // (TextPainter.paint's _rebuildParagraphForPaint path). Slot
+      // dimensions are the live ones: a paint-only change cannot resize
+      // children.
+      final rebuilt = _buildParagraph(_liveDimensions!)
         ..layout(ui.ParagraphConstraints(width: paragraph.width));
       assert(() {
         if (rebuilt.width != paragraph.width ||
@@ -473,10 +769,57 @@ class RenderHomericParagraph extends RenderBox
       _rebuildForPaint = false;
     }
     context.canvas.drawParagraph(paragraph, offset);
+    // Children paint after the glyphs, at their placeholder boxes; a
+    // null offset means no box this layout — skipped.
+    for (var child = firstChild; child != null; child = childAfter(child)) {
+      final parentData = child.parentData! as HomericSlotParentData;
+      final childOffset = parentData.offset;
+      if (childOffset != null) {
+        context.paintChild(child, offset + childOffset);
+      }
+    }
   }
 
   @override
   bool hitTestSelf(Offset position) => true;
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    // Children first, at their placeholder boxes; positions outside every
+    // child fall through to the text (hitTestSelf). Null-offset children
+    // are skipped (no box this layout).
+    for (var child = firstChild; child != null; child = childAfter(child)) {
+      final parentData = child.parentData! as HomericSlotParentData;
+      final childOffset = parentData.offset;
+      if (childOffset == null) {
+        continue;
+      }
+      final isHit = result.addWithPaintOffset(
+        offset: childOffset,
+        position: position,
+        hitTest: (BoxHitTestResult result, Offset transformed) =>
+            child!.hitTest(result, position: transformed),
+      );
+      if (isHit) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) {
+    // A null offset means the child is not painted this layout: zero the
+    // transform to mark it invisible
+    // (RenderInlineChildrenContainerDefaults.defaultApplyPaintTransform).
+    final parentData = child.parentData! as HomericSlotParentData;
+    final childOffset = parentData.offset;
+    if (childOffset == null) {
+      transform.setZero();
+    } else {
+      transform.translateByDouble(childOffset.dx, childOffset.dy, 0, 1);
+    }
+  }
 
   // --- Lifecycle ------------------------------------------------------------
 
@@ -505,32 +848,62 @@ class RenderHomericParagraph extends RenderBox
       ..add(EnumProperty<TextAlign>('textAlign', _textAlign))
       ..add(DiagnosticsProperty<TextScaler>('textScaler', _textScaler,
           defaultValue: TextScaler.noScaling))
+      ..add(EnumProperty<ui.PlaceholderAlignment>(
+          'slotAlignment', _slotAlignment,
+          defaultValue: ui.PlaceholderAlignment.middle))
+      ..add(EnumProperty<TextBaseline>('slotBaseline', _slotBaseline,
+          defaultValue: null))
       ..add(IntProperty('layoutGeneration', _layoutGeneration));
   }
 }
 
-/// Renders one block's [ParagraphSource] through [RenderHomericParagraph].
+/// Renders one block's [ParagraphSource] through [RenderHomericParagraph],
+/// with one inline child widget per `widget` decoration slot.
 ///
-/// A minimal leaf widget: inline widget children arrive in U3. Rebuild it
-/// with a freshly derived [source] each build (styles are resolved per
-/// build, R7); an unchanged derivation is cheap — the render object
-/// compares sources by content and keeps its paragraph.
+/// Rebuild it with a freshly derived [source] each build (styles are
+/// resolved per build, R7); an unchanged derivation is cheap — the render
+/// object compares sources by content and keeps its paragraph.
+///
+/// Slot children come from [slotBuilder], invoked once per slot in
+/// view-text order; each child is laid out width-only against the wrap
+/// width, and its measured size becomes the slot's placeholder box. With
+/// no [slotBuilder], slots keep their provisional dimensions (the U2
+/// behavior).
 ///
 /// The wrap width comes from the incoming layout constraints. The
 /// effective [TextScaler] is, in order: [textScaler], the source spec's
 /// scaler passthrough, the ambient [MediaQuery], or none — MediaQuery
 /// lookups live here, never in the render object.
-class HomericParagraph extends LeafRenderObjectWidget {
+class HomericParagraph extends MultiChildRenderObjectWidget {
   /// Creates a paragraph view over [source].
-  const HomericParagraph({
+  ///
+  /// [slotBaseline] is required when [slotAlignment] is one of the
+  /// baseline-relative alignments (typically
+  /// `PlaceholderAlignment.baseline` + `TextBaseline.alphabetic` for
+  /// text-like chips).
+  HomericParagraph({
     super.key,
     required this.source,
     this.baseStyle,
     this.textAlign = TextAlign.start,
     this.textScaler,
-    this.slotDimensions,
+    this.slotBuilder,
+    this.slotAlignment = ui.PlaceholderAlignment.middle,
+    this.slotBaseline,
     this.paintStyler,
-  });
+  })  : assert(
+            !RenderHomericParagraph._requiresBaseline(slotAlignment) ||
+                slotBaseline != null,
+            'slotBaseline is required for $slotAlignment slot alignment'),
+        super(children: _slotChildren(source, slotBuilder));
+
+  static List<Widget> _slotChildren(
+      ParagraphSource<TextStyle> source, SlotWidgetBuilder? slotBuilder) {
+    if (slotBuilder == null || source.slots.isEmpty) {
+      return const <Widget>[];
+    }
+    return <Widget>[for (final slot in source.slots) slotBuilder(slot)];
+  }
 
   /// The block's builder inputs (U1 output, styles resolved this build).
   final ParagraphSource<TextStyle> source;
@@ -546,9 +919,19 @@ class HomericParagraph extends LeafRenderObjectWidget {
   /// ambient [MediaQuery].
   final TextScaler? textScaler;
 
-  /// Per-slot placeholder dimensions (U3 seam). See
-  /// [RenderHomericParagraph.slotDimensions].
-  final List<Size>? slotDimensions;
+  /// Builds the inline child for each widget slot, in view-text order.
+  ///
+  /// Null → no children; slots occupy
+  /// [RenderHomericParagraph.provisionalSlotDimensions].
+  final SlotWidgetBuilder? slotBuilder;
+
+  /// Vertical alignment of slot placeholders within their line. See
+  /// [RenderHomericParagraph.slotAlignment].
+  final ui.PlaceholderAlignment slotAlignment;
+
+  /// The baseline for baseline-relative [slotAlignment]s. See
+  /// [RenderHomericParagraph.slotBaseline].
+  final TextBaseline? slotBaseline;
 
   /// Paint-only repaint band (U5 seam). See [PaintOnlyStyler].
   final PaintOnlyStyler? paintStyler;
@@ -568,7 +951,8 @@ class HomericParagraph extends LeafRenderObjectWidget {
       baseStyle: baseStyle,
       textAlign: textAlign,
       textScaler: _resolveTextScaler(context),
-      slotDimensions: slotDimensions,
+      slotAlignment: slotAlignment,
+      slotBaseline: slotBaseline,
       paintStyler: paintStyler,
     );
   }
@@ -581,7 +965,8 @@ class HomericParagraph extends LeafRenderObjectWidget {
       ..baseStyle = baseStyle
       ..textAlign = textAlign
       ..textScaler = _resolveTextScaler(context)
-      ..slotDimensions = slotDimensions
+      ..slotAlignment = slotAlignment
+      ..slotBaseline = slotBaseline
       ..paintStyler = paintStyler;
   }
 
@@ -595,6 +980,11 @@ class HomericParagraph extends LeafRenderObjectWidget {
       ..add(EnumProperty<TextAlign>('textAlign', textAlign,
           defaultValue: TextAlign.start))
       ..add(DiagnosticsProperty<TextScaler>('textScaler', textScaler,
+          defaultValue: null))
+      ..add(EnumProperty<ui.PlaceholderAlignment>(
+          'slotAlignment', slotAlignment,
+          defaultValue: ui.PlaceholderAlignment.middle))
+      ..add(EnumProperty<TextBaseline>('slotBaseline', slotBaseline,
           defaultValue: null));
   }
 }

@@ -2,7 +2,7 @@
 
 > A Flutter editor library for long-form writing.
 
-Homeric is a Flutter rich-text editor library targeting **Ulysses-class writing UX** with **Tiptap-class extensibility**. It is built for documents that are 100,000+ words long, with first-class support for footnotes, inline comments, annotations, backlinks, writing goals, and visual diff between versions.
+Homeric is a Flutter rich-text editor library targeting **Ulysses-class writing UX** with **Tiptap-class extensibility**. It is built for documents that are anywhere from atomic, short notes to 100,000+ words long, with first-class support for footnotes, inline comments, annotations, backlinks, writing goals, and visual diff between versions.
 
 It is a **fork of [super_editor](https://github.com/superlistapp/super_editor) `0.3.0-dev.51`** with three architectural additions the upstream library does not provide:
 

@@ -1,18 +1,16 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/src/model/block.dart';
 import 'package:homeric/src/model/document.dart';
-import 'package:homeric/src/model/inline_run.dart';
 import 'package:homeric/src/model/position.dart';
 
-Block _paragraph(String id, String text) =>
-    Block(id: id, type: 'paragraph', runs: [InlineRun(text)]);
+import '../transform/transform_test_utils.dart';
 
 void main() {
   group('ProseMirror token-scheme pin (hand-computed values)', () {
     // Two blocks "Hi" / "yo": each block is <open>H i<close> = 4 tokens,
     // so the document size is 8 and the second block's first character
     // sits at position 5. These values match ProseMirror exactly.
-    final doc = Document([_paragraph('a', 'Hi'), _paragraph('b', 'yo')]);
+    final doc = Document([para('a', 'Hi'), para('b', 'yo')]);
 
     test('doc size is 8', () {
       expect(doc.size, 8);
@@ -48,7 +46,7 @@ void main() {
 
   group('resolve over every position', () {
     test('classifies all 9 positions of the "Hi"/"yo" document', () {
-      final doc = Document([_paragraph('a', 'Hi'), _paragraph('b', 'yo')]);
+      final doc = Document([para('a', 'Hi'), para('b', 'yo')]);
       final expected = <(Type, int, int)>[
         (BlockBoundaryPosition, 0, 0), // 0: doc start
         (InlinePosition, 0, 0), // 1: before 'H'
@@ -77,7 +75,7 @@ void main() {
     });
 
     test('document start boundary has no blockBefore', () {
-      final doc = Document([_paragraph('a', 'x')]);
+      final doc = Document([para('a', 'x')]);
       final start = doc.resolve(0) as BlockBoundaryPosition;
       expect(start.insertionIndex, 0);
       expect(start.blockBefore, isNull);
@@ -85,7 +83,7 @@ void main() {
     });
 
     test('document end boundary has no blockAfter', () {
-      final doc = Document([_paragraph('a', 'x')]);
+      final doc = Document([para('a', 'x')]);
       final end = doc.resolve(doc.size) as BlockBoundaryPosition;
       expect(end.insertionIndex, 1);
       expect(identical(end.blockBefore, doc.blocks[0]), isTrue);
@@ -102,9 +100,9 @@ void main() {
 
     test('resolves inside an empty block between non-empty blocks', () {
       final doc = Document([
-        _paragraph('a', 'a'), // [0, 3)
+        para('a', 'a'), // [0, 3)
         Block(id: 'empty', type: 'paragraph'), // [3, 5)
-        _paragraph('c', 'c'), // [5, 8)
+        para('c', 'c'), // [5, 8)
       ]);
       final inside = doc.resolve(4) as InlinePosition;
       expect(inside.block.id, 'empty');
@@ -115,7 +113,7 @@ void main() {
     });
 
     test('offset at content end (before closing token) is contentLength', () {
-      final doc = Document([_paragraph('a', 'Hi')]);
+      final doc = Document([para('a', 'Hi')]);
       final atEnd = doc.resolve(3) as InlinePosition;
       expect(atEnd.offset, 2);
       expect(atEnd.offset, atEnd.block.contentLength);
@@ -123,9 +121,9 @@ void main() {
 
     test('resolve agrees with positionAt for every text offset', () {
       final doc = Document([
-        _paragraph('a', 'one'),
+        para('a', 'one'),
         Block(id: 'b', type: 'paragraph'),
-        _paragraph('c', 'three'),
+        para('c', 'three'),
       ]);
       for (var blockIndex = 0; blockIndex < doc.blockCount; blockIndex++) {
         final block = doc.blocks[blockIndex];
@@ -141,12 +139,12 @@ void main() {
 
   group('typed errors on bad resolve', () {
     test('negative positions throw PositionOutOfRangeError', () {
-      final doc = Document([_paragraph('a', 'Hi')]);
+      final doc = Document([para('a', 'Hi')]);
       expect(() => doc.resolve(-1), throwsA(isA<PositionOutOfRangeError>()));
     });
 
     test('past-end positions throw PositionOutOfRangeError', () {
-      final doc = Document([_paragraph('a', 'Hi')]);
+      final doc = Document([para('a', 'Hi')]);
       expect(() => doc.resolve(doc.size + 1),
           throwsA(isA<PositionOutOfRangeError>()));
       expect(
@@ -154,7 +152,7 @@ void main() {
     });
 
     test('the error reports position and document size', () {
-      final doc = Document([_paragraph('a', 'Hi')]);
+      final doc = Document([para('a', 'Hi')]);
       try {
         doc.resolve(99);
         fail('expected PositionOutOfRangeError');

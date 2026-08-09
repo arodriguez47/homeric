@@ -69,12 +69,17 @@ final class Transaction {
   /// The current document.
   Document get doc => _doc;
 
+  // The views are live (they reflect later steps) and the backing lists are
+  // never replaced, so one instance each suffices.
+  late final List<Step> _stepsView = UnmodifiableListView(_steps);
+  late final List<Document> _docsView = UnmodifiableListView(_docs);
+
   /// The applied steps, in order (unmodifiable view).
-  List<Step> get steps => UnmodifiableListView(_steps);
+  List<Step> get steps => _stepsView;
 
   /// For each applied step, the document it was applied to (unmodifiable
   /// view); `docs[i]` is the input to `steps[i]`.
-  List<Document> get docs => UnmodifiableListView(_docs);
+  List<Document> get docs => _docsView;
 
   /// Whether any step has been applied.
   bool get docChanged => _steps.isNotEmpty;
@@ -100,15 +105,41 @@ final class Transaction {
     if (result.failed) throw StepFailedError(result.failure!);
   }
 
-  /// Records a structural outcome produced at the builder level (e.g. a
-  /// block move, which is two replace steps plus intent).
-  void recordStructuralChange(StructuralChange change) {
-    _structural.add(change);
+  /// Applies [first], then the step [second] builds against the resulting
+  /// document, and registers their position maps as a mirror pair — the
+  /// shape of a block move, where positions inside the deleted content
+  /// recover into the re-inserted copy. [record], when given, is the
+  /// structural outcome the pair produces (e.g. a `BlockMove`).
+  ///
+  /// [second] is a callback because the second step's positions are
+  /// expressed in the coordinates left behind by [first]. Throws
+  /// [StepFailedError] (like [step]) when either step does not fit.
+  void stepPairMirrored(Step first, Step Function(Document doc) second,
+      {StructuralChange? record}) {
+    step(first);
+    step(second(_doc));
+    mapping.setMirror(_steps.length - 2, _steps.length - 1);
+    if (record != null) _structural.add(record);
   }
+
+  ChangeList? _changesCache;
+  int _changesCacheSteps = -1;
+  int _changesCacheStructural = -1;
 
   /// The change list for everything applied so far: touched block ids with
   /// their old/new global ranges, plus split/join/move outcomes.
-  ChangeList get changes => ChangeList.compute(before, _doc, _structural);
+  /// Memoized until the next applied step or structural record.
+  ChangeList get changes {
+    final cached = _changesCache;
+    if (cached != null &&
+        _changesCacheSteps == _steps.length &&
+        _changesCacheStructural == _structural.length) {
+      return cached;
+    }
+    _changesCacheSteps = _steps.length;
+    _changesCacheStructural = _structural.length;
+    return _changesCache = ChangeList.compute(before, _doc, _structural);
+  }
 
   /// The transaction's summary: `(new Document, ChangeList, Mapping)`.
   TransactionResult finish() => TransactionResult(_doc, changes, mapping);

@@ -30,8 +30,42 @@ final class ViewMap {
   /// document coordinates: each triple says the document span
   /// `[start, start + oldLen)` became `newLen` units of view text.
   ///
+  /// The constructor canonicalizes the triples so the type owns its
+  /// round-trip invariant: no-op `[start, 0, 0]` triples are dropped, and
+  /// a folded span with no view content starting exactly where the
+  /// previous span ends is absorbed into it. Otherwise the two spans would
+  /// share one view position and the inverse map could not tell their
+  /// edges apart, breaking the round-trip law at the seam (the seam itself
+  /// becomes span-interior, mapping to the assoc-chosen visible edge like
+  /// any other folded position).
+  ///
   /// Throws [MalformedStepMapError] on malformed triples (see [StepMap]).
-  ViewMap(List<int> triples) : _forward = StepMap(List<int>.of(triples));
+  factory ViewMap(List<int> triples) {
+    if (triples.length % 3 != 0) {
+      throw MalformedStepMapError(
+          'range list length (${triples.length}) must be a multiple of 3');
+    }
+    final canonical = <int>[];
+    for (var i = 0; i < triples.length; i += 3) {
+      final start = triples[i];
+      final oldLen = triples[i + 1];
+      final newLen = triples[i + 2];
+      if (start < 0 || oldLen < 0 || newLen < 0) {
+        throw MalformedStepMapError(
+            'negative value in triple [$start, $oldLen, $newLen]');
+      }
+      if (oldLen == 0 && newLen == 0) continue;
+      if (canonical.isNotEmpty &&
+          newLen == 0 &&
+          canonical[canonical.length - 3] + canonical[canonical.length - 2] ==
+              start) {
+        canonical[canonical.length - 2] += oldLen;
+        continue;
+      }
+      canonical.addAll([start, oldLen, newLen]);
+    }
+    return ViewMap._(StepMap(canonical));
+  }
 
   ViewMap._(this._forward);
 

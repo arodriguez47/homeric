@@ -203,34 +203,29 @@ void main() {
       test(
           'widget @2 maps by inclusiveEnd alone (inclusiveEnd: '
           '$inclusiveEnd)', () {
-        for (final inclusiveStart in [false, true]) {
-          final set = DecorationSet.of([
-            Decoration.widget('b', 2,
-                inclusiveStart: inclusiveStart,
-                inclusiveEnd: inclusiveEnd,
-                spec: 'w'),
-          ]);
+        final set = DecorationSet.of([
+          Decoration.widget('b', 2, inclusiveEnd: inclusiveEnd, spec: 'w'),
+        ]);
 
-          int offsetAfter(void Function(Transaction txn) build) {
-            final result = edit(threeBlocks(), build);
-            final d =
-                set.map(result.mapping, result.changes).forBlock('b').single;
-            expect(d.kind, DecorationKind.widget);
-            expect(d.isCollapsed, isTrue);
-            return d.start;
-          }
-
-          // Insert before the slot.
-          expect(offsetAfter((t) => t.insertText(9, 'XX')), 4);
-          // Insert exactly at the slot: pushed after iff inclusiveEnd.
-          expect(
-              offsetAfter((t) => t.insertText(10, 'XX')), inclusiveEnd ? 4 : 2);
-          // Insert after the slot.
-          expect(offsetAfter((t) => t.insertText(11, 'XX')), 2);
-          // Delete before / starting at the slot.
-          expect(offsetAfter((t) => t.deleteRange(8, 9)), 1);
-          expect(offsetAfter((t) => t.deleteRange(10, 11)), 2);
+        int offsetAfter(void Function(Transaction txn) build) {
+          final result = edit(threeBlocks(), build);
+          final d =
+              set.map(result.mapping, result.changes).forBlock('b').single;
+          expect(d.kind, DecorationKind.widget);
+          expect(d.isCollapsed, isTrue);
+          return d.start;
         }
+
+        // Insert before the slot.
+        expect(offsetAfter((t) => t.insertText(9, 'XX')), 4);
+        // Insert exactly at the slot: pushed after iff inclusiveEnd.
+        expect(
+            offsetAfter((t) => t.insertText(10, 'XX')), inclusiveEnd ? 4 : 2);
+        // Insert after the slot.
+        expect(offsetAfter((t) => t.insertText(11, 'XX')), 2);
+        // Delete before / starting at the slot.
+        expect(offsetAfter((t) => t.deleteRange(8, 9)), 1);
+        expect(offsetAfter((t) => t.deleteRange(10, 11)), 2);
       });
     }
 

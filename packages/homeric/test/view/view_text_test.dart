@@ -12,17 +12,6 @@ import '../transform/transform_test_utils.dart';
 
 const String ors = objectReplacementCharacter;
 
-/// Minimal [ReplacementContent] payload used across the tests.
-final class ReplacementText implements ReplacementContent {
-  const ReplacementText(this.text);
-
-  @override
-  final String text;
-
-  @override
-  String toString() => 'ReplacementText(${Error.safeToString(text)})';
-}
-
 /// Expects two derivations to be indistinguishable.
 void expectSameDerivation(DerivedViewText actual, DerivedViewText expected,
     {String? reason}) {

@@ -11,7 +11,7 @@ library;
 
 import '../transform/change_list.dart';
 import '../transform/mapping.dart';
-import '../transform/step_map.dart';
+import '../util/sort.dart';
 import 'decoration.dart';
 
 /// An immutable set of [Decoration]s, sharded by stable block id.
@@ -159,20 +159,19 @@ final class DecorationSet {
     void Function(Decoration decoration)? onRemoved,
   }) {
     if (_shards.isEmpty || changes.changes.isEmpty) return this;
-    final hosts = _HostTable.of(changes);
-    final result = <String, List<Decoration>>{};
+    // Walk the (tiny) change list rather than every shard; when no touched
+    // block carries a shard, nothing is built and `this` is returned.
+    _HostTable? hosts;
+    // Touched shards whose contents changed: block id -> surviving
+    // decorations that stay under that id (possibly empty).
     final rebuilt = <String, List<Decoration>>{};
     final rekeyed = <String, List<Decoration>>{};
-    var anyChanged = false;
-
-    _shards.forEach((blockId, shard) {
-      final before = changes.changeFor(blockId)?.before;
-      if (before == null) {
-        // Untouched block (or an id the transaction only created): the
-        // shard carries over by reference.
-        result[blockId] = shard;
-        return;
-      }
+    for (final change in changes.changes) {
+      final before = change.before;
+      if (before == null) continue; // Created by the transaction.
+      final shard = _shards[change.blockId];
+      if (shard == null) continue;
+      hosts ??= _HostTable.of(changes);
       final kept = <Decoration>[];
       var shardChanged = false;
       for (final decoration in shard) {
@@ -182,7 +181,7 @@ final class DecorationSet {
           onRemoved?.call(decoration);
           continue;
         }
-        if (mapped.blockId == blockId) {
+        if (mapped.blockId == change.blockId) {
           if (!identical(mapped, decoration)) shardChanged = true;
           kept.add(mapped);
         } else {
@@ -190,29 +189,28 @@ final class DecorationSet {
           (rekeyed[mapped.blockId] ??= <Decoration>[]).add(mapped);
         }
       }
-      if (shardChanged) {
-        anyChanged = true;
-        if (kept.isNotEmpty) rebuilt[blockId] = kept;
-      } else {
-        result[blockId] = shard;
-      }
-    });
+      if (shardChanged) rebuilt[change.blockId] = kept;
+    }
 
-    if (!anyChanged) return this;
+    if (rebuilt.isEmpty && rekeyed.isEmpty) return this;
 
+    // Untouched shards (and touched-but-unchanged ones) carry over by
+    // reference; only touched entries are patched.
+    final result = Map<String, List<Decoration>>.of(_shards);
     rekeyed.forEach((blockId, arrivals) {
-      final base = rebuilt.remove(blockId);
+      final base = rebuilt[blockId];
       if (base != null) {
-        rebuilt[blockId] = base..addAll(arrivals);
+        base.addAll(arrivals);
       } else {
-        rebuilt[blockId] = <Decoration>[
-          ...?result.remove(blockId),
-          ...arrivals
-        ];
+        rebuilt[blockId] = <Decoration>[...?result[blockId], ...arrivals];
       }
     });
     rebuilt.forEach((blockId, items) {
-      result[blockId] = _seal(items);
+      if (items.isEmpty) {
+        result.remove(blockId);
+      } else {
+        result[blockId] = _seal(items);
+      }
     });
     return DecorationSet._(result);
   }
@@ -226,24 +224,26 @@ final class DecorationSet {
   ) {
     final oldStart = before.start + 1 + decoration.start;
     final oldEnd = before.start + 1 + decoration.end;
-    final MapResult mappedStart;
-    final MapResult mappedEnd;
+    final int start;
+    final int end;
     if (decoration.kind == DecorationKind.widget) {
       // A zero-length slot maps as a single point; `inclusiveEnd` decides
       // whether an insertion at the slot pushes it after the new content.
-      mappedStart =
+      final mapped =
           mapping.mapResult(oldStart, assoc: decoration.inclusiveEnd ? 1 : -1);
-      mappedEnd = mappedStart;
+      if (mapped.deletedAcross) return null;
+      start = mapped.pos;
+      end = mapped.pos;
     } else {
-      mappedStart = mapping.mapResult(oldStart,
-          assoc: decoration.inclusiveStart ? -1 : 1);
-      mappedEnd =
-          mapping.mapResult(oldEnd, assoc: decoration.inclusiveEnd ? 1 : -1);
+      final span = mapSpan(mapping, oldStart, oldEnd,
+          assocFrom: decoration.inclusiveStart ? -1 : 1,
+          assocTo: decoration.inclusiveEnd ? 1 : -1);
+      if (span.from.deletedAcross && span.to.deletedAcross) return null;
+      // Policy: an inverted range collapses to the earlier mapped
+      // position (`span.to.pos` is that earlier position when inverted).
+      start = span.start;
+      end = span.to.pos;
     }
-    if (mappedStart.deletedAcross && mappedEnd.deletedAcross) return null;
-    var start = mappedStart.pos;
-    var end = mappedEnd.pos;
-    if (end < start) start = end; // Collapse to the earlier position.
     final host = hosts.lookup(start);
     if (host == null) return null;
     var localStart = start - host.start - 1;
@@ -270,20 +270,11 @@ final class DecorationSet {
 
   /// Sorts by `start`, then `end`, then original order, into an
   /// unmodifiable list.
-  static List<Decoration> _seal(List<Decoration> items) {
-    final order = List<int>.generate(items.length, (i) => i)
-      ..sort((x, y) {
-        final a = items[x];
-        final b = items[y];
+  static List<Decoration> _seal(List<Decoration> items) =>
+      List<Decoration>.unmodifiable(stableSortedBy(items, (a, b) {
         final byStart = a.start.compareTo(b.start);
-        if (byStart != 0) return byStart;
-        final byEnd = a.end.compareTo(b.end);
-        if (byEnd != 0) return byEnd;
-        return x.compareTo(y);
-      });
-    return List<Decoration>.unmodifiable(
-        <Decoration>[for (final i in order) items[i]]);
-  }
+        return byStart != 0 ? byStart : a.end.compareTo(b.end);
+      }));
 
   @override
   String toString() =>

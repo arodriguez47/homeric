@@ -2,6 +2,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric/src/transform/run_ops.dart';
 
 /// Builds a block with a single plain run over [text] (or no runs when
 /// [text] is empty), unless explicit [runs] are given.
@@ -61,32 +62,30 @@ String canon(Object? value) {
   return '$value';
 }
 
-/// Merges adjacent runs with deep-equal attributes and drops empty runs, so
-/// documents compare by content rather than by run-boundary accidents.
-List<InlineRun> canonicalRuns(List<InlineRun> runs) {
-  final out = <InlineRun>[];
-  for (final run in runs) {
-    if (run.isEmpty) continue;
-    if (out.isNotEmpty && out.last.hasSameAttributesAs(run)) {
-      out[out.length - 1] = out.last.copyWith(text: out.last.text + run.text);
-    } else {
-      out.add(run);
-    }
-  }
-  return out;
-}
-
 /// Canonical one-line-per-block dump of a document: id, type, attribute
-/// bag, and normalized runs.
+/// bag, and normalized runs (via the library's own [normalizeRuns], so
+/// documents compare by content rather than by run-boundary accidents).
 String dumpDoc(Document doc) {
   final lines = <String>[];
   for (final block in doc.blocks) {
-    final runs = canonicalRuns(block.runs)
+    final runs = normalizeRuns(block.runs)
         .map((r) => '${canon(r.text)}@${canon(r.attributes)}')
         .join(' ');
     lines.add('${block.id}|${block.type}|${canon(block.attributes)}|$runs');
   }
   return lines.join('\n');
+}
+
+/// Minimal [ReplacementContent] payload shared by the view and property
+/// tests.
+final class ReplacementText implements ReplacementContent {
+  const ReplacementText(this.text);
+
+  @override
+  final String text;
+
+  @override
+  String toString() => 'ReplacementText(${Error.safeToString(text)})';
 }
 
 /// Expects [actual] and [expected] to be the same document up to run

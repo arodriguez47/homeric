@@ -8,9 +8,8 @@
 ///
 /// Structural sharing: every edit helper shallow-copies the block list only;
 /// untouched [Block] instances (and their run lists and attribute bags) are
-/// shared by reference between document versions. The cumulative-size cache
-/// of the source document is carried over so sizes are recomputed only for
-/// blocks at or after the edit point.
+/// shared by reference between document versions. Cumulative block sizes are
+/// computed lazily per document version.
 library;
 
 import 'block.dart';
@@ -20,17 +19,12 @@ import 'position.dart';
 final class Document {
   /// Creates a document over [blocks] (copied into an unmodifiable list).
   Document([List<Block> blocks = const <Block>[]])
-      : this._(List<Block>.unmodifiable(blocks), null, 0);
+      : this._(List<Block>.unmodifiable(blocks));
 
-  Document._(this.blocks, this._inheritedSizes, this._inheritedSizeCount);
+  Document._(this.blocks);
 
   /// The ordered block sequence (unmodifiable list).
   final List<Block> blocks;
-
-  /// Cumulative sizes inherited from the document this one was derived from;
-  /// entries `0.._inheritedSizeCount` are still valid for this document.
-  final List<int>? _inheritedSizes;
-  final int _inheritedSizeCount;
 
   /// Lazily computed cumulative sizes: `_cumulative[i]` is the document
   /// position of block `i`'s opening boundary; `_cumulative[length]` is the
@@ -41,18 +35,7 @@ final class Document {
     final cached = _cumulativeCache;
     if (cached != null) return cached;
     final sizes = List<int>.filled(blocks.length + 1, 0);
-    var next = 1;
-    final inherited = _inheritedSizes;
-    if (inherited != null) {
-      final reusable = _inheritedSizeCount < blocks.length
-          ? _inheritedSizeCount
-          : blocks.length;
-      for (var i = 1; i <= reusable; i++) {
-        sizes[i] = inherited[i];
-      }
-      next = reusable + 1;
-    }
-    for (var i = next; i <= blocks.length; i++) {
+    for (var i = 1; i <= blocks.length; i++) {
       sizes[i] = sizes[i - 1] + blocks[i - 1].size;
     }
     return _cumulativeCache = sizes;
@@ -73,7 +56,7 @@ final class Document {
       }
       index[id] = i;
     }
-    return _indexByIdCache = Map<String, int>.unmodifiable(index);
+    return _indexByIdCache = index;
   }
 
   /// Number of blocks.
@@ -158,17 +141,13 @@ final class Document {
   /// Replaces blocks `[start, end)` with [replacement].
   ///
   /// This is the single structural edit primitive: it shallow-copies the
-  /// block list, shares every untouched block by reference, and hands the
-  /// current cumulative-size cache to the new document so only positions at
-  /// or after [start] are recomputed.
+  /// block list once and shares every untouched block by reference.
   Document replaceBlockRange(int start, int end, Iterable<Block> replacement) {
     RangeError.checkValidRange(start, end, blocks.length);
-    final next = List<Block>.unmodifiable(<Block>[
-      ...blocks.getRange(0, start),
-      ...replacement,
-      ...blocks.getRange(end, blocks.length),
-    ]);
-    return Document._(next, _cumulativeCache, start);
+    return Document._(List<Block>.unmodifiable(blocks
+        .getRange(0, start)
+        .followedBy(replacement)
+        .followedBy(blocks.getRange(end, blocks.length))));
   }
 
   /// Replaces the block at [index] with [block].

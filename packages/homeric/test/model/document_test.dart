@@ -3,8 +3,7 @@ import 'package:homeric/src/model/block.dart';
 import 'package:homeric/src/model/document.dart';
 import 'package:homeric/src/model/inline_run.dart';
 
-Block _paragraph(String id, String text) =>
-    Block(id: id, type: 'paragraph', runs: [InlineRun(text)]);
+import '../transform/transform_test_utils.dart';
 
 void main() {
   group('Document construction and read-back', () {
@@ -40,16 +39,15 @@ void main() {
     });
 
     test('blocks list is unmodifiable', () {
-      final doc = Document([_paragraph('a', 'x')]);
-      expect(
-          () => doc.blocks.add(_paragraph('b', 'y')), throwsUnsupportedError);
+      final doc = Document([para('a', 'x')]);
+      expect(() => doc.blocks.add(para('b', 'y')), throwsUnsupportedError);
     });
 
     test('size sums block sizes, including empty blocks', () {
       final doc = Document([
-        _paragraph('a', 'Hi'), // 4
+        para('a', 'Hi'), // 4
         Block(id: 'b', type: 'paragraph'), // 2
-        _paragraph('c', 'yo'), // 4
+        para('c', 'yo'), // 4
       ]);
       expect(doc.size, 10);
     });
@@ -58,9 +56,9 @@ void main() {
   group('Block boundary positions', () {
     test('positionBeforeBlock / positionAfterBlock match token counting', () {
       final doc = Document([
-        _paragraph('a', 'Hi'), // spans [0, 4)
+        para('a', 'Hi'), // spans [0, 4)
         Block(id: 'b', type: 'paragraph'), // spans [4, 6)
-        _paragraph('c', 'yo'), // spans [6, 10)
+        para('c', 'yo'), // spans [6, 10)
       ]);
       expect(doc.positionBeforeBlock(0), 0);
       expect(doc.positionAfterBlock(0), 4);
@@ -73,7 +71,7 @@ void main() {
     });
 
     test('positionAt maps (block, offset) to a document position', () {
-      final doc = Document([_paragraph('a', 'Hi'), _paragraph('b', 'yo')]);
+      final doc = Document([para('a', 'Hi'), para('b', 'yo')]);
       expect(doc.positionAt(0, 0), 1);
       expect(doc.positionAt(0, 2), 3); // end of "Hi" content
       expect(doc.positionAt(1, 0), 5);
@@ -85,7 +83,7 @@ void main() {
 
   group('Lookup by stable id', () {
     test('blockById and indexOfBlockId find blocks; unknown ids are null', () {
-      final doc = Document([_paragraph('a', 'x'), _paragraph('b', 'y')]);
+      final doc = Document([para('a', 'x'), para('b', 'y')]);
       expect(doc.blockById('b')!.text, 'y');
       expect(doc.indexOfBlockId('a'), 0);
       expect(doc.blockById('zzz'), isNull);
@@ -93,7 +91,7 @@ void main() {
     });
 
     test('duplicate ids are rejected', () {
-      final doc = Document([_paragraph('dup', 'x'), _paragraph('dup', 'y')]);
+      final doc = Document([para('dup', 'x'), para('dup', 'y')]);
       expect(() => doc.blockById('dup'), throwsStateError);
     });
   });
@@ -101,9 +99,9 @@ void main() {
   group('Edits and structural sharing', () {
     test('updateBlock shares every untouched block by reference', () {
       final doc = Document([
-        _paragraph('a', 'first'),
-        _paragraph('b', 'second'),
-        _paragraph('c', 'third'),
+        para('a', 'first'),
+        para('b', 'second'),
+        para('c', 'third'),
       ]);
       final edited = doc.updateBlock(
           1, doc.blocks[1].copyWith(runs: [InlineRun('SECOND')]));
@@ -123,8 +121,8 @@ void main() {
     });
 
     test('insertBlock and removeBlock share untouched blocks', () {
-      final doc = Document([_paragraph('a', 'x'), _paragraph('b', 'y')]);
-      final inserted = doc.insertBlock(1, _paragraph('mid', 'm'));
+      final doc = Document([para('a', 'x'), para('b', 'y')]);
+      final inserted = doc.insertBlock(1, para('mid', 'm'));
       expect(inserted.blockCount, 3);
       expect(identical(inserted.blocks[0], doc.blocks[0]), isTrue);
       expect(identical(inserted.blocks[2], doc.blocks[1]), isTrue);
@@ -135,16 +133,16 @@ void main() {
     });
 
     test('replaceBlockRange validates its range', () {
-      final doc = Document([_paragraph('a', 'x')]);
+      final doc = Document([para('a', 'x')]);
       expect(() => doc.replaceBlockRange(0, 2, const []), throwsRangeError);
       expect(() => doc.replaceBlockRange(-1, 0, const []), throwsRangeError);
     });
 
     test('sizes stay correct after edits when the source cache was warm', () {
       final doc = Document([
-        _paragraph('a', 'Hi'),
-        _paragraph('b', 'yo'),
-        _paragraph('c', 'end'),
+        para('a', 'Hi'),
+        para('b', 'yo'),
+        para('c', 'end'),
       ]);
       expect(doc.size, 13); // warm the cumulative cache
       final edited = doc.updateBlock(
@@ -155,7 +153,7 @@ void main() {
     });
 
     test('sizes stay correct after edits when the source cache was cold', () {
-      final doc = Document([_paragraph('a', 'Hi'), _paragraph('b', 'yo')]);
+      final doc = Document([para('a', 'Hi'), para('b', 'yo')]);
       // No size/resolve call on `doc` first: its cache is still cold.
       final edited = doc.removeBlock(0);
       expect(edited.size, 4);
@@ -164,11 +162,11 @@ void main() {
 
     test('chained edits keep sharing and correct sizes', () {
       final doc = Document([
-        _paragraph('a', 'one'),
-        _paragraph('b', 'two'),
-        _paragraph('c', 'three'),
+        para('a', 'one'),
+        para('b', 'two'),
+        para('c', 'three'),
       ]);
-      final step1 = doc.insertBlock(3, _paragraph('d', 'four'));
+      final step1 = doc.insertBlock(3, para('d', 'four'));
       final step2 = step1.updateBlock(
           0, step1.blocks[0].copyWith(runs: [InlineRun('ONE!')]));
       expect(identical(step2.blocks[1], doc.blocks[1]), isTrue);

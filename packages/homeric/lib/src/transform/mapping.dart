@@ -7,6 +7,37 @@ import 'dart:collection';
 
 import 'step_map.dart';
 
+/// The result of mapping a `[from, to)` span through a [Mappable] with
+/// [mapSpan]: the raw per-end [MapResult]s plus the normalized (ordered)
+/// span.
+typedef MappedSpan = ({MapResult from, MapResult to, int start, int end});
+
+/// Maps the span `[from, to)` through [mapping], the start with
+/// [assocFrom] and the end with [assocTo].
+///
+/// This owns only the mechanical double-map: [MappedSpan.start] /
+/// [MappedSpan.end] are the two mapped positions in ascending order (an
+/// insertion at an exclusive-both zero-length span can invert them). Each
+/// call site keeps its own drop/clamp/collapse policy, built from the raw
+/// results.
+MappedSpan mapSpan(
+  Mappable mapping,
+  int from,
+  int to, {
+  int assocFrom = 1,
+  int assocTo = -1,
+}) {
+  final mappedFrom = mapping.mapResult(from, assoc: assocFrom);
+  final mappedTo = mapping.mapResult(to, assoc: assocTo);
+  final inverted = mappedTo.pos < mappedFrom.pos;
+  return (
+    from: mappedFrom,
+    to: mappedTo,
+    start: inverted ? mappedTo.pos : mappedFrom.pos,
+    end: inverted ? mappedFrom.pos : mappedTo.pos,
+  );
+}
+
 /// A pipeline of zero or more [StepMap]s, mapping positions through a
 /// sequence of steps.
 ///
@@ -17,19 +48,35 @@ import 'step_map.dart';
 /// offset.
 final class Mapping implements Mappable {
   /// Creates a mapping over [maps], optionally restricted to the index
-  /// window [from]..[to]. When [maps] or [mirror] are given they are shared,
-  /// not copied; the first mutation copies them (see [appendMap]).
+  /// window [from]..[to]. When [maps] is given it is shared, not copied;
+  /// the first mutation copies it (see [appendMap]). [mirror] lists mirror
+  /// pairs as flattened index pairs (`[n1, m1, n2, m2, ...]`).
   Mapping([List<StepMap>? maps, List<int>? mirror, this.from = 0, int? to])
       : _maps = maps ?? [],
-        _mirror = mirror,
+        _mirror = mirror == null ? null : _mirrorIndexOf(mirror),
         _ownData = maps == null && mirror == null,
         to = to ?? maps?.length ?? 0;
 
+  Mapping._share(this._maps, this._mirror, this.from, this.to)
+      : _ownData = false;
+
+  static Map<int, int> _mirrorIndexOf(List<int> pairs) {
+    final index = HashMap<int, int>();
+    for (var i = 0; i + 1 < pairs.length; i += 2) {
+      index[pairs[i]] = pairs[i + 1];
+      index[pairs[i + 1]] = pairs[i];
+    }
+    return index;
+  }
+
   List<StepMap> _maps;
-  List<int>? _mirror;
+
+  // Mirror lookup in both directions: `_mirror[n] == m` iff the maps at
+  // indices n and m are mirror images of each other.
+  Map<int, int>? _mirror;
 
   // Whether _maps/_mirror are owned by this instance. Slices share the
-  // source's lists; the first mutation copies them (copy-on-write).
+  // source's data; the first mutation copies it (copy-on-write).
   bool _ownData;
 
   /// The index of the first map used by [map] and [mapResult].
@@ -38,19 +85,22 @@ final class Mapping implements Mappable {
   /// The index past the last map used by [map] and [mapResult].
   int to;
 
+  UnmodifiableListView<StepMap>? _mapsView;
+
   /// The step maps in this mapping, unmodifiable.
-  List<StepMap> get maps => UnmodifiableListView(_maps);
+  List<StepMap> get maps => _mapsView ??= UnmodifiableListView(_maps);
 
   /// Creates a mapping that maps only through maps [from]..[to] of this
   /// one, sharing the underlying data.
   Mapping slice([int from = 0, int? to]) =>
-      Mapping(_maps, _mirror, from, to ?? _maps.length);
+      Mapping._share(_maps, _mirror, from, to ?? _maps.length);
 
   void _ensureOwnData() {
     if (_ownData) return;
     _maps = List.of(_maps);
+    _mapsView = null;
     final mirror = _mirror;
-    _mirror = mirror == null ? null : List.of(mirror);
+    _mirror = mirror == null ? null : HashMap.of(mirror);
     _ownData = true;
   }
 
@@ -78,20 +128,14 @@ final class Mapping implements Mappable {
   }
 
   /// Finds the index of the map that mirrors the map at index [n], if any.
-  int? getMirror(int n) {
-    final mirror = _mirror;
-    if (mirror != null) {
-      for (var i = 0; i < mirror.length; i++) {
-        if (mirror[i] == n) return mirror[i + (i.isOdd ? -1 : 1)];
-      }
-    }
-    return null;
-  }
+  int? getMirror(int n) => _mirror?[n];
 
   /// Records that the maps at indices [n] and [m] are mirror images.
   void setMirror(int n, int m) {
     _ensureOwnData();
-    (_mirror ??= []).addAll([n, m]);
+    final mirror = _mirror ??= HashMap<int, int>();
+    mirror[n] = m;
+    mirror[m] = n;
   }
 
   /// Appends the inverse of every map in [mapping] to this one, in reverse
@@ -109,15 +153,7 @@ final class Mapping implements Mappable {
   Mapping invert() => Mapping()..appendMappingInverted(this);
 
   @override
-  int map(int pos, {int assoc = 1}) {
-    if (pos < 0) throw PositionRangeError(pos);
-    if (_mirror != null) return _map(pos, assoc).pos;
-    var mapped = pos;
-    for (var i = from; i < to; i++) {
-      mapped = _maps[i].map(mapped, assoc: assoc);
-    }
-    return mapped;
-  }
+  int map(int pos, {int assoc = 1}) => mapResult(pos, assoc: assoc).pos;
 
   @override
   MapResult mapResult(int pos, {int assoc = 1}) {

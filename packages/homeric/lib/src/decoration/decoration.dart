@@ -114,12 +114,12 @@ final class Decoration {
   ///
   /// A zero-length slot maps by [inclusiveEnd] alone: an insertion exactly
   /// at the slot pushes the slot after the inserted content iff
-  /// [inclusiveEnd] is true. [inclusiveStart] is carried for API
-  /// uniformity but cannot affect a zero-length point.
+  /// [inclusiveEnd] is true. There is no `inclusiveStart` knob — it could
+  /// never affect a zero-length point ([Decoration.inclusiveStart] is
+  /// always false for widgets).
   Decoration.widget(
     String blockId,
     int offset, {
-    bool inclusiveStart = false,
     bool inclusiveEnd = false,
     Object? spec,
   }) : this._(
@@ -127,7 +127,7 @@ final class Decoration {
           blockId: blockId,
           start: offset,
           end: offset,
-          inclusiveStart: inclusiveStart,
+          inclusiveStart: false,
           inclusiveEnd: inclusiveEnd,
           replacementLength: null,
           spec: spec,

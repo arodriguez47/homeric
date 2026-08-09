@@ -88,17 +88,6 @@ final class FuzzSpec {
   String toString() => 'FuzzSpec($label)';
 }
 
-/// Replacement payload for generated `replace` decorations.
-final class FuzzReplacement implements ReplacementContent {
-  FuzzReplacement(this.text);
-
-  @override
-  final String text;
-
-  @override
-  String toString() => 'FuzzReplacement(${Error.safeToString(text)})';
-}
-
 /// A Nexus-shaped metadata bag (R2's hosted-untranslated shape).
 Attributes _nexusBag(String blockId) => {
       'nexus': {
@@ -420,7 +409,7 @@ List<Decoration> _randomDecorationsFor(
         replacementLength: replacementLength,
         inclusiveStart: r.chance(0.5),
         inclusiveEnd: r.chance(0.5),
-        spec: FuzzReplacement('*' * replacementLength),
+        spec: ReplacementText('*' * replacementLength),
       ));
       nextLabel(); // keep label sequence aligned across kinds
     }
@@ -452,7 +441,6 @@ List<Decoration> _randomDecorationsFor(
     out.add(Decoration.widget(
       block.id,
       _biasedOffset(r, length),
-      inclusiveStart: r.chance(0.5),
       inclusiveEnd: r.chance(0.5),
       spec: FuzzSpec(nextLabel()),
     ));

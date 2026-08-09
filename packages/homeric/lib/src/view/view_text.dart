@@ -12,6 +12,7 @@ library;
 
 import '../decoration/decoration.dart';
 import '../model/block.dart';
+import '../util/sort.dart';
 import 'view_map.dart';
 
 /// The placeholder character a `widget` decoration injects into view text:
@@ -154,8 +155,8 @@ final class DerivedViewText {
 DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
   final contentLength = block.contentLength;
   final inlines = <Decoration>[];
-  final replaces = <Decoration>[];
-  final widgets = <Decoration>[];
+  var replaces = <Decoration>[];
+  var widgets = <Decoration>[];
   for (final decoration in decorations) {
     if (decoration.blockId != block.id) {
       throw ArgumentError.value(
@@ -180,8 +181,8 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
         widgets.add(decoration);
     }
   }
-  _stableSortByStart(replaces);
-  _stableSortByStart(widgets);
+  replaces = stableSortedBy(replaces, _byStart);
+  widgets = stableSortedBy(widgets, _byStart);
   for (var i = 1; i < replaces.length; i++) {
     if (replaces[i].start < replaces[i - 1].end) {
       throw ArgumentError('replace decorations overlap in block "${block.id}": '
@@ -196,20 +197,9 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
   final slots = <ViewSlot>[];
   var docPos = 0;
 
+  // Canonicalization (dropping no-op triples, absorbing adjacent
+  // zero-view-length spans) is owned by the ViewMap constructor.
   void addTriple(int start, int oldLen, int newLen) {
-    if (oldLen == 0 && newLen == 0) return;
-    // Canonicalize: a folded span with no view content starting exactly
-    // where the previous folded span ends is absorbed into it. Otherwise
-    // the two spans would share one view position and the inverse map
-    // could not tell their edges apart, breaking the round-trip law at
-    // the seam (the seam itself becomes span-interior, mapping to the
-    // assoc-chosen visible edge like any other folded position).
-    if (triples.isNotEmpty &&
-        newLen == 0 &&
-        triples[triples.length - 3] + triples[triples.length - 2] == start) {
-      triples[triples.length - 2] += oldLen;
-      return;
-    }
     triples.addAll([start, oldLen, newLen]);
   }
 
@@ -257,11 +247,11 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
     final end = viewMap.docToView(inline.end, assoc: -1);
     if (end > start) styled.add(StyledRange(start, end, inline));
   }
-  _stableSortStyled(styled);
 
   return DerivedViewText._(
     buffer.toString(),
-    List<StyledRange>.unmodifiable(styled),
+    List<StyledRange>.unmodifiable(
+        stableSortedBy<StyledRange>(styled, _byStartThenEnd)),
     List<ViewSlot>.unmodifiable(slots),
     viewMap,
   );
@@ -290,30 +280,9 @@ String _replacementTextFor(Block block, Decoration decoration) {
   return text;
 }
 
-/// Sorts [decorations] by `start` while preserving the given order among
-/// equal starts (Dart's `List.sort` is not stable).
-void _stableSortByStart(List<Decoration> decorations) {
-  final order = List<int>.generate(decorations.length, (i) => i)
-    ..sort((x, y) {
-      final byStart = decorations[x].start.compareTo(decorations[y].start);
-      if (byStart != 0) return byStart;
-      return x.compareTo(y);
-    });
-  final sorted = [for (final i in order) decorations[i]];
-  decorations.setAll(0, sorted);
-}
+int _byStart(Decoration a, Decoration b) => a.start.compareTo(b.start);
 
-/// Sorts [ranges] by `start` then `end`, preserving the given order among
-/// ties.
-void _stableSortStyled(List<StyledRange> ranges) {
-  final order = List<int>.generate(ranges.length, (i) => i)
-    ..sort((x, y) {
-      final byStart = ranges[x].start.compareTo(ranges[y].start);
-      if (byStart != 0) return byStart;
-      final byEnd = ranges[x].end.compareTo(ranges[y].end);
-      if (byEnd != 0) return byEnd;
-      return x.compareTo(y);
-    });
-  final sorted = [for (final i in order) ranges[i]];
-  ranges.setAll(0, sorted);
+int _byStartThenEnd(StyledRange a, StyledRange b) {
+  final byStart = a.start.compareTo(b.start);
+  return byStart != 0 ? byStart : a.end.compareTo(b.end);
 }

@@ -149,23 +149,7 @@ final class StepMap implements Mappable {
   int get _newSizeIndex => inverted ? 1 : 2;
 
   @override
-  int map(int pos, {int assoc = 1}) {
-    _checkPosition(pos);
-    var diff = 0;
-    for (var i = 0; i < ranges.length; i += 3) {
-      final start = ranges[i] - (inverted ? diff : 0);
-      if (start > pos) break;
-      final oldSize = ranges[i + _oldSizeIndex];
-      final newSize = ranges[i + _newSizeIndex];
-      final end = start + oldSize;
-      if (pos <= end) {
-        final side = _side(pos, start, end, oldSize, assoc);
-        return start + diff + (side < 0 ? 0 : newSize);
-      }
-      diff += newSize - oldSize;
-    }
-    return pos + diff;
-  }
+  int map(int pos, {int assoc = 1}) => mapResult(pos, assoc: assoc).pos;
 
   @override
   MapResult mapResult(int pos, {int assoc = 1}) {

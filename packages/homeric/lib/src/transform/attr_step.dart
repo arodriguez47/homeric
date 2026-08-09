@@ -15,7 +15,7 @@ import '../model/attributes.dart';
 import '../model/block.dart';
 import '../model/document.dart';
 import '../model/inline_run.dart';
-import '../model/position.dart';
+import 'mapping.dart';
 import 'run_ops.dart';
 import 'step.dart';
 import 'step_map.dart';
@@ -84,23 +84,22 @@ final class BlockAttrStep extends Step {
       'attributes: $attributes)';
 }
 
-/// Adds inline attribute [key] = [value] to every character in
-/// `[from, to)`.
-///
-/// Strict: fails where any character in the range already carries [key]
-/// (see the library header), which is what makes the inverse — a
-/// [RemoveMarkStep] over the same range — exact.
-final class AddMarkStep extends Step {
-  /// Creates the step; [value] is deep-frozen (invalid values throw here).
-  AddMarkStep(this.from, this.to, this.key, Object? value)
+/// Shared shape of [AddMarkStep] and [RemoveMarkStep]: a `[from, to)`
+/// range plus one inline attribute key/value, with common range checking,
+/// mapping, and same-kind range merging. Subclasses supply the run
+/// transform (via [apply]) and the inverse.
+sealed class _MarkStepBase extends Step {
+  _MarkStepBase(this.from, this.to, this.key, Object? value)
       : value = freezeAttributeValue(value) {
-    _checkRange(from, to);
+    if (from < 0 || to < from) {
+      throw ArgumentError('invalid mark range [$from, $to)');
+    }
   }
 
-  /// Start of the marked range.
+  /// Start of the affected range.
   final int from;
 
-  /// End of the marked range.
+  /// End of the affected range.
   final int to;
 
   /// The inline attribute key.
@@ -108,6 +107,48 @@ final class AddMarkStep extends Step {
 
   /// The inline attribute value (frozen).
   final Object? value;
+
+  /// Creates a step of this kind over a different range.
+  Step _withRange(int from, int to);
+
+  /// Maps the range through [mapping] the PM way: gone when both ends were
+  /// deleted or the range collapsed.
+  @override
+  Step? map(Mappable mapping) {
+    final span = mapSpan(mapping, from, to);
+    if ((span.from.deleted && span.to.deleted) ||
+        span.from.pos >= span.to.pos) {
+      return null;
+    }
+    return _withRange(span.from.pos, span.to.pos);
+  }
+
+  /// Merges two overlapping/adjacent steps of the same kind, key, and
+  /// value into one covering their union.
+  @override
+  Step? merge(Step other) {
+    if (other.runtimeType == runtimeType &&
+        other is _MarkStepBase &&
+        other.key == key &&
+        attributesEqual(other.value, value) &&
+        from <= other.to &&
+        to >= other.from) {
+      return _withRange(
+          from < other.from ? from : other.from, to > other.to ? to : other.to);
+    }
+    return null;
+  }
+}
+
+/// Adds inline attribute [key] = [value] to every character in
+/// `[from, to)`.
+///
+/// Strict: fails where any character in the range already carries [key]
+/// (see the library header), which is what makes the inverse — a
+/// [RemoveMarkStep] over the same range — exact.
+final class AddMarkStep extends _MarkStepBase {
+  /// Creates the step; [value] is deep-frozen (invalid values throw here).
+  AddMarkStep(super.from, super.to, super.key, super.value);
 
   @override
   StepResult apply(Document doc) {
@@ -121,21 +162,7 @@ final class AddMarkStep extends Step {
   Step invert(Document docBefore) => RemoveMarkStep(from, to, key, value);
 
   @override
-  Step? map(Mappable mapping) =>
-      _mapMarkRange(mapping, from, to, (f, t) => AddMarkStep(f, t, key, value));
-
-  @override
-  Step? merge(Step other) {
-    if (other is AddMarkStep &&
-        other.key == key &&
-        attributesEqual(other.value, value) &&
-        from <= other.to &&
-        to >= other.from) {
-      return AddMarkStep(from < other.from ? from : other.from,
-          to > other.to ? to : other.to, key, value);
-    }
-    return null;
-  }
+  Step _withRange(int from, int to) => AddMarkStep(from, to, key, value);
 
   @override
   String toString() => 'AddMarkStep($from, $to, $key: $value)';
@@ -147,24 +174,9 @@ final class AddMarkStep extends Step {
 /// Strict: fails where any character lacks [key] or carries a different
 /// value, so the inverse — an [AddMarkStep] with the same value — is
 /// exact.
-final class RemoveMarkStep extends Step {
+final class RemoveMarkStep extends _MarkStepBase {
   /// Creates the step; [value] is deep-frozen (invalid values throw here).
-  RemoveMarkStep(this.from, this.to, this.key, Object? value)
-      : value = freezeAttributeValue(value) {
-    _checkRange(from, to);
-  }
-
-  /// Start of the unmarked range.
-  final int from;
-
-  /// End of the unmarked range.
-  final int to;
-
-  /// The inline attribute key.
-  final String key;
-
-  /// The value the range must currently carry (frozen).
-  final Object? value;
+  RemoveMarkStep(super.from, super.to, super.key, super.value);
 
   @override
   StepResult apply(Document doc) {
@@ -184,47 +196,10 @@ final class RemoveMarkStep extends Step {
   Step invert(Document docBefore) => AddMarkStep(from, to, key, value);
 
   @override
-  Step? map(Mappable mapping) => _mapMarkRange(
-      mapping, from, to, (f, t) => RemoveMarkStep(f, t, key, value));
-
-  @override
-  Step? merge(Step other) {
-    if (other is RemoveMarkStep &&
-        other.key == key &&
-        attributesEqual(other.value, value) &&
-        from <= other.to &&
-        to >= other.from) {
-      return RemoveMarkStep(from < other.from ? from : other.from,
-          to > other.to ? to : other.to, key, value);
-    }
-    return null;
-  }
+  Step _withRange(int from, int to) => RemoveMarkStep(from, to, key, value);
 
   @override
   String toString() => 'RemoveMarkStep($from, $to, $key: $value)';
-}
-
-void _checkRange(int from, int to) {
-  if (from < 0 || to < from) {
-    throw ArgumentError('invalid mark range [$from, $to)');
-  }
-}
-
-/// Maps a mark range through [mapping] the PM way: gone when both ends
-/// were deleted or the range collapsed.
-Step? _mapMarkRange(
-  Mappable mapping,
-  int from,
-  int to,
-  Step Function(int from, int to) build,
-) {
-  final mappedFrom = mapping.mapResult(from, assoc: 1);
-  final mappedTo = mapping.mapResult(to, assoc: -1);
-  if ((mappedFrom.deleted && mappedTo.deleted) ||
-      mappedFrom.pos >= mappedTo.pos) {
-    return null;
-  }
-  return build(mappedFrom.pos, mappedTo.pos);
 }
 
 /// Applies [transform] to every run portion inside `[from, to)`, block by
@@ -241,34 +216,24 @@ StepResult _transformMarks(
     return StepResult.fail(
         'mark range [$from, $to) exceeds document size ${doc.size}');
   }
-  if (from == to) return StepResult.ok(doc);
-  final rFrom = doc.resolve(from);
-  final rTo = doc.resolve(to);
-  final firstIndex = rFrom is InlinePosition
-      ? rFrom.blockIndex
-      : (rFrom as BlockBoundaryPosition).insertionIndex;
-  final endIndex = rTo is InlinePosition
-      ? rTo.blockIndex + 1
-      : (rTo as BlockBoundaryPosition).insertionIndex;
-  if (endIndex <= firstIndex) return StepResult.ok(doc);
-  final updated = <Block>[];
-  var changed = false;
-  for (var i = firstIndex; i < endIndex; i++) {
-    final block = doc.blocks[i];
-    final contentStart = doc.positionBeforeBlock(i) + 1;
-    final localStart = from > contentStart ? from - contentStart : 0;
-    var localEnd = to - contentStart;
-    if (localEnd > block.contentLength) localEnd = block.contentLength;
-    if (localEnd <= localStart) {
-      updated.add(block);
-      continue;
-    }
+  var rejected = false;
+  final updated = <int, Block>{};
+  visitContentRanges(doc, from, to, (blockIndex, localStart, localEnd) {
+    if (rejected) return;
+    final block = doc.blocks[blockIndex];
     final runs =
         transformRunsInRange(block.runs, localStart, localEnd, transform);
-    if (runs == null) return StepResult.fail(failure);
-    updated.add(block.copyWith(runs: normalizeRuns(runs)));
-    changed = true;
-  }
-  if (!changed) return StepResult.ok(doc);
-  return StepResult.ok(doc.replaceBlockRange(firstIndex, endIndex, updated));
+    if (runs == null) {
+      rejected = true;
+      return;
+    }
+    updated[blockIndex] = block.copyWith(runs: normalizeRuns(runs));
+  });
+  if (rejected) return StepResult.fail(failure);
+  if (updated.isEmpty) return StepResult.ok(doc);
+  final first = updated.keys.first;
+  final last = updated.keys.last;
+  return StepResult.ok(doc.replaceBlockRange(first, last + 1, [
+    for (var i = first; i <= last; i++) updated[i] ?? doc.blocks[i],
+  ]));
 }

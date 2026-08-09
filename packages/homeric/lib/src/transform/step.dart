@@ -20,7 +20,9 @@ final class StepResult {
   StepResult.ok(Document this.doc,
       [List<StructuralChange> structural = const []])
       : failure = null,
-        structural = List<StructuralChange>.unmodifiable(structural);
+        structural = structural.isEmpty
+            ? const <StructuralChange>[]
+            : List<StructuralChange>.unmodifiable(structural);
 
   /// A failed application; [failure] describes the misfit.
   StepResult.fail(String this.failure)

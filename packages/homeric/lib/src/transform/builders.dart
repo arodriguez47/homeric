@@ -12,6 +12,7 @@ import '../model/position.dart';
 import 'attr_step.dart';
 import 'change_list.dart';
 import 'replace_step.dart';
+import 'run_ops.dart';
 import 'transaction.dart';
 
 int _blockIdCounter = 0;
@@ -130,15 +131,18 @@ extension TransactionBuilders on Transaction {
         targetIndex, 0, doc.blockCount - 1, 'targetIndex');
     if (targetIndex == sourceIndex) return;
     final block = doc.blocks[sourceIndex];
-    step(ReplaceStep(doc.positionBeforeBlock(sourceIndex),
-        doc.positionAfterBlock(sourceIndex), Slice.empty));
-    final insertPos = targetIndex == doc.blockCount
-        ? doc.size
-        : doc.positionBeforeBlock(targetIndex);
-    step(ReplaceStep(insertPos, insertPos, Slice([block])));
-    mapping.setMirror(mapping.maps.length - 2, mapping.maps.length - 1);
-    recordStructuralChange(BlockMove(
-        blockId: blockId, fromIndex: sourceIndex, toIndex: targetIndex));
+    stepPairMirrored(
+      ReplaceStep(doc.positionBeforeBlock(sourceIndex),
+          doc.positionAfterBlock(sourceIndex), Slice.empty),
+      (doc) {
+        final insertPos = targetIndex == doc.blockCount
+            ? doc.size
+            : doc.positionBeforeBlock(targetIndex);
+        return ReplaceStep(insertPos, insertPos, Slice([block]));
+      },
+      record: BlockMove(
+          blockId: blockId, fromIndex: sourceIndex, toIndex: targetIndex),
+    );
   }
 
   /// Changes the type of the block with [blockId], keeping its attributes.
@@ -197,30 +201,24 @@ final class _MarkSegment {
 /// across block boundaries (the intervening tokens carry no marks).
 List<_MarkSegment> _markSegments(Document doc, int from, int to, String key) {
   final segments = <_MarkSegment>[];
-  var blockIndex = 0;
-  for (final block in doc.blocks) {
-    final contentStart = doc.positionBeforeBlock(blockIndex) + 1;
-    blockIndex++;
-    final contentEnd = contentStart + block.contentLength;
-    if (contentEnd <= from || contentStart >= to) continue;
-    var runStart = contentStart;
-    for (final run in block.runs) {
-      final runEnd = runStart + run.length;
-      final low = from > runStart ? from : runStart;
-      final high = to < runEnd ? to : runEnd;
-      runStart = runEnd;
-      if (high <= low) continue;
+  visitContentRanges(doc, from, to, (blockIndex, localStart, localEnd) {
+    final block = doc.blocks[blockIndex];
+    var pos = doc.positionBeforeBlock(blockIndex) + 1 + localStart;
+    for (final run in sliceRuns(block.runs, localStart, localEnd)) {
+      if (run.isEmpty) continue;
+      final end = pos + run.length;
       final present = run.attributes.containsKey(key);
       final value = run.attributes[key];
       final last = segments.isEmpty ? null : segments.last;
       if (last != null &&
           last.present == present &&
           attributesEqual(last.value, value)) {
-        last.end = high;
+        last.end = end;
       } else {
-        segments.add(_MarkSegment(low, high, present, value));
+        segments.add(_MarkSegment(pos, end, present, value));
       }
+      pos = end;
     }
-  }
+  });
   return segments;
 }

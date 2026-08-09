@@ -5,7 +5,43 @@
 /// and share untouched [InlineRun] instances by reference.
 library;
 
+import '../model/document.dart';
 import '../model/inline_run.dart';
+import '../model/position.dart';
+
+/// Calls [visit] for every block whose content intersects the global token
+/// range `[from, to)`, with the intersection as local content offsets
+/// (`localStart < localEnd`; blocks the range only touches at open/close
+/// tokens are not visited).
+///
+/// This lives here (rather than on [Document]) because it is transform-
+/// layer plumbing: the shared "walk the content of a token range" loop
+/// behind mark application, mark segmentation, and content detection.
+void visitContentRanges(
+  Document doc,
+  int from,
+  int to,
+  void Function(int blockIndex, int localStart, int localEnd) visit,
+) {
+  if (to <= from) return;
+  final rFrom = doc.resolve(from);
+  final rTo = doc.resolve(to);
+  final firstIndex = rFrom is InlinePosition
+      ? rFrom.blockIndex
+      : (rFrom as BlockBoundaryPosition).insertionIndex;
+  final endIndex = rTo is InlinePosition
+      ? rTo.blockIndex + 1
+      : (rTo as BlockBoundaryPosition).insertionIndex;
+  for (var i = firstIndex; i < endIndex; i++) {
+    final contentStart = doc.positionBeforeBlock(i) + 1;
+    final contentLength = doc.blocks[i].contentLength;
+    var localStart = from - contentStart;
+    if (localStart < 0) localStart = 0;
+    var localEnd = to - contentStart;
+    if (localEnd > contentLength) localEnd = contentLength;
+    if (localEnd > localStart) visit(i, localStart, localEnd);
+  }
+}
 
 /// Returns the runs covering content offsets `[start, end)` of [runs].
 ///

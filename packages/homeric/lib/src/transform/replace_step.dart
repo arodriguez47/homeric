@@ -12,6 +12,7 @@ import '../model/document.dart';
 import '../model/inline_run.dart';
 import '../model/position.dart';
 import 'change_list.dart';
+import 'mapping.dart';
 import 'run_ops.dart';
 import 'step.dart';
 import 'step_map.dart';
@@ -87,7 +88,7 @@ Slice sliceBetween(Document doc, int from, int to) {
     throw ArgumentError('invalid slice range [$from, $to)');
   }
   final rFrom = doc.resolve(from);
-  final rTo = doc.resolve(to);
+  final rTo = to == from ? rFrom : doc.resolve(to);
   final inFrom = rFrom is InlinePosition ? rFrom : null;
   final inTo = rTo is InlinePosition ? rTo : null;
   if (inFrom != null && inTo != null && inFrom.blockIndex == inTo.blockIndex) {
@@ -152,7 +153,7 @@ final class ReplaceStep extends Step {
           'replace range [$from, $to) exceeds document size ${doc.size}');
     }
     final rFrom = doc.resolve(from);
-    final rTo = doc.resolve(to);
+    final rTo = to == from ? rFrom : doc.resolve(to);
     final inFrom = rFrom is InlinePosition ? rFrom : null;
     final inTo = rTo is InlinePosition ? rTo : null;
     final leftOpen = inFrom != null;
@@ -172,7 +173,7 @@ final class ReplaceStep extends Step {
     final endIndex = inTo != null
         ? inTo.blockIndex + 1
         : (rTo as BlockBoundaryPosition).insertionIndex;
-    if (structure && _rangeHasContent(doc, startIndex, endIndex)) {
+    if (structure && _rangeHasContent(doc)) {
       return StepResult.fail('structural replace over [$from, $to) would '
           'destroy content');
     }
@@ -257,27 +258,30 @@ final class ReplaceStep extends Step {
   }
 
   /// Whether any content character lies inside `[from, to)`.
-  bool _rangeHasContent(Document doc, int startIndex, int endIndex) {
-    for (var i = startIndex; i < endIndex; i++) {
-      final contentStart = doc.positionBeforeBlock(i) + 1;
-      final contentEnd = contentStart + doc.blocks[i].contentLength;
-      final low = from > contentStart ? from : contentStart;
-      final high = to < contentEnd ? to : contentEnd;
-      if (high > low) return true;
-    }
-    return false;
+  bool _rangeHasContent(Document doc) {
+    var hasContent = false;
+    visitContentRanges(doc, from, to, (_, __, ___) => hasContent = true);
+    return hasContent;
   }
 
   /// Rejects replacements that would duplicate a stable block id.
+  ///
+  /// An incoming id is first checked against the replaced range's own
+  /// blocks — the common case (typing is a same-id single-block replace)
+  /// never needs the document's global id → index map. Only ids the range
+  /// does not account for fall back to the global lookup.
   static String? _checkIds(
       Document doc, List<Block> result, int startIndex, int endIndex) {
+    final replacedIds = <String>{
+      for (var i = startIndex; i < endIndex; i++) doc.blocks[i].id,
+    };
     final seen = <String>{};
     for (final block in result) {
       if (!seen.add(block.id)) {
         return 'replacement repeats block id "${block.id}"';
       }
-      final existing = doc.indexOfBlockId(block.id);
-      if (existing != null && (existing < startIndex || existing >= endIndex)) {
+      if (replacedIds.contains(block.id)) continue;
+      if (doc.indexOfBlockId(block.id) != null) {
         return 'block id "${block.id}" already exists in the document';
       }
     }
@@ -293,11 +297,10 @@ final class ReplaceStep extends Step {
 
   @override
   Step? map(Mappable mapping) {
-    final mappedFrom = mapping.mapResult(from, assoc: 1);
-    final mappedTo = mapping.mapResult(to, assoc: -1);
-    if (mappedFrom.deletedAcross && mappedTo.deletedAcross) return null;
-    final newTo = mappedTo.pos < mappedFrom.pos ? mappedFrom.pos : mappedTo.pos;
-    return ReplaceStep(mappedFrom.pos, newTo, slice, structure: structure);
+    final span = mapSpan(mapping, from, to);
+    if (span.from.deletedAcross && span.to.deletedAcross) return null;
+    // Policy: keep the mapped `from`; an inverted span collapses onto it.
+    return ReplaceStep(span.from.pos, span.end, slice, structure: structure);
   }
 
   @override

@@ -95,6 +95,12 @@ final class PaintLayer {
 
   /// The opaque payload [painter] interprets — a color, an animated
   /// amount, a richer value object. This file never inspects it.
+  ///
+  /// Compared by **value** (`==`), deliberately unlike [Decoration.spec]'s
+  /// and [BlockParagraphSpec]'s identity-equality convention elsewhere in
+  /// this library: a widget rebuild that constructs a fresh-but-equal spec
+  /// (e.g. a new `SolidWashSpec` with the same color) should not read as a
+  /// changed layer and force an unnecessary repaint.
   final Object? spec;
 
   @override

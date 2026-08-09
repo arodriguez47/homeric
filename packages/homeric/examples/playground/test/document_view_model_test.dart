@@ -238,6 +238,34 @@ void main() {
       expect(vm.decorations.forBlock('intro'), isEmpty);
     });
 
+    test(
+        'isHidingDelimiters stays in sync with the decoration set after an '
+        'undo (regression: undo used to bypass a separately-tracked flag)', () {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+
+      // An unrelated document-mutating transaction, so there is something
+      // on the undo stack whose pre-transaction decoration snapshot
+      // predates the toggle below.
+      vm.placeCaretAt(document.positionAt(2, 0));
+      expect(vm.insertTextAtCaret('X'), isTrue);
+
+      vm.toggleHideDelimiters('intro');
+      expect(vm.isHidingDelimiters('intro'), isTrue);
+
+      // Undoing the insert restores the decoration snapshot taken before
+      // the toggle ever ran — the toggle itself was never pushed onto the
+      // undo stack (it does not go through a Transaction), so this is the
+      // only decorations mutation `undoLast` reverses here.
+      expect(vm.undoLast(), isTrue);
+      expect(vm.decorations.forBlock('intro'), isEmpty,
+          reason: 'the decoration set was restored to its pre-toggle, '
+              'pre-transaction snapshot');
+      expect(vm.isHidingDelimiters('intro'), isFalse,
+          reason: 'isHidingDelimiters must reflect the restored decoration '
+              'set, not a stale flag left over from the toggle');
+    });
+
     test('reveal-on-selection: caret inside a hidden marker reveals it (R10)',
         () {
       final document = buildFixtureDocument();

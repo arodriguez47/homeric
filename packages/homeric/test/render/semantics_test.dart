@@ -259,22 +259,6 @@ void main() {
       );
       handle.dispose();
     });
-
-    testWidgets('per-run semantics label override replaces the run\'s text',
-        (tester) async {
-      final handle = tester.ensureSemantics();
-      final source = sourceOf('abc');
-      await tester.pumpWidget(harness(HomericParagraph(
-        source: source,
-        semanticsLabelForRun: (text, start) =>
-            text == 'abc' ? 'alphabet' : null,
-      )));
-      expect(
-        tester.getSemantics(find.byType(HomericParagraph)),
-        matchesSemantics(label: 'alphabet', textDirection: TextDirection.ltr),
-      );
-      handle.dispose();
-    });
   });
 
   group('widget slots participate in reading order (U3 integration, R6)', () {

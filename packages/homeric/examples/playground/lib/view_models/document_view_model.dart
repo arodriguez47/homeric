@@ -53,7 +53,6 @@ class DocumentViewModel extends ChangeNotifier {
   DecorationSet _decorations;
   int? _caret;
   final List<_UndoEntry> _undoStack = <_UndoEntry>[];
-  final Set<String> _hideDelimitersBlocks = <String>{};
 
   /// The current document.
   Document get document => _document;
@@ -70,8 +69,22 @@ class DocumentViewModel extends ChangeNotifier {
   bool get canUndo => _undoStack.isNotEmpty;
 
   /// Whether [blockId]'s hide-delimiter decorations are currently applied.
+  ///
+  /// Derived on demand from [_decorations] itself, rather than a
+  /// separately-tracked flag: a flag can drift out of sync with the
+  /// decoration set whenever something other than [toggleHideDelimiters]
+  /// changes it wholesale — [undoLast] restoring a decoration snapshot is
+  /// exactly that case (a bug this fixed: toggling hide-delimiters on and
+  /// then undoing left a stale flag reporting "still hiding" after the
+  /// decorations were already restored to their pre-toggle, not-hiding
+  /// state). Scanning is cheap: `forBlock` is already a per-block view and
+  /// a block carries only a handful of decorations.
   bool isHidingDelimiters(String blockId) =>
-      _hideDelimitersBlocks.contains(blockId);
+      _decorations.forBlock(blockId).any((d) =>
+          d.kind == DecorationKind.replace &&
+          d.spec is PlaygroundSpec &&
+          (d.spec! as PlaygroundSpec).kind ==
+              PlaygroundDecorationKind.hideMarker);
 
   // --- Caret (display-only stub; R10 demo input) --------------------------
 
@@ -302,7 +315,7 @@ class DocumentViewModel extends ChangeNotifier {
   void toggleHideDelimiters(String blockId) {
     final block = _document.blockById(blockId);
     if (block == null) return;
-    if (_hideDelimitersBlocks.contains(blockId)) {
+    if (isHidingDelimiters(blockId)) {
       final existing = _decorations
           .forBlock(blockId)
           .where((d) =>
@@ -312,12 +325,10 @@ class DocumentViewModel extends ChangeNotifier {
                   PlaygroundDecorationKind.hideMarker)
           .toList();
       _decorations = _decorations.remove(existing);
-      _hideDelimitersBlocks.remove(blockId);
     } else {
       final markers = markerDecorationsFor(block);
       if (markers.isEmpty) return;
       _decorations = _decorations.add(markers);
-      _hideDelimitersBlocks.add(blockId);
     }
     notifyListeners();
   }

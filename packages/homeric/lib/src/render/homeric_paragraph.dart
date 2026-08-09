@@ -110,23 +110,6 @@ typedef PaintOnlyStyler = TextStyle Function(TextSegment<TextStyle> segment);
 /// order; the slot's stable identity is [SlotSegment.spec].
 typedef SlotWidgetBuilder = Widget Function(SlotSegment<TextStyle> slot);
 
-/// Resolves a per-run accessibility label override for one text run of
-/// the semantics derivation (U6, R6) — the per-run label-override hook
-/// the plan calls out, modeled on `InlineSpan.semanticsLabel`
-/// (`flutter/lib/src/painting/inline_span.dart`; read, not copied).
-/// Homeric has no `InlineSpan` tree to hang a label override field on,
-/// so the resolver takes the run's own view text and its view-text start
-/// offset instead of a span object.
-///
-/// Returning `null` uses the run's own text verbatim — sufficient for
-/// every Phase 2 fixture: hidden delimiters are already excluded by
-/// construction (see [RenderHomericParagraph.semanticsSource]) and real
-/// replacement content (e.g. an aside marker's substituted text) already
-/// reads as ordinary prose. The hook exists for a future run that wants
-/// to announce something other than its literal characters.
-typedef SemanticsLabelResolver = String? Function(
-    String runText, int runViewStart);
-
 /// Parent data for [RenderHomericParagraph]'s inline slot children.
 ///
 /// Mirrors the framework's `TextParentData`: not a [BoxParentData],
@@ -218,10 +201,8 @@ class RenderHomericParagraph extends RenderBox
     PaintOnlyStyler? paintStyler,
     List<PaintLayer> paintLayers = const <PaintLayer>[],
     ParagraphSource<Object?>? semanticsSource,
-    SemanticsLabelResolver? semanticsLabelForRun,
     List<RenderBox>? children,
-  })  : assert(!_requiresBaseline(slotAlignment) || slotBaseline != null,
-            'slotBaseline is required for $slotAlignment slot alignment'),
+  })  : assert(_checkSlotBaseline(slotAlignment, slotBaseline)),
         _source = source,
         _baseStyle = baseStyle,
         _textAlign = textAlign,
@@ -235,8 +216,7 @@ class RenderHomericParagraph extends RenderBox
             paintLayers.where((layer) => layer.band == PaintBand.underlay)),
         _overlayLayers = List<PaintLayer>.unmodifiable(
             paintLayers.where((layer) => layer.band == PaintBand.overlay)),
-        _semanticsSource = semanticsSource,
-        _semanticsLabelForRun = semanticsLabelForRun {
+        _semanticsSource = semanticsSource {
     addAll(children);
   }
 
@@ -246,6 +226,19 @@ class RenderHomericParagraph extends RenderBox
   /// Slots must still occupy real space so every other glyph's geometry
   /// is correct; real children replace these with measured sizes.
   static const Size provisionalSlotDimensions = Size(14.0, 14.0);
+
+  /// Shared baseline-requirement check for both [RenderHomericParagraph]'s
+  /// and [HomericParagraph]'s constructors (fix for duplicated asserts):
+  /// [baseline] is required whenever [alignment] is one of the
+  /// baseline-relative [ui.PlaceholderAlignment]s. Always returns `true` —
+  /// intended for `assert(_checkSlotBaseline(...))` so the check (and its
+  /// message) is elided outside debug builds like any other assert.
+  static bool _checkSlotBaseline(
+      ui.PlaceholderAlignment alignment, TextBaseline? baseline) {
+    assert(!_requiresBaseline(alignment) || baseline != null,
+        'slotBaseline is required for $alignment slot alignment');
+    return true;
+  }
 
   static bool _requiresBaseline(ui.PlaceholderAlignment alignment) =>
       switch (alignment) {
@@ -282,7 +275,7 @@ class RenderHomericParagraph extends RenderBox
   ParagraphSource<TextStyle> get source => _source;
   ParagraphSource<TextStyle> _source;
   set source(ParagraphSource<TextStyle> value) {
-    if (_sourceEquals(_source, value)) {
+    if (_paragraphSourceEquals(_source, value)) {
       _source = value;
       return;
     }
@@ -470,23 +463,11 @@ class RenderHomericParagraph extends RenderBox
   ParagraphSource<Object?>? get semanticsSource => _semanticsSource;
   ParagraphSource<Object?>? _semanticsSource;
   set semanticsSource(ParagraphSource<Object?>? value) {
-    if (_semanticsSourceEquals(_semanticsSource, value)) {
+    if (_paragraphSourceEquals(_semanticsSource, value)) {
       _semanticsSource = value;
       return;
     }
     _semanticsSource = value;
-    markNeedsSemanticsUpdate();
-  }
-
-  /// Per-run accessibility label override for the semantics derivation.
-  /// See [SemanticsLabelResolver]. Change → [markNeedsSemanticsUpdate].
-  SemanticsLabelResolver? get semanticsLabelForRun => _semanticsLabelForRun;
-  SemanticsLabelResolver? _semanticsLabelForRun;
-  set semanticsLabelForRun(SemanticsLabelResolver? value) {
-    if (identical(_semanticsLabelForRun, value)) {
-      return;
-    }
-    _semanticsLabelForRun = value;
     markNeedsSemanticsUpdate();
   }
 
@@ -501,17 +482,14 @@ class RenderHomericParagraph extends RenderBox
   int _layoutGeneration = 0;
   bool _disposed = false;
 
-  static bool _sourceEquals(
-      ParagraphSource<TextStyle> a, ParagraphSource<TextStyle> b) {
-    return identical(a, b) ||
-        (a.viewText == b.viewText &&
-            a.spec == b.spec &&
-            a.viewMap == b.viewMap &&
-            listEquals(a.segments, b.segments));
-  }
-
-  static bool _semanticsSourceEquals(
-      ParagraphSource<Object?>? a, ParagraphSource<Object?>? b) {
+  /// Content equality for a [ParagraphSource] of any style-handle type
+  /// (view text, spec, [ViewMap], segments) — shared by [source] and
+  /// [semanticsSource], which otherwise differ only in null-handling
+  /// (non-nullable vs. nullable). Dart's covariant generics let a
+  /// non-nullable `ParagraphSource<TextStyle>` pass here wherever a
+  /// `ParagraphSource<Object?>?` is expected.
+  static bool _paragraphSourceEquals<S>(
+      ParagraphSource<S>? a, ParagraphSource<S>? b) {
     if (identical(a, b)) {
       return true;
     }
@@ -1062,7 +1040,6 @@ class RenderHomericParagraph extends RenderBox
   ) {
     final builder = ChildSemanticsConfigurationsResultBuilder();
     final direction = _semanticsTextDirection;
-    final resolver = _semanticsLabelForRun;
     final label = StringBuffer();
     var childIndex = 0;
     var slotIndex = 0;
@@ -1079,7 +1056,7 @@ class RenderHomericParagraph extends RenderBox
     for (final segment in _effectiveSemanticsSource.segments) {
       switch (segment) {
         case final TextSegment<Object?> text:
-          label.write(resolver?.call(text.text, text.viewStart) ?? text.text);
+          label.write(text.text);
         case SlotSegment<Object?>():
           flushLabel();
           final tag = HomericSlotIndexSemanticsTag(slotIndex);
@@ -1172,11 +1149,8 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
     this.paintStyler,
     this.paintLayers = const <PaintLayer>[],
     this.semanticsSource,
-    this.semanticsLabelForRun,
-  })  : assert(
-            !RenderHomericParagraph._requiresBaseline(slotAlignment) ||
-                slotBaseline != null,
-            'slotBaseline is required for $slotAlignment slot alignment'),
+  })  : assert(RenderHomericParagraph._checkSlotBaseline(
+            slotAlignment, slotBaseline)),
         super(children: _slotChildren(source, slotBuilder));
 
   static List<Widget> _slotChildren(
@@ -1237,10 +1211,6 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   /// [RenderHomericParagraph.semanticsSource].
   final ParagraphSource<Object?>? semanticsSource;
 
-  /// Per-run accessibility label override (U6, R6). See
-  /// [SemanticsLabelResolver].
-  final SemanticsLabelResolver? semanticsLabelForRun;
-
   TextScaler _resolveTextScaler(BuildContext context) {
     final specScaler = source.spec.textScaler;
     return textScaler ??
@@ -1261,7 +1231,6 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       paintStyler: paintStyler,
       paintLayers: paintLayers,
       semanticsSource: semanticsSource,
-      semanticsLabelForRun: semanticsLabelForRun,
     );
   }
 
@@ -1277,8 +1246,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       ..slotBaseline = slotBaseline
       ..paintStyler = paintStyler
       ..paintLayers = paintLayers
-      ..semanticsSource = semanticsSource
-      ..semanticsLabelForRun = semanticsLabelForRun;
+      ..semanticsSource = semanticsSource;
   }
 
   @override

@@ -125,7 +125,7 @@ final class DocOffsetOutOfRangeError extends Error {
   DocOffsetOutOfRangeError(this.offset, this.docLength);
 
   /// The offending offset.
-  final int offset;
+  final DocOffset offset;
 
   /// The block's document content length at the time of the failed query.
   final int docLength;
@@ -247,7 +247,7 @@ class ParagraphGeometry {
   void _checkOffset(DocOffset offset) {
     final length = docLength;
     if (offset.value < 0 || offset.value > length) {
-      throw DocOffsetOutOfRangeError(offset.value, length);
+      throw DocOffsetOutOfRangeError(offset, length);
     }
   }
 

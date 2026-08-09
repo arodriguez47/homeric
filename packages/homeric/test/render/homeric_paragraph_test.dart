@@ -64,6 +64,22 @@ void main() {
       expect(tester.getTopLeft(find.byType(HomericParagraph)).dy, 19.5);
     });
 
+    testWidgets(
+        'ideographic baseline positions the child at the ideographic metric, '
+        'not the alphabetic one', (tester) async {
+      await tester.pumpWidget(harness(Baseline(
+        baseline: 30,
+        baselineType: TextBaseline.ideographic,
+        child: HomericParagraph(source: sourceOf('hello')),
+      )));
+      final ideographic = renderOf(tester).layoutParagraph.ideographicBaseline;
+      // Distinct from the alphabetic metric (10.5) on this font, so this
+      // exercises the ideographic branch rather than a shared fallback.
+      expect(ideographic, isNot(10.5));
+      expect(tester.getTopLeft(find.byType(HomericParagraph)).dy,
+          30 - ideographic);
+    });
+
     testWidgets('alignment comes from ParagraphStyle, not paint offsets',
         (tester) async {
       // Center-aligned 'ab' (28px) in 100px: glyphs sit at x=36 inside
@@ -121,6 +137,13 @@ void main() {
           render.getDryBaseline(
               const BoxConstraints(maxWidth: 200), TextBaseline.alphabetic),
           10.5);
+      // Ideographic dry baseline must match the live paragraph's
+      // ideographic metric (same content/style/width), not silently fall
+      // through to the alphabetic one.
+      expect(
+          render.getDryBaseline(
+              const BoxConstraints(maxWidth: 200), TextBaseline.ideographic),
+          render.layoutParagraph.ideographicBaseline);
       // FlutterTest metrics: longest word 'aaaa'/'bbbb' = 56, full run
       // 9 glyphs = 126.
       expect(render.getMinIntrinsicWidth(double.infinity), 56);
@@ -179,6 +202,25 @@ void main() {
       expect(render.preferredLineHeight, 14);
       expect(render.preferredLineBaseline, 10.5);
       expect(render.debugLineTemplate, isNotNull);
+    });
+
+    testWidgets(
+        'ideographic queries on an empty block use the ideographic '
+        'template metric, not the alphabetic fallback', (tester) async {
+      await tester.pumpWidget(harness(Baseline(
+        baseline: 30,
+        baselineType: TextBaseline.ideographic,
+        child: HomericParagraph(source: emptySource()),
+      )));
+      final render = renderOf(tester);
+      final ideographic = render.preferredLineIdeographicBaseline;
+      expect(ideographic, isNot(render.preferredLineBaseline));
+      // The Baseline ancestor's positioning proves
+      // computeDistanceToActualBaseline actually used the ideographic
+      // metric for TextBaseline.ideographic, not a shared alphabetic
+      // fallback.
+      expect(tester.getTopLeft(find.byType(HomericParagraph)).dy,
+          30 - ideographic);
     });
   });
 

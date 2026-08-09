@@ -6,6 +6,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric_playground/decoration_spec.dart';
 import 'package:homeric_playground/fixtures.dart';
 import 'package:homeric_playground/main.dart';
 import 'package:homeric_playground/view_models/document_view_model.dart';
@@ -298,8 +299,18 @@ void main() {
       final vm = DocumentViewModel(document: buildFixtureDocument());
       vm.addMentionWash('intro', 0, 4);
       expect(vm.decorations.forBlock('intro'), hasLength(1));
-      final decoration = vm.decorations.forBlock('intro').single;
-      vm.removeDecoration(decoration);
+      final mentionWash = vm.decorations.forBlock('intro').single;
+      vm.removeDecoration(mentionWash);
+      expect(vm.decorations.forBlock('intro'), isEmpty);
+
+      vm.addAnnotationUnderline('intro', 1, 3);
+      expect(vm.decorations.forBlock('intro'), hasLength(1));
+      final annotation = vm.decorations.forBlock('intro').single;
+      expect(annotation.start, 1);
+      expect(annotation.end, 3);
+      expect((annotation.spec! as PlaygroundSpec).kind,
+          PlaygroundDecorationKind.annotation);
+      vm.removeDecoration(annotation);
       expect(vm.decorations.forBlock('intro'), isEmpty);
     });
   });

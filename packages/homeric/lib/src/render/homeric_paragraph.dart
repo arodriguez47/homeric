@@ -753,6 +753,14 @@ class RenderHomericParagraph extends RenderBox
   /// caret-capable baseline for empty view text.
   double get preferredLineBaseline => _template.getLineMetricsAt(0)!.baseline;
 
+  /// The ideographic baseline of one line in the base style — the
+  /// [TextBaseline.ideographic] counterpart of [preferredLineBaseline] for
+  /// empty view text. `ui.LineMetrics` (unlike `ui.Paragraph` itself) has no
+  /// per-line ideographic field, so this reads the single-line template's
+  /// paragraph-level [ui.Paragraph.ideographicBaseline] instead of a line
+  /// metric — equivalent for a one-line template.
+  double get preferredLineIdeographicBaseline => _template.ideographicBaseline;
+
   /// The cached intrinsics/dry-layout paragraph, if built.
   @visibleForTesting
   ui.Paragraph? get debugIntrinsicsParagraph => _intrinsicsParagraph;
@@ -864,9 +872,16 @@ class RenderHomericParagraph extends RenderBox
       covariant BoxConstraints constraints, TextBaseline baseline) {
     final paragraph = _intrinsicsFor(_dryDimensions(constraints.maxWidth));
     _layoutAt(paragraph, constraints.maxWidth);
-    return paragraph.numberOfLines == 0
-        ? preferredLineBaseline
-        : paragraph.alphabeticBaseline;
+    if (paragraph.numberOfLines == 0) {
+      return switch (baseline) {
+        TextBaseline.alphabetic => preferredLineBaseline,
+        TextBaseline.ideographic => preferredLineIdeographicBaseline,
+      };
+    }
+    return switch (baseline) {
+      TextBaseline.alphabetic => paragraph.alphabeticBaseline,
+      TextBaseline.ideographic => paragraph.ideographicBaseline,
+    };
   }
 
   @override
@@ -875,9 +890,16 @@ class RenderHomericParagraph extends RenderBox
     final paragraph = _paragraph!;
     // Empty view text has no lines on this engine; the space-glyph
     // template keeps the block caret-capable (baseline + line height).
-    return paragraph.numberOfLines == 0
-        ? preferredLineBaseline
-        : paragraph.alphabeticBaseline;
+    if (paragraph.numberOfLines == 0) {
+      return switch (baseline) {
+        TextBaseline.alphabetic => preferredLineBaseline,
+        TextBaseline.ideographic => preferredLineIdeographicBaseline,
+      };
+    }
+    return switch (baseline) {
+      TextBaseline.alphabetic => paragraph.alphabeticBaseline,
+      TextBaseline.ideographic => paragraph.ideographicBaseline,
+    };
   }
 
   // --- Paint --------------------------------------------------------------

@@ -19,6 +19,10 @@ build/
 .vscode/
 *.iml
 
+# Lockfiles (library packages don't commit them)
+pubspec.lock
+**/pubspec.lock
+
 # Melos
 melos_*.yaml
 pubspec_overrides.yaml

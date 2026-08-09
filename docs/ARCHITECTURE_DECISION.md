@@ -1,5 +1,7 @@
 # A Flutter Editor for Ulysses-Class Writing
 
+> **SUPERSEDED (2026-08-08).** This document recommended forking super_editor; that recommendation was followed, then overturned — Homeric is now being built from scratch in pure Dart (see [`STRATEGY.md`](../STRATEGY.md)). Kept for the landscape analysis and the three-primitives design, which still stand. Note its warning that from-scratch IME is a 12–18 month cost: that risk is now accepted, not avoided.
+
 **Architecture recommendation · June 2026**
 Target: desktop (macOS/Windows/Linux) + Android + Web · no collaboration · snappy on 100k+ word documents · footnotes, comments, annotations, backlinks, writing goals, diff/version history.
 

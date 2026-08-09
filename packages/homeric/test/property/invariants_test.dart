@@ -77,6 +77,14 @@ void main() {
       }
     });
 
+    test('every decoration kind occurs in the corpus', () {
+      for (final kind in DecorationKind.values) {
+        expect(stats.decorationKindCounts[kind.name] ?? 0, greaterThan(0),
+            reason: 'decoration kind ${kind.name} never occurred across the '
+                'corpus');
+      }
+    });
+
     test('generation is deterministic per seed', () {
       final a = FuzzScenario.generate(424242);
       final b = FuzzScenario.generate(424242);

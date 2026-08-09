@@ -46,9 +46,11 @@ final class TransactionResult {
 ///
 /// A transaction tracks, for every applied step, the document it was
 /// applied to ([docs]), the step itself ([steps]), and its position map
-/// (composed into [mapping]). Retention is cheap by construction: each
-/// document version shares every untouched block with its predecessor, so
-/// keeping [docs] costs O(changed blocks), never a deep copy.
+/// (composed into [mapping]). Retention shares at the [Block] level: each
+/// document version reuses every untouched block object, so block content
+/// is never deep-copied. Each version does hold its own full-length block
+/// *array* (steps rebuild the whole list via `replaceBlockRange`), so
+/// keeping [docs] costs O(steps × total block count) in array slots.
 final class Transaction {
   /// Starts a transaction over [before].
   Transaction(this.before) : _doc = before;

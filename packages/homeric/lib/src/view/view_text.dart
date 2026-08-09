@@ -181,7 +181,7 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
         widgets.add(decoration);
     }
   }
-  replaces = stableSortedBy(replaces, _byStart);
+  replaces = stableSortedBy(replaces, _byStartThenEndDecoration);
   widgets = stableSortedBy(widgets, _byStart);
   for (var i = 1; i < replaces.length; i++) {
     if (replaces[i].start < replaces[i - 1].end) {
@@ -281,6 +281,15 @@ String _replacementTextFor(Block block, Decoration decoration) {
 }
 
 int _byStart(Decoration a, Decoration b) => a.start.compareTo(b.start);
+
+/// Sorts by `start`, then `end` — the same ordering `DecorationSet`
+/// guarantees — so overlap validation is independent of input order (a
+/// zero-length replace consistently precedes a longer one sharing its
+/// start).
+int _byStartThenEndDecoration(Decoration a, Decoration b) {
+  final byStart = a.start.compareTo(b.start);
+  return byStart != 0 ? byStart : a.end.compareTo(b.end);
+}
 
 int _byStartThenEnd(StyledRange a, StyledRange b) {
   final byStart = a.start.compareTo(b.start);

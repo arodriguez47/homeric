@@ -266,6 +266,18 @@ void main() {
       expectInvertRoundTrip(
           doc, BlockAttrStep('b', type: 'code', attributes: {'lang': 'dart'}));
     });
+
+    test(
+        'BlockAttrStep.invert throws when the block is missing from '
+        'docBefore', () {
+      final doc = threeBlocks();
+      final step = BlockAttrStep('ghost', type: 'paragraph');
+      expect(
+        () => step.invert(doc),
+        throwsA(isA<StateError>()
+            .having((e) => e.message, 'message', contains('block "ghost"'))),
+      );
+    });
   });
 
   group('Step.getMap', () {

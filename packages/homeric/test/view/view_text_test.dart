@@ -282,6 +282,21 @@ void main() {
       expect(derived.viewMap.docToView(3, assoc: 1), 1);
     });
 
+    test(
+        'a zero-length replace adjacent to a longer one is accepted in '
+        'either input order, with identical derivation', () {
+      final block = para('a', 'abcdef');
+      final point = Decoration.replace('a', 3, 3,
+          replacementLength: 1, spec: const ReplacementText('*'));
+      final span = Decoration.replace('a', 3, 5, replacementLength: 0);
+      final pointFirst = deriveViewText(block, [point, span]);
+      final spanFirst = deriveViewText(block, [span, point]);
+      expect(pointFirst.viewText, 'abc*f');
+      expectSameDerivation(spanFirst, pointFirst,
+          reason: 'replace validation and folding are order-independent');
+      checkViewMapRoundTrip(pointFirst.viewMap, block.contentLength);
+    });
+
     test('a widget followed by an adjacent hidden span keeps the law', () {
       final block = para('a', 'abcdef');
       final widget = Decoration.widget('a', 3, spec: 'w');

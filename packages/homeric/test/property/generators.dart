@@ -126,8 +126,16 @@ final class GeneratorStats {
   /// Uses of each builder, by name.
   final Map<String, int> opCounts = <String, int>{};
 
+  /// Generated decorations of each [DecorationKind], by name.
+  final Map<String, int> decorationKindCounts = <String, int>{};
+
   void countOp(String kind) {
     opCounts[kind] = (opCounts[kind] ?? 0) + 1;
+  }
+
+  void countDecorationKind(DecorationKind kind) {
+    decorationKindCounts[kind.name] =
+        (decorationKindCounts[kind.name] ?? 0) + 1;
   }
 
   /// Adds [other]'s counters into this one.
@@ -145,6 +153,9 @@ final class GeneratorStats {
     collapsedAnchors += other.collapsedAnchors;
     other.opCounts.forEach((kind, count) {
       opCounts[kind] = (opCounts[kind] ?? 0) + count;
+    });
+    other.decorationKindCounts.forEach((kind, count) {
+      decorationKindCounts[kind] = (decorationKindCounts[kind] ?? 0) + count;
     });
   }
 }
@@ -447,6 +458,7 @@ List<Decoration> _randomDecorationsFor(
   }
 
   for (final decoration in out) {
+    stats.countDecorationKind(decoration.kind);
     if (decoration.isCollapsed && decoration.kind != DecorationKind.widget) {
       stats.collapsedDecorations++;
     }

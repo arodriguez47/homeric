@@ -234,9 +234,10 @@ void main() {
 
     test('mapping a negative position throws', () {
       final map = StepMap(const [2, 4, 0]);
-      expect(() => map.map(-1), throwsA(isA<PositionRangeError>()));
-      expect(() => map.mapResult(-1), throwsA(isA<PositionRangeError>()));
-      expect(() => StepMap.empty.map(-7), throwsA(isA<PositionRangeError>()));
+      expect(() => map.map(-1), throwsA(isA<NegativePositionError>()));
+      expect(() => map.mapResult(-1), throwsA(isA<NegativePositionError>()));
+      expect(
+          () => StepMap.empty.map(-7), throwsA(isA<NegativePositionError>()));
     });
 
     test('recover with an invalid value throws', () {

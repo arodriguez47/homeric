@@ -426,13 +426,14 @@ void main() {
 
   group('Error paths', () {
     test('mapping a negative position throws', () {
-      expect(() => Mapping().map(-1), throwsA(isA<PositionRangeError>()));
+      expect(() => Mapping().map(-1), throwsA(isA<NegativePositionError>()));
       expect(
           () => mk([
                 [2, 4, 0],
               ]).map(-3),
-          throwsA(isA<PositionRangeError>()));
-      expect(() => Mapping().mapResult(-1), throwsA(isA<PositionRangeError>()));
+          throwsA(isA<NegativePositionError>()));
+      expect(
+          () => Mapping().mapResult(-1), throwsA(isA<NegativePositionError>()));
     });
 
     test('appendMap with an out-of-range mirror index throws', () {

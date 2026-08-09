@@ -157,7 +157,7 @@ final class Mapping implements Mappable {
 
   @override
   MapResult mapResult(int pos, {int assoc = 1}) {
-    if (pos < 0) throw PositionRangeError(pos);
+    if (pos < 0) throw NegativePositionError(pos);
     return _map(pos, assoc);
   }
 

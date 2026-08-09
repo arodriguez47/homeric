@@ -77,6 +77,44 @@ void main() {
       expect(() => tr.step(ReplaceStep(4, 7, Slice.empty)),
           throwsA(isA<StepFailedError>()));
     });
+
+    test(
+        'stepPairMirrored is atomic: a failing second step records '
+        'nothing', () {
+      final doc = threeBlocks();
+      final tr = Transaction(doc)..step(ReplaceStep(3, 3, inlineSlice('XY')));
+      // After the insert: `a` spans [0, 9), `b` [9, 16), `c` [16, 25).
+      final stepsBefore = List.of(tr.steps);
+      final docsBefore = List.of(tr.docs);
+      final mapsBefore = List.of(tr.mapping.maps);
+      final docBefore = tr.doc;
+      final changesBefore = tr.changes;
+
+      expect(
+        () => tr.stepPairMirrored(
+          // Applies cleanly on its own: insert inside `c`'s text.
+          ReplaceStep(24, 24, inlineSlice('!')),
+          // Misfit: deletes `a`'s closing token without `b`'s opening one.
+          (d) => ReplaceStep(6, 9, Slice.empty),
+          record: const BlockMove(blockId: 'a', fromIndex: 0, toIndex: 1),
+        ),
+        throwsA(isA<StepFailedError>()),
+      );
+
+      expect(tr.steps, stepsBefore);
+      expect(tr.docs, docsBefore);
+      expect(tr.docs.single, same(docsBefore.single));
+      expect(tr.doc, same(docBefore));
+      expect(tr.mapping.maps, hasLength(mapsBefore.length));
+      for (var i = 0; i < mapsBefore.length; i++) {
+        expect(tr.mapping.maps[i], same(mapsBefore[i]));
+      }
+      expect(tr.mapping.getMirror(0), isNull);
+      final changesAfter = tr.changes;
+      expect(changesAfter, same(changesBefore));
+      expect(changesAfter.structural, isEmpty);
+      expectSameDoc(tr.doc, docBefore);
+    });
   });
 
   group('Transaction result', () {

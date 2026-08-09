@@ -18,14 +18,15 @@ final class MalformedStepMapError extends Error {
 
 /// Thrown when a position outside the mappable range (a negative position)
 /// is passed to a mapping operation.
-final class PositionRangeError extends Error {
-  PositionRangeError(this.position);
+final class NegativePositionError extends Error {
+  NegativePositionError(this.position);
 
   /// The offending position.
   final int position;
 
   @override
-  String toString() => 'PositionRangeError: position $position is out of range';
+  String toString() =>
+      'NegativePositionError: position $position is out of range';
 }
 
 /// Something positions can be mapped through.
@@ -142,7 +143,7 @@ final class StepMap implements Mappable {
   }
 
   static void _checkPosition(int pos) {
-    if (pos < 0) throw PositionRangeError(pos);
+    if (pos < 0) throw NegativePositionError(pos);
   }
 
   int get _oldSizeIndex => inverted ? 2 : 1;

@@ -115,11 +115,31 @@ final class Transaction {
   ///
   /// [second] is a callback because the second step's positions are
   /// expressed in the coordinates left behind by [first]. Throws
-  /// [StepFailedError] (like [step]) when either step does not fit.
+  /// [StepFailedError] (like [step]) when either step does not fit. The
+  /// pair is atomic: when either step fails, nothing is recorded — the
+  /// transaction is left exactly as it was before the call.
   void stepPairMirrored(Step first, Step Function(Document doc) second,
       {StructuralChange? record}) {
-    step(first);
-    step(second(_doc));
+    final firstResult = first.apply(_doc);
+    if (firstResult.failed) throw StepFailedError(firstResult.failure!);
+    final firstDoc = firstResult.doc!;
+    final secondStep = second(firstDoc);
+    final secondResult = secondStep.apply(firstDoc);
+    if (secondResult.failed) throw StepFailedError(secondResult.failure!);
+
+    _docs
+      ..add(_doc)
+      ..add(firstDoc);
+    _steps
+      ..add(first)
+      ..add(secondStep);
+    mapping
+      ..appendMap(first.getMap())
+      ..appendMap(secondStep.getMap());
+    _structural
+      ..addAll(firstResult.structural)
+      ..addAll(secondResult.structural);
+    _doc = secondResult.doc!;
     mapping.setMirror(_steps.length - 2, _steps.length - 1);
     if (record != null) _structural.add(record);
   }

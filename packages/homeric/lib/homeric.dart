@@ -5,6 +5,8 @@
 /// (from Phase 2) virtualized rendering. See docs/ROADMAP.md.
 library homeric;
 
+export 'src/decoration/decoration.dart';
+export 'src/decoration/decoration_set.dart';
 export 'src/model/attributes.dart';
 export 'src/model/block.dart';
 export 'src/model/document.dart';

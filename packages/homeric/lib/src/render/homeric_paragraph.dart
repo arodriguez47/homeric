@@ -21,6 +21,11 @@
 /// * paint-only changes ([RenderHomericParagraph.paintStyler], the U5
 ///   repaint band) → deferred rebuild inside `paint()` with a
 ///   layout-identity assert — never inside layout;
+/// * decoration paint layers ([RenderHomericParagraph.paintLayers], also
+///   U5 — see `paint_layers.dart`) → `markNeedsPaint()` only: rects are
+///   resolved fresh every `paint()` call through the U4 geometry service,
+///   so there is nothing to rebuild or relayout, and a spec-only change
+///   (e.g. an animated dim amount) never marks semantics dirty either;
 /// * system font change → caches dropped + relayout
 ///   ([RelayoutWhenSystemFontsChangeMixin]).
 ///
@@ -81,6 +86,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../view/view_map.dart';
+import 'paint_layers.dart';
+import 'paragraph_geometry.dart';
 import 'paragraph_source.dart';
 
 /// A paint-only per-run style adjustment — U5's repaint band.
@@ -209,6 +216,7 @@ class RenderHomericParagraph extends RenderBox
     ui.PlaceholderAlignment slotAlignment = ui.PlaceholderAlignment.middle,
     TextBaseline? slotBaseline,
     PaintOnlyStyler? paintStyler,
+    List<PaintLayer> paintLayers = const <PaintLayer>[],
     ParagraphSource<Object?>? semanticsSource,
     SemanticsLabelResolver? semanticsLabelForRun,
     List<RenderBox>? children,
@@ -222,6 +230,7 @@ class RenderHomericParagraph extends RenderBox
         _slotAlignment = slotAlignment,
         _slotBaseline = slotBaseline,
         _paintStyler = paintStyler,
+        _paintLayers = paintLayers,
         _semanticsSource = semanticsSource,
         _semanticsLabelForRun = semanticsLabelForRun {
     addAll(children);
@@ -389,6 +398,29 @@ class RenderHomericParagraph extends RenderBox
       return;
     }
     _rebuildForPaint = true;
+    markNeedsPaint();
+  }
+
+  /// Range-driven decoration paint layers (U5): underlay/overlay rects
+  /// resolved through the U4 [ParagraphGeometry] service fresh every
+  /// `paint()` call — see `paint_layers.dart`'s library doc for the paint-
+  /// order guarantee and the same-frame-resolution rationale.
+  ///
+  /// Compared by value (each [PaintLayer]'s own equality — range, band,
+  /// spec, painter identity), so a spec-only change (e.g. an animated dim
+  /// amount ticking) is detected without a full source re-derivation.
+  /// Change → `markNeedsPaint()` **only**: unlike [paintStyler], this
+  /// never touches the `ui.Paragraph` at all (layers paint on the canvas
+  /// around the existing paragraph), so there is no rebuild, no relayout,
+  /// and — deliberately, since a decoration's paint spec is never
+  /// accessibility content — no [markNeedsSemanticsUpdate].
+  List<PaintLayer> get paintLayers => _paintLayers;
+  List<PaintLayer> _paintLayers;
+  set paintLayers(List<PaintLayer> value) {
+    if (listEquals(_paintLayers, value)) {
+      return;
+    }
+    _paintLayers = value;
     markNeedsPaint();
   }
 
@@ -890,6 +922,17 @@ class RenderHomericParagraph extends RenderBox
       _paragraph = paragraph = rebuilt;
       _rebuildForPaint = false;
     }
+    // U5 paint order (pinned, not a per-layer choice): underlays < glyphs
+    // + placeholder children < overlays. The geometry service is
+    // constructed fresh for this paint call — see paint_layers.dart's
+    // library doc — so every layer's rects reflect the paragraph that is
+    // about to be drawn, never a rect resolved against a prior frame.
+    final layers = _paintLayers;
+    final geometry = layers.isEmpty ? null : ParagraphGeometry(this);
+    if (geometry != null) {
+      paintLayerBand(
+          context.canvas, offset, geometry, layers, PaintBand.underlay);
+    }
     context.canvas.drawParagraph(paragraph, offset);
     // Children paint after the glyphs, at their placeholder boxes; a
     // null offset means no box this layout — skipped.
@@ -899,6 +942,10 @@ class RenderHomericParagraph extends RenderBox
       if (childOffset != null) {
         context.paintChild(child, offset + childOffset);
       }
+    }
+    if (geometry != null) {
+      paintLayerBand(
+          context.canvas, offset, geometry, layers, PaintBand.overlay);
     }
   }
 
@@ -1064,6 +1111,7 @@ class RenderHomericParagraph extends RenderBox
       ..add(EnumProperty<TextBaseline>('slotBaseline', _slotBaseline,
           defaultValue: null))
       ..add(IntProperty('layoutGeneration', _layoutGeneration))
+      ..add(IntProperty('paintLayers', _paintLayers.length, defaultValue: 0))
       ..add(FlagProperty('semanticsSource',
           value: _semanticsSource != null,
           ifTrue: 'independent of source',
@@ -1105,6 +1153,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
     this.slotAlignment = ui.PlaceholderAlignment.middle,
     this.slotBaseline,
     this.paintStyler,
+    this.paintLayers = const <PaintLayer>[],
     this.semanticsSource,
     this.semanticsLabelForRun,
   })  : assert(
@@ -1163,6 +1212,10 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   /// Paint-only repaint band (U5 seam). See [PaintOnlyStyler].
   final PaintOnlyStyler? paintStyler;
 
+  /// Decoration paint layers (U5). See
+  /// [RenderHomericParagraph.paintLayers].
+  final List<PaintLayer> paintLayers;
+
   /// An independently-derived semantics source (U6, R6). See
   /// [RenderHomericParagraph.semanticsSource].
   final ParagraphSource<Object?>? semanticsSource;
@@ -1189,6 +1242,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       slotAlignment: slotAlignment,
       slotBaseline: slotBaseline,
       paintStyler: paintStyler,
+      paintLayers: paintLayers,
       semanticsSource: semanticsSource,
       semanticsLabelForRun: semanticsLabelForRun,
     );
@@ -1205,6 +1259,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       ..slotAlignment = slotAlignment
       ..slotBaseline = slotBaseline
       ..paintStyler = paintStyler
+      ..paintLayers = paintLayers
       ..semanticsSource = semanticsSource
       ..semanticsLabelForRun = semanticsLabelForRun;
   }
@@ -1225,6 +1280,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
           defaultValue: ui.PlaceholderAlignment.middle))
       ..add(EnumProperty<TextBaseline>('slotBaseline', slotBaseline,
           defaultValue: null))
+      ..add(IntProperty('paintLayers', paintLayers.length, defaultValue: 0))
       ..add(FlagProperty('semanticsSource',
           value: semanticsSource != null,
           ifTrue: 'independent of source',

@@ -1,7 +1,7 @@
 ---
 title: "feat: Phase 1 editor core — document model, StepMap, DecorationSet, view text"
 type: feat
-status: active
+status: completed
 date: 2026-08-08
 origin: https://linear.app/xana-studios/issue/HOM-3/phase-1-document-model-positions-stepmap-decorationset
 ---

@@ -273,9 +273,37 @@ final class ParagraphSource<S> {
     final segments = <ParagraphSegment<S>>[];
     final slots = <SlotSegment<S>>[];
     var nextSlot = 0;
+
+    // Sweep-line active set: `derived.styledRanges` and `bounds` are both
+    // sorted by (start, end), so a single pass with two indices tracks
+    // which ranges cover the current cut in O(k) total (each range is
+    // pushed once and popped once) instead of rescanning every range for
+    // every cut (O(k) work per cut => O(k^2) overall). Ranges ending at a
+    // given offset are precomputed once so a pop is a direct lookup rather
+    // than a scan of the active set.
+    final endingAt = <int, List<Decoration>>{};
+    for (final range in derived.styledRanges) {
+      (endingAt[range.end] ??= []).add(range.decoration);
+    }
+    final active = <Decoration>{};
+    var nextRange = 0;
+
     for (var i = 0; i + 1 < bounds.length; i++) {
       final start = bounds[i];
       final end = bounds[i + 1];
+
+      final expiring = endingAt[start];
+      if (expiring != null) {
+        for (final decoration in expiring) {
+          active.remove(decoration);
+        }
+      }
+      while (nextRange < derived.styledRanges.length &&
+          derived.styledRanges[nextRange].start == start) {
+        active.add(derived.styledRanges[nextRange].decoration);
+        nextRange++;
+      }
+
       if (nextSlot < derived.slots.length &&
           derived.slots[nextSlot].viewOffset == start) {
         assert(end == start + 1,
@@ -287,12 +315,9 @@ final class ParagraphSource<S> {
         nextSlot++;
         continue;
       }
-      final active = List<Decoration>.unmodifiable([
-        for (final range in derived.styledRanges)
-          if (range.start <= start && end <= range.end) range.decoration,
-      ]);
+      final activeList = List<Decoration>.unmodifiable(active);
       final text = viewText.substring(start, end);
-      final style = resolveStyle(RunStyleContext._(start, text, active));
+      final style = resolveStyle(RunStyleContext._(start, text, activeList));
       segments.add(TextSegment<S>._(start, text, style));
     }
     assert(nextSlot == derived.slots.length,

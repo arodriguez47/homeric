@@ -317,6 +317,52 @@ void main() {
       expect(second.segments, first.segments);
     });
 
+    test(
+        'several overlapping ranges produce the same active set per cut '
+        'as the reference full-rescan filter (sweep-line regression)', () {
+      final block = para('a', 'abcdefgh');
+      final r1 = Decoration.inline('a', 0, 5, spec: 'r1');
+      final r2 = Decoration.inline('a', 1, 6, spec: 'r2');
+      final r3 = Decoration.inline('a', 2, 4, spec: 'r3');
+      final r4 = Decoration.inline('a', 3, 8, spec: 'r4');
+      final r5 = Decoration.inline('a', 6, 7, spec: 'r5');
+      final decorations = [r1, r2, r3, r4, r5];
+      final source = ParagraphSource.build(
+        block: block,
+        decorations: decorations,
+        resolveStyle: tagStyle,
+      );
+      // Reference: recompute each cut's active set by brute-force
+      // rescanning, exactly as the pre-sweep-line implementation did.
+      final derived = deriveViewText(block, decorations);
+      final cuts = <int>{0, derived.viewText.length};
+      for (final range in derived.styledRanges) {
+        cuts.add(range.start);
+        cuts.add(range.end);
+      }
+      final bounds = cuts.toList()..sort();
+      final expected = <(int, int, String)>[];
+      for (var i = 0; i + 1 < bounds.length; i++) {
+        final start = bounds[i];
+        final end = bounds[i + 1];
+        final activeSpecs = [
+          for (final range in derived.styledRanges)
+            if (range.start <= start && end <= range.end) range.decoration.spec,
+        ];
+        final style = activeSpecs.isEmpty ? 'plain' : activeSpecs.join('+');
+        expected.add((start, end, style));
+      }
+      expect(source.segments.length, expected.length);
+      for (var i = 0; i < expected.length; i++) {
+        final actual = source.segments[i] as TextSegment<String>;
+        final (start, end, style) = expected[i];
+        expect(actual.viewStart, start, reason: 'segment $i');
+        expect(actual.viewEnd, end, reason: 'segment $i');
+        expect(actual.style, style, reason: 'segment $i');
+      }
+      expectCoversViewText(source);
+    });
+
     test("a build picks up the resolver's current theme", () {
       var theme = 'day';
       ParagraphSource<String> build() => ParagraphSource.build(

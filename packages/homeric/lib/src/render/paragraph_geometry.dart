@@ -212,7 +212,7 @@ final class GeometryResult<T> {
 /// calling the method again.
 class ParagraphGeometry {
   /// Wraps [render] — construct fresh per query burst; cheap.
-  const ParagraphGeometry(this._render);
+  ParagraphGeometry(this._render);
 
   final RenderHomericParagraph _render;
 
@@ -233,7 +233,16 @@ class ParagraphGeometry {
   /// cumulative length delta (see `StepMap.mapResult`'s trailing-range
   /// formula) — exactly the document length, since the paragraph's view
   /// text tail beyond every fold is a 1:1 copy of the document's tail.
-  int get docLength => _viewMap.viewToDoc(_viewText.length, assoc: 1);
+  ///
+  /// Memoized on this instance: this does not change the "construct fresh
+  /// per paint" design (a new [ParagraphGeometry] is still built fresh
+  /// every `paint()` call per R9's staleness guarantee) — it only removes
+  /// redundant re-derivation across the several queries one instance
+  /// serves within a single paint (`rectsForRange`/`caretRect`/
+  /// `wordBoundaryAt`/`lineBoundaryAt` each call `_checkOffset`/
+  /// `_checkRange`, which read [docLength]).
+  int get docLength => _docLength;
+  late final int _docLength = _viewMap.viewToDoc(_viewText.length, assoc: 1);
 
   void _checkOffset(DocOffset offset) {
     final length = docLength;
@@ -299,12 +308,18 @@ class ParagraphGeometry {
     if (slotIndex < 0 || slotIndex >= slots.length) {
       throw UnknownSlotError(index: slotIndex);
     }
-    final boxes = _paragraph.getBoxesForPlaceholders();
+    final boxes = _placeholderBoxes;
     if (slotIndex >= boxes.length) {
       throw UnknownSlotError(index: slotIndex);
     }
     return _stamp(boxes[slotIndex].toRect());
   }
+
+  /// `getBoxesForPlaceholders()` is a `dart:ui` engine call; memoized here
+  /// so a burst of slot queries against one instance invokes it once
+  /// instead of once per query.
+  late final List<ui.TextBox> _placeholderBoxes =
+      _paragraph.getBoxesForPlaceholders();
 
   /// The rect of the slot whose decoration carries [spec] as its stable
   /// identity (see `SlotSegment.spec`).

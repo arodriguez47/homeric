@@ -231,6 +231,10 @@ class RenderHomericParagraph extends RenderBox
         _slotBaseline = slotBaseline,
         _paintStyler = paintStyler,
         _paintLayers = paintLayers,
+        _underlayLayers = List<PaintLayer>.unmodifiable(
+            paintLayers.where((layer) => layer.band == PaintBand.underlay)),
+        _overlayLayers = List<PaintLayer>.unmodifiable(
+            paintLayers.where((layer) => layer.band == PaintBand.overlay)),
         _semanticsSource = semanticsSource,
         _semanticsLabelForRun = semanticsLabelForRun {
     addAll(children);
@@ -416,11 +420,25 @@ class RenderHomericParagraph extends RenderBox
   /// accessibility content — no [markNeedsSemanticsUpdate].
   List<PaintLayer> get paintLayers => _paintLayers;
   List<PaintLayer> _paintLayers;
+
+  /// [_paintLayers] filtered to [PaintBand.underlay], precomputed once per
+  /// assignment (constructor or setter) rather than re-filtered on every
+  /// `paint()` call — `paint()` runs once per frame while an assignment is
+  /// comparatively rare.
+  List<PaintLayer> _underlayLayers;
+
+  /// [_paintLayers] filtered to [PaintBand.overlay]. See [_underlayLayers].
+  List<PaintLayer> _overlayLayers;
+
   set paintLayers(List<PaintLayer> value) {
     if (listEquals(_paintLayers, value)) {
       return;
     }
     _paintLayers = value;
+    _underlayLayers = List<PaintLayer>.unmodifiable(
+        value.where((layer) => layer.band == PaintBand.underlay));
+    _overlayLayers = List<PaintLayer>.unmodifiable(
+        value.where((layer) => layer.band == PaintBand.overlay));
     markNeedsPaint();
   }
 
@@ -927,11 +945,10 @@ class RenderHomericParagraph extends RenderBox
     // constructed fresh for this paint call — see paint_layers.dart's
     // library doc — so every layer's rects reflect the paragraph that is
     // about to be drawn, never a rect resolved against a prior frame.
-    final layers = _paintLayers;
-    final geometry = layers.isEmpty ? null : ParagraphGeometry(this);
+    final geometry = _paintLayers.isEmpty ? null : ParagraphGeometry(this);
     if (geometry != null) {
-      paintLayerBand(
-          context.canvas, offset, geometry, layers, PaintBand.underlay);
+      paintLayerBand(context.canvas, offset, geometry, _underlayLayers,
+          PaintBand.underlay);
     }
     context.canvas.drawParagraph(paragraph, offset);
     // Children paint after the glyphs, at their placeholder boxes; a
@@ -945,7 +962,7 @@ class RenderHomericParagraph extends RenderBox
     }
     if (geometry != null) {
       paintLayerBand(
-          context.canvas, offset, geometry, layers, PaintBand.overlay);
+          context.canvas, offset, geometry, _overlayLayers, PaintBand.overlay);
     }
   }
 

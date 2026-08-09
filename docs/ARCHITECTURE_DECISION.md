@@ -1,6 +1,6 @@
 # A Flutter Editor for Ulysses-Class Writing
 
-> **SUPERSEDED (2026-08-08).** This document recommended forking super_editor; that recommendation was followed, then overturned — Homeric is now being built from scratch in pure Dart (see [`STRATEGY.md`](../STRATEGY.md)). Kept for the landscape analysis and the three-primitives design, which still stand. Note its warning that from-scratch IME is a 12–18 month cost: that risk is now accepted, not avoided.
+> **Conclusion revised 2026-08-08.** The fork recommendation below was followed, then overturned — Homeric is now built **from fundamentals** in pure Dart (see the revised conclusion at the end of this document, [`STRATEGY.md`](../STRATEGY.md), and Linear HOM-1). The landscape analysis and the three-primitives design still stand and are load-bearing. The original warning that owning IME is a 12–18 month cost is *also* still load-bearing: it is why shaping and IME plumbing stay with `dart:ui` and the platform — the line is drawn below Homeric's code, not below Flutter's.
 
 **Architecture recommendation · June 2026**
 Target: desktop (macOS/Windows/Linux) + Android + Web · no collaboration · snappy on 100k+ word documents · footnotes, comments, annotations, backlinks, writing goals, diff/version history.
@@ -177,3 +177,28 @@ Five companion documents are in `/home/user/workspace/research/`:
 - `flutter_perf_notes.md` — `Paragraph.layout()` realities, sliver protocol, height caching
 - `diff_strategies.md` — Myers vs tree diff vs `prosemirror-changeset`
 - `recommendation.md` — the long-form version of this document
+
+---
+
+## Conclusion — revised 2026-08-08
+
+The comparative analysis above stands; the conclusion changed. Forking super_editor was tried and produced a mechanical rename that died at scaffolding (three commits, none of the three planned primitives written). The revised decision, recorded in Linear [HOM-1](https://linear.app/xana-studios/issue/HOM-1/homeric-a-flutter-text-editing-package-built-from-fundamentals): build Homeric **from fundamentals** — own document model, positions and StepMap, DecorationSet, selection, hit testing, layout, RenderObject, input wiring, and virtualization — with `dart:ui` doing glyph shaping only, and **no AppFlowy or super_editor code at any point, including "for reference."**
+
+Where the line sits:
+
+```
+homeric:     document model · positions · StepMap · DecorationSet
+             selection · hit test · caret geometry · line & block layout
+             RenderObject · input & IME wiring · virtualization
+                                  │
+                                  ▼
+dart:ui:     ParagraphBuilder → Paragraph
+             (shaping · bidi · line breaking · font fallback · placeholders)
+                                  │
+                                  ▼
+Skia / Impeller: glyph raster
+```
+
+Shaping stays with `dart:ui` because that is where every serious editor draws the line: CodeMirror lets the browser shape, Zed uses the system shaper, native macOS editors use CoreText. This document's own rejection of going lower ("IME across six platforms is a 12–18 month project on its own") is the reasoning that keeps the line here rather than something this decision overturns.
+
+What owning the `RenderObject` buys, which `RenderParagraph` cannot: `addPlaceholder` + `getBoxesForPlaceholders` for real measured inline widgets; view text ≠ document text (hidden delimiters genuinely absent from the shaped run); `computeLineMetrics`/`getLineBoundary` on demand. Every phase after Phase 1 lands in Nexus — no phase is infrastructure whose payoff is a later phase. Phases and checkpoints: [`ROADMAP.md`](ROADMAP.md).

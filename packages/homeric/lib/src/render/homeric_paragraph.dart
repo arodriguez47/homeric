@@ -103,6 +103,23 @@ typedef PaintOnlyStyler = TextStyle Function(TextSegment<TextStyle> segment);
 /// order; the slot's stable identity is [SlotSegment.spec].
 typedef SlotWidgetBuilder = Widget Function(SlotSegment<TextStyle> slot);
 
+/// Resolves a per-run accessibility label override for one text run of
+/// the semantics derivation (U6, R6) — the per-run label-override hook
+/// the plan calls out, modeled on `InlineSpan.semanticsLabel`
+/// (`flutter/lib/src/painting/inline_span.dart`; read, not copied).
+/// Homeric has no `InlineSpan` tree to hang a label override field on,
+/// so the resolver takes the run's own view text and its view-text start
+/// offset instead of a span object.
+///
+/// Returning `null` uses the run's own text verbatim — sufficient for
+/// every Phase 2 fixture: hidden delimiters are already excluded by
+/// construction (see [RenderHomericParagraph.semanticsSource]) and real
+/// replacement content (e.g. an aside marker's substituted text) already
+/// reads as ordinary prose. The hook exists for a future run that wants
+/// to announce something other than its literal characters.
+typedef SemanticsLabelResolver = String? Function(
+    String runText, int runViewStart);
+
 /// Parent data for [RenderHomericParagraph]'s inline slot children.
 ///
 /// Mirrors the framework's `TextParentData`: not a [BoxParentData],
@@ -129,6 +146,38 @@ class HomericSlotParentData extends ParentData
       ? 'not positioned; ${super.toString()}'
       : 'offset: '
           '$offset; ${super.toString()}';
+}
+
+/// Tags a widget slot's semantics subtree with its slot index so
+/// [RenderHomericParagraph]'s semantics delegate can attribute the
+/// child's own accessibility configuration(s) to the correct reading
+/// position among the text runs (U6, R6).
+///
+/// Mirrors `RichText`'s inline-widget tagging: `WidgetSpan.build`
+/// (`flutter/lib/src/widgets/widget_span.dart`) wraps every placeholder
+/// child in `Semantics(tagForChildren: PlaceholderSpanIndexSemanticsTag(index))`
+/// so `RenderParagraph`'s `childConfigurationsDelegate`
+/// (`flutter/lib/src/rendering/paragraph.dart`) can find which merged-up
+/// child configuration(s) belong to which placeholder — read, not
+/// copied. Homeric has no `InlineSpan` tree to attach a tag to a span,
+/// so [HomericParagraph] wraps each slot widget in the equivalent
+/// `Semantics(tagForChildren: ...)` annotation instead.
+@immutable
+class HomericSlotIndexSemanticsTag extends SemanticsTag {
+  /// Creates a tag for the slot at [index] (its [SlotSegment.slotIndex],
+  /// i.e. its `addPlaceholder` order).
+  const HomericSlotIndexSemanticsTag(this.index)
+      : super('HomericSlotIndexSemanticsTag($index)');
+
+  /// The slot's ordinal.
+  final int index;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HomericSlotIndexSemanticsTag && other.index == index;
+
+  @override
+  int get hashCode => Object.hash(HomericSlotIndexSemanticsTag, index);
 }
 
 /// The render box owning one live `ui.Paragraph` for a block's
@@ -160,6 +209,8 @@ class RenderHomericParagraph extends RenderBox
     ui.PlaceholderAlignment slotAlignment = ui.PlaceholderAlignment.middle,
     TextBaseline? slotBaseline,
     PaintOnlyStyler? paintStyler,
+    ParagraphSource<Object?>? semanticsSource,
+    SemanticsLabelResolver? semanticsLabelForRun,
     List<RenderBox>? children,
   })  : assert(!_requiresBaseline(slotAlignment) || slotBaseline != null,
             'slotBaseline is required for $slotAlignment slot alignment'),
@@ -170,7 +221,9 @@ class RenderHomericParagraph extends RenderBox
         _slotDimensions = slotDimensions,
         _slotAlignment = slotAlignment,
         _slotBaseline = slotBaseline,
-        _paintStyler = paintStyler {
+        _paintStyler = paintStyler,
+        _semanticsSource = semanticsSource,
+        _semanticsLabelForRun = semanticsLabelForRun {
     addAll(children);
   }
 
@@ -222,6 +275,13 @@ class RenderHomericParagraph extends RenderBox
     }
     _source = value;
     _markNeedsRebuild();
+    if (_semanticsSource == null) {
+      // No independent semantics derivation: source doubles as the
+      // semantics source (see its doc), so a real content change here is
+      // also a semantic content change (R6 — "not on every paint-only
+      // change"; paintStyler's own setter never reaches this branch).
+      markNeedsSemanticsUpdate();
+    }
   }
 
   /// The block's base style: the `ui.ParagraphStyle`-level default font
@@ -332,6 +392,54 @@ class RenderHomericParagraph extends RenderBox
     markNeedsPaint();
   }
 
+  /// An independently-derived paragraph source used **only** to build the
+  /// accessibility label and widget-slot reading order (U6, R6); falls
+  /// back to [source] when null.
+  ///
+  /// Semantics must track **document** semantics, not paint-time view
+  /// geometry (R6, "semantics label = document text"): a hidden
+  /// delimiter that [source] excludes because a decoration always folds
+  /// it away reads identically whether or not it is ever revealed, but a
+  /// delimiter [source] excludes only because reveal-on-selection (R10)
+  /// happens to be off right now must **still** be excluded from the
+  /// label even while a differently-derived [source] (reveal on, for
+  /// editing) paints the raw delimiters — reveal state must never make
+  /// the label flicker. Supply a `semanticsSource` built with
+  /// `RevealState.none` (regardless of the paint-time reveal state)
+  /// whenever the block's decorations are reveal-sensitive; a block that
+  /// never uses reveal can omit this and let [source] serve both roles.
+  ///
+  /// A real (non-hiding) `replace` decoration's substituted text — e.g.
+  /// an aside marker's replacement content — is not reveal-sensitive and
+  /// already reads as ordinary prose in either derivation: it neither
+  /// vanishes nor leaks the raw document delimiters it replaces.
+  ///
+  /// Compared by content exactly like [source] (view text, segments,
+  /// slots, spec) — a content-identical re-derivation is a no-op. Change
+  /// → [markNeedsSemanticsUpdate], never a relayout.
+  ParagraphSource<Object?>? get semanticsSource => _semanticsSource;
+  ParagraphSource<Object?>? _semanticsSource;
+  set semanticsSource(ParagraphSource<Object?>? value) {
+    if (_semanticsSourceEquals(_semanticsSource, value)) {
+      _semanticsSource = value;
+      return;
+    }
+    _semanticsSource = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  /// Per-run accessibility label override for the semantics derivation.
+  /// See [SemanticsLabelResolver]. Change → [markNeedsSemanticsUpdate].
+  SemanticsLabelResolver? get semanticsLabelForRun => _semanticsLabelForRun;
+  SemanticsLabelResolver? _semanticsLabelForRun;
+  set semanticsLabelForRun(SemanticsLabelResolver? value) {
+    if (identical(_semanticsLabelForRun, value)) {
+      return;
+    }
+    _semanticsLabelForRun = value;
+    markNeedsSemanticsUpdate();
+  }
+
   // --- Paragraph caches ---------------------------------------------------
 
   ui.Paragraph? _paragraph;
@@ -350,6 +458,20 @@ class RenderHomericParagraph extends RenderBox
             a.spec == b.spec &&
             a.viewMap == b.viewMap &&
             listEquals(a.segments, b.segments));
+  }
+
+  static bool _semanticsSourceEquals(
+      ParagraphSource<Object?>? a, ParagraphSource<Object?>? b) {
+    if (identical(a, b)) {
+      return true;
+    }
+    if (a == null || b == null) {
+      return false;
+    }
+    return a.viewText == b.viewText &&
+        a.spec == b.spec &&
+        a.viewMap == b.viewMap &&
+        listEquals(a.segments, b.segments);
   }
 
   void _markNeedsRebuild() {
@@ -821,6 +943,94 @@ class RenderHomericParagraph extends RenderBox
     }
   }
 
+  // --- Semantics (U6) ------------------------------------------------------
+
+  /// The effective source for the accessibility label and slot reading
+  /// order: [semanticsSource] when supplied, else [source] (see
+  /// [semanticsSource]'s doc for when to supply one).
+  ParagraphSource<Object?> get _effectiveSemanticsSource =>
+      _semanticsSource ?? _source;
+
+  TextDirection get _semanticsTextDirection =>
+      switch (_effectiveSemanticsSource.spec.direction) {
+        ParagraphDirection.ltr => TextDirection.ltr,
+        ParagraphDirection.rtl => TextDirection.rtl,
+      };
+
+  @override
+  void describeSemanticsConfiguration(SemanticsConfiguration config) {
+    super.describeSemanticsConfiguration(config);
+    // Framework pattern (read, not copied): RenderParagraph
+    // (flutter/lib/src/rendering/paragraph.dart) picks one of three
+    // semantics tiers per span — plain attributedLabel, merge-up via
+    // childConfigurationsDelegate, or an explicit assembleSemanticsNode
+    // — depending on whether a span has a gesture recognizer or a widget
+    // placeholder. Homeric is read-only (R4): no recognizers, ever, so
+    // only the middle tier is reachable. With zero widget slots it
+    // degrades to exactly one merged-up text config, which is
+    // equivalent to setting `attributedLabel` directly but keeps every
+    // build on one code path. No text-field flags are set anywhere:
+    // this is read-only static text semantics (R6).
+    //
+    // isSemanticBoundary keeps this block's semantics node from being
+    // elided when it has no text of its own (a block that is only a
+    // widget slot): without it, a sole widget child's own semantics
+    // fragment has real geometry and nothing here needs to borrow this
+    // render object's, so it bubbles past this node entirely and
+    // attaches to a distant ancestor instead of this block.
+    config.isSemanticBoundary = true;
+    config.childConfigurationsDelegate = _describeSemanticsChildren;
+  }
+
+  /// Walks the effective semantics source's segments in view-text order,
+  /// merging contiguous text runs into one [AttributedString] label per
+  /// run of text and pairing each widget slot with its own child's
+  /// accessibility configuration(s) — found via
+  /// [HomericSlotIndexSemanticsTag], the tagged-child lookup
+  /// `RenderParagraph` uses for `WidgetSpan` children (read, not
+  /// copied). A hidden delimiter contributes no text at all (it is
+  /// absent from the effective source's segments by construction — see
+  /// [semanticsSource]); a widget slot's placeholder character
+  /// contributes no text either — it is not prose, and the slot's own
+  /// child supplies whatever the screen reader should say about it.
+  ChildSemanticsConfigurationsResult _describeSemanticsChildren(
+    List<SemanticsConfiguration> childConfigs,
+  ) {
+    final builder = ChildSemanticsConfigurationsResultBuilder();
+    final direction = _semanticsTextDirection;
+    final resolver = _semanticsLabelForRun;
+    final label = StringBuffer();
+    var childIndex = 0;
+    var slotIndex = 0;
+
+    void flushLabel() {
+      if (label.isNotEmpty) {
+        builder.markAsMergeUp(SemanticsConfiguration()
+          ..textDirection = direction
+          ..attributedLabel = AttributedString(label.toString()));
+        label.clear();
+      }
+    }
+
+    for (final segment in _effectiveSemanticsSource.segments) {
+      switch (segment) {
+        case final TextSegment<Object?> text:
+          label.write(resolver?.call(text.text, text.viewStart) ?? text.text);
+        case SlotSegment<Object?>():
+          flushLabel();
+          final tag = HomericSlotIndexSemanticsTag(slotIndex);
+          while (childIndex < childConfigs.length &&
+              childConfigs[childIndex].tagsChildrenWith(tag)) {
+            builder.markAsMergeUp(childConfigs[childIndex]);
+            childIndex += 1;
+          }
+          slotIndex += 1;
+      }
+    }
+    flushLabel();
+    return builder.build();
+  }
+
   // --- Lifecycle ------------------------------------------------------------
 
   @override
@@ -853,7 +1063,11 @@ class RenderHomericParagraph extends RenderBox
           defaultValue: ui.PlaceholderAlignment.middle))
       ..add(EnumProperty<TextBaseline>('slotBaseline', _slotBaseline,
           defaultValue: null))
-      ..add(IntProperty('layoutGeneration', _layoutGeneration));
+      ..add(IntProperty('layoutGeneration', _layoutGeneration))
+      ..add(FlagProperty('semanticsSource',
+          value: _semanticsSource != null,
+          ifTrue: 'independent of source',
+          ifFalse: 'reuses source'));
   }
 }
 
@@ -891,6 +1105,8 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
     this.slotAlignment = ui.PlaceholderAlignment.middle,
     this.slotBaseline,
     this.paintStyler,
+    this.semanticsSource,
+    this.semanticsLabelForRun,
   })  : assert(
             !RenderHomericParagraph._requiresBaseline(slotAlignment) ||
                 slotBaseline != null,
@@ -902,7 +1118,18 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
     if (slotBuilder == null || source.slots.isEmpty) {
       return const <Widget>[];
     }
-    return <Widget>[for (final slot in source.slots) slotBuilder(slot)];
+    return <Widget>[
+      for (final slot in source.slots)
+        // Tags the slot's semantics subtree with its slot index (U6, R6)
+        // so the render object's childConfigurationsDelegate can merge
+        // the child's own accessibility configuration(s) into the
+        // reading order at the right position — see
+        // HomericSlotIndexSemanticsTag's doc.
+        Semantics(
+          tagForChildren: HomericSlotIndexSemanticsTag(slot.slotIndex),
+          child: slotBuilder(slot),
+        ),
+    ];
   }
 
   /// The block's builder inputs (U1 output, styles resolved this build).
@@ -936,6 +1163,14 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   /// Paint-only repaint band (U5 seam). See [PaintOnlyStyler].
   final PaintOnlyStyler? paintStyler;
 
+  /// An independently-derived semantics source (U6, R6). See
+  /// [RenderHomericParagraph.semanticsSource].
+  final ParagraphSource<Object?>? semanticsSource;
+
+  /// Per-run accessibility label override (U6, R6). See
+  /// [SemanticsLabelResolver].
+  final SemanticsLabelResolver? semanticsLabelForRun;
+
   TextScaler _resolveTextScaler(BuildContext context) {
     final specScaler = source.spec.textScaler;
     return textScaler ??
@@ -954,6 +1189,8 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       slotAlignment: slotAlignment,
       slotBaseline: slotBaseline,
       paintStyler: paintStyler,
+      semanticsSource: semanticsSource,
+      semanticsLabelForRun: semanticsLabelForRun,
     );
   }
 
@@ -967,7 +1204,9 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       ..textScaler = _resolveTextScaler(context)
       ..slotAlignment = slotAlignment
       ..slotBaseline = slotBaseline
-      ..paintStyler = paintStyler;
+      ..paintStyler = paintStyler
+      ..semanticsSource = semanticsSource
+      ..semanticsLabelForRun = semanticsLabelForRun;
   }
 
   @override
@@ -985,6 +1224,10 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
           'slotAlignment', slotAlignment,
           defaultValue: ui.PlaceholderAlignment.middle))
       ..add(EnumProperty<TextBaseline>('slotBaseline', slotBaseline,
-          defaultValue: null));
+          defaultValue: null))
+      ..add(FlagProperty('semanticsSource',
+          value: semanticsSource != null,
+          ifTrue: 'independent of source',
+          ifFalse: 'reuses source'));
   }
 }

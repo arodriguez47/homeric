@@ -72,8 +72,9 @@ enum ParagraphDirection {
 /// resolves them per build and the render object (U2) maps them onto
 /// `ui.ParagraphStyle` / strut / `TextScaler`.
 ///
-/// [strut] and [textScaler] are opaque passthroughs — this layer never
-/// inspects them, so they compare by identity (like [Decoration.spec]).
+/// [strut], [textScaler] and [textHeightBehavior] are opaque passthroughs —
+/// this layer never inspects them, so they compare by identity (like
+/// [Decoration.spec]).
 final class BlockParagraphSpec {
   /// Creates a spec; every field has a neutral default.
   const BlockParagraphSpec({
@@ -81,6 +82,7 @@ final class BlockParagraphSpec {
     this.lineHeight,
     this.strut,
     this.textScaler,
+    this.textHeightBehavior,
   });
 
   /// The paragraph's base direction.
@@ -96,23 +98,44 @@ final class BlockParagraphSpec {
   /// Opaque `TextScaler` passthrough (`null` for no scaling).
   final Object? textScaler;
 
+  /// Opaque `TextHeightBehavior` passthrough (`null` for the engine's
+  /// default, which applies [lineHeight] to the first ascent and the last
+  /// descent).
+  ///
+  /// Needed because [lineHeight] alone cannot express "lay the text out at
+  /// 1.5 but do not pad the top of the first line or the bottom of the
+  /// last" — the shape every editor built on Flutter's own `RichText`
+  /// gets by passing `TextHeightBehavior`, and therefore the shape a
+  /// consumer must be able to match when it renders some blocks through
+  /// Homeric and some through another widget. Without it the two
+  /// disagree on every vertical metric: with `fontSize: 16, height: 1.5`
+  /// and the FlutterTest font, suppressing both gives a 16.0 caret and
+  /// the default gives 24.0.
+  final Object? textHeightBehavior;
+
   @override
   bool operator ==(Object other) =>
       other is BlockParagraphSpec &&
       other.direction == direction &&
       other.lineHeight == lineHeight &&
       identical(other.strut, strut) &&
-      identical(other.textScaler, textScaler);
+      identical(other.textScaler, textScaler) &&
+      identical(other.textHeightBehavior, textHeightBehavior);
 
   @override
-  int get hashCode => Object.hash(direction, lineHeight,
-      identityHashCode(strut), identityHashCode(textScaler));
+  int get hashCode => Object.hash(
+      direction,
+      lineHeight,
+      identityHashCode(strut),
+      identityHashCode(textScaler),
+      identityHashCode(textHeightBehavior));
 
   @override
   String toString() => 'BlockParagraphSpec(${direction.name}'
       '${lineHeight == null ? '' : ', height: $lineHeight'}'
       '${strut == null ? '' : ', strut'}'
-      '${textScaler == null ? '' : ', scaled'})';
+      '${textScaler == null ? '' : ', scaled'}'
+      '${textHeightBehavior == null ? '' : ', heightBehavior'})';
 }
 
 /// One style-resolution request: a maximal span of view text over which

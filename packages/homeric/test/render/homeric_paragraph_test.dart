@@ -313,6 +313,61 @@ void main() {
           tester.getSize(find.byType(HomericParagraph)), const Size(200, 20));
     });
 
+    testWidgets('textHeightBehavior suppresses first-ascent/last-descent '
+        'leading', (tester) async {
+      // The passthrough exists for consumers that render some blocks through
+      // Homeric and some through another widget: Flutter's own `RichText`
+      // takes a `TextHeightBehavior`, so a consumer that cannot supply one
+      // here disagrees with itself on every vertical metric. `lineHeight`
+      // alone cannot express "lay out at 1.5 but do not pad the outer edges".
+      const tall = TextStyle(fontSize: 20, height: 1.5);
+
+      await tester.pumpWidget(harness(HomericParagraph(
+        source: sourceOf('abc', style: tall),
+        baseStyle: tall,
+      )));
+      // Default: the 1.5 multiplier pads both outer edges — 20 * 1.5.
+      expect(tester.getSize(find.byType(HomericParagraph)).height, 30);
+
+      const spec = BlockParagraphSpec(
+        textHeightBehavior: TextHeightBehavior(
+          applyHeightToFirstAscent: false,
+          applyHeightToLastDescent: false,
+        ),
+      );
+      await tester.pumpWidget(harness(HomericParagraph(
+        source: sourceOf('abc', style: tall, spec: spec),
+        baseStyle: tall,
+      )));
+      // Suppressed: the single line falls back to the font's own ascent +
+      // descent (FlutterTest: 0.75em + 0.25em = 1em = 20).
+      expect(tester.getSize(find.byType(HomericParagraph)).height, 20);
+    });
+
+    testWidgets('a textHeightBehavior change rebuilds and relayouts',
+        (tester) async {
+      const tall = TextStyle(fontSize: 20, height: 1.5);
+      await tester.pumpWidget(harness(HomericParagraph(
+        source: sourceOf('abc', style: tall),
+        baseStyle: tall,
+      )));
+      final render = renderOf(tester);
+      final before = render.layoutParagraph;
+
+      const spec = BlockParagraphSpec(
+        textHeightBehavior: TextHeightBehavior(
+          applyHeightToFirstAscent: false,
+        ),
+      );
+      await tester.pumpWidget(harness(HomericParagraph(
+        source: sourceOf('abc', style: tall, spec: spec),
+        baseStyle: tall,
+      )));
+
+      // A paragraph-style input, so it must rebuild — not merely repaint.
+      expect(identical(render.layoutParagraph, before), isFalse);
+    });
+
     testWidgets('TextScaler change rebuilds and relayouts', (tester) async {
       final source = sourceOf('hello');
       await tester.pumpWidget(MediaQuery(

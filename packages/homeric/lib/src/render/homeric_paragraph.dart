@@ -526,6 +526,12 @@ class RenderHomericParagraph extends RenderBox
         strut == null || strut is StrutStyle,
         'BlockParagraphSpec.strut must be a painting-layer StrutStyle at '
         'the render layer; got ${strut.runtimeType}');
+    final heightBehavior = spec.textHeightBehavior;
+    assert(
+        heightBehavior == null || heightBehavior is ui.TextHeightBehavior,
+        'BlockParagraphSpec.textHeightBehavior must be a dart:ui '
+        'TextHeightBehavior at the render layer; got '
+        '${heightBehavior.runtimeType}');
     // TextStyle.getParagraphStyle folds the base font, height, direction,
     // and strut into a ui.ParagraphStyle, scaling font sizes through the
     // TextScaler (flutter/lib/src/painting/text_style.dart).
@@ -538,6 +544,7 @@ class RenderHomericParagraph extends RenderBox
       textScaler: _textScaler,
       height: spec.lineHeight,
       strutStyle: strut as StrutStyle?,
+      textHeightBehavior: heightBehavior as ui.TextHeightBehavior?,
     );
   }
 

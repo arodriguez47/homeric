@@ -14,14 +14,16 @@ Canonical tracking lives in Linear (team **Homeric**, epic [HOM-1](https://linea
 | 5 | Nexus parity, then remove AppFlowy | 6–10 weeks | AppFlowy dependency deleted | HOM-7 |
 | 6 | Notes and longform on Homeric | TBD | Two more surfaces | HOM-8 |
 
-Phase 1's implementation plan: [`docs/plans/2026-08-08-001-feat-phase1-editor-core-plan.md`](plans/2026-08-08-001-feat-phase1-editor-core-plan.md). The benchmark harness and `.github/workflows/benchmark.yaml` return in Phase 4, wired against [`PERF_BUDGET.md`](PERF_BUDGET.md)'s fixtures and 5% regression gate.
+Phase 1's implementation plan: [`docs/plans/2026-08-08-001-feat-phase1-editor-core-plan.md`](plans/2026-08-08-001-feat-phase1-editor-core-plan.md). Phase 2's: [`docs/plans/2026-08-09-001-feat-phase2-homeric-paragraph-plan.md`](plans/2026-08-09-001-feat-phase2-homeric-paragraph-plan.md). The benchmark harness and `.github/workflows/benchmark.yaml` return in Phase 4, wired against [`PERF_BUDGET.md`](PERF_BUDGET.md)'s fixtures and 5% regression gate.
+
+**Phase 2 spans two repos and is not done until both halves are.** The homeric half is complete; the Nexus half lives in that repo's `docs/plans/2026-08-09-001-feat-homeric-paragraph-integration-plan.md` and is tracked by [HOM-11](https://linear.app/xana-studios/issue/HOM-11/exit-gate-author-land-the-nexus-companion-integration-plan-blocks), the enforceable gate for checkpoint 2 below. As of 2026-08-09 that plan's U1–U5 have landed behind a flag that is still off: the journal does not yet render through Homeric, so **checkpoint 2 has not cleared**.
 
 ## Checkpoints
 
 Not reasons to stop — reasons to re-scope, checked at each phase boundary:
 
 1. **Phase 1 runs past six weeks.** It is the most tractable layer and the only one provable in isolation. If it resists, the render and input layers will be worse.
-2. **Phase 2 does not land in Nexus.** The single most important signal. A Phase 2 that ends without the journal rendering paragraphs through Homeric has reproduced the failure this plan was designed against.
+2. **Phase 2 does not land in Nexus.** The single most important signal. A Phase 2 that ends without the journal rendering paragraphs through Homeric has reproduced the failure this plan was designed against. Enforced by [HOM-11](https://linear.app/xana-studios/issue/HOM-11/exit-gate-author-land-the-nexus-companion-integration-plan-blocks) rather than by intention — **open as of 2026-08-09**.
 3. **Phase 3 IME stalls on one platform.** Ship the platforms that work; keep AppFlowy mounted for the one that doesn't. The flag exists for this.
 4. **Phases 0–2 take more than double their estimate.** That is the point to re-read the brainstorm's ranked options with real numbers in hand — not before, and not as a matter of taste.
 

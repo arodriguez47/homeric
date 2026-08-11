@@ -16,8 +16,14 @@ tagged with its repo. Paths are repo-relative to the tagged repo.
 Homeric's Phase 2 is code-complete (HOM-4's plan is `status: completed`, PR #2 and #3 merged), but
 its exit gate has not fired: the Nexus journal still renders every paragraph through AppFlowy.
 This plan reconciles a duplicated, divergent Nexus integration, wires and flips the
-`useHomericParagraph` flag, retires the four workarounds Phase 2 exists to kill, and closes
+`useHomericParagraph` flag, takes the four workarounds off the paragraph path, and closes
 HOM-11 / HOM-12 / HOM-14 so Phase 3 (HOM-5) can start against a real consumer.
+
+> **Status 2026-08-11: U1–U7 landed** (nexus #166, #170–#175). U8 was rewritten after measuring —
+> **nothing is deleted**, the workarounds are gated to non-paragraph blocks and die with AppFlowy in
+> Phase 5. Four of this plan's assumptions inverted when checked: the homeric pin, "the flip is a
+> one-liner", "the 51 are one class of work", and the workaround retirement. Each correction is
+> recorded in the unit it belongs to.
 
 ---
 
@@ -79,8 +85,10 @@ bundled with it.
   assertions that still fail if the AppFlowy path regresses. *(HOM-12 core)*
 - **R5.** The flag defaults to `true`, the full Nexus suite is green, and `make mutants` is green on
   the changed lines. *(HOM-12 "Done when")*
-- **R6.** All four workarounds are retired from the paragraph path — two deleted, two narrowed to
-  the block types that stay on AppFlowy. *(HOM-4 Nexus deliverable, HOM-12 "Done when")*
+- **R6.** The paragraph path stops using every workaround — each gated to the block types that stay
+  on AppFlowy. **Nothing is deleted here**; deletion is Phase 5 (HOM-7), when AppFlowy goes.
+  *(HOM-4 Nexus deliverable, HOM-12 "Done when" — both originally said "removed", which was measured
+  wrong; see U8)*
 - **R7.** The three Phase 2 learnings are mirrored into Nexus's `LEARNINGS.md` and the stale
   differential-test comments are corrected. *(HOM-14 items 2 and 3, AGENTS.md compounding rule)*
 - **R8.** ROADMAP checkpoint #2 fires: the journal renders paragraphs through `HomericParagraph`,
@@ -547,35 +555,59 @@ a deliberate AppFlowy-path regression.
 
 ---
 
-### U8. Flip the flag; retire the four workarounds
+### U8. Flip the flag; take the workarounds off the paragraph path
+
+> **Rewritten 2026-08-11 after measuring. Nothing is deleted.** The original
+> version of this unit said "delete two, narrow two." All four measurements came back
+> the other way, and one of the four was not a workaround at all. See
+> [nexus #176](https://github.com/arodriguez47/nexus/pull/176) and
+> `nexus/test/widgets/journal_aside_block_type_test.dart`.
 
 **Repo:** nexus · **Requirements:** R5, R6, R8 · **Dependencies:** U7
 
+**What changed and why**
+
+| Workaround | Original plan | Measured |
+|---|---|---|
+| `journalAsideTailSegments` | delete | **narrow** — nothing in the tail path is gated on block type |
+| `journalAsideAnchorRunRangesIn` | delete | **keep, untouched** — a pure delta query, and `homeric_projection.dart:387` depends on it. Not a workaround. |
+| `hiddenMarkdownMarkerStyle` | narrow | narrow ✓ |
+| `MarkerRevealController` | narrow | narrow ✓ |
+| `_buildInlineAsideSpan` (`journal_view.dart:1031`) | *never named* | **narrow** — this is the actual inline-aside geometry surgery |
+
+The load-bearing measurement: typing `# ` at the start of an anchored paragraph carries **both
+halves of the aside** — the anchor attribute on the delta and the aside data on the node — onto a
+**heading**, which renders through AppFlowy under either flag state. So the composite stays
+reachable after the flip. Deleting it would make the writer's note vanish with no error, against
+this codebase's explicit degrade-never-die posture.
+
 **Files:**
-- Modify: `lib/views/journal_view.dart` (`_useHomericParagraph` → `true`)
-- Modify: `lib/utils/writing_surface_config.dart` (delete `journalAsideTailSegments` at `:898` and
-  its consumers at `:1219`; narrow `hiddenMarkdownMarkerStyle` and `MarkerRevealController` usage)
-- Modify: `lib/utils/journal_layer.dart` (delete `journalAsideAnchorRunRangesIn` at `:243`, the
-  inline-aside geometry surgery)
-- Modify: `lib/views/journal_view.dart` (delete the `journalAsideTailSegments` consumer at `:940`)
-- Modify: `lib/utils/ascend_markdown.dart`, `lib/utils/marker_reveal_controller.dart` (narrow, do
-  not delete)
+- Modify: `lib/views/journal_view.dart` (`_useHomericParagraph` → `true`; gate `_buildInlineAsideSpan`
+  and the `journalAsideTailSegments` consumer at `:979` to non-paragraph blocks)
+- Modify: `lib/utils/writing_surface_config.dart` (gate the tail path at `:1233` and the
+  `hiddenMarkdownMarkerStyle` / `MarkerRevealController` branches on block type)
+- Modify: `lib/utils/ascend_markdown.dart`, `lib/utils/marker_reveal_controller.dart` (narrow)
+- **Do not touch:** `lib/utils/journal_layer.dart`'s `journalAsideAnchorRunRangesIn`
 - Test: `test/utils/writing_surface_config_test.dart`,
-  `test/utils/marker_reveal_controller_test.dart`, `test/widgets/homeric_paragraph_differential_test.dart`
+  `test/utils/marker_reveal_controller_test.dart`,
+  `test/widgets/journal_aside_block_type_test.dart`,
+  `test/widgets/homeric_paragraph_differential_test.dart`
 
 **Approach:**
-- Flip first, confirm green, then delete — in that order, as separate commits, so a bisect separates
-  "the flip broke it" from "the deletion broke it."
-- **Delete outright:** `journalAsideTailSegments` and the inline-aside geometry surgery
-  (`journalAsideAnchorRunRangesIn`). U3 replaced both with measured Homeric slots; the projection
-  comment at `homeric_projection.dart:152` already claims the replacement.
-- **Narrow, do not delete:** `hiddenMarkdownMarkerStyle` and `MarkerRevealController`. Both are
-  reached through the editor-wide `textSpanDecorator` and also serve headings, quotes, and lists,
-  which stay on AppFlowy components. Deleting them regresses those block types invisibly to a
-  paragraph-scoped differential. Scope each to non-paragraph block types and keep
-  `marker_reveal_controller_test.dart` green.
-- Run `make mutants` (`Makefile:62`) — it mutates only `lib/` files this branch changed, which is
-  exactly the deletion surface.
+- Flip first, confirm the 19 known failures, then gate — separate commits, so a bisect separates
+  "the flip broke it" from "the gating broke it."
+- **One gate, applied consistently:** every branch that builds aside composites, aside tails, or
+  hidden-marker styling checks the block type and skips paragraphs. Paragraphs are the only block
+  type Homeric renders, so that single condition is the whole retirement.
+- The 19 known flag-on failures resolve as: 13 aside composite assertions move to the non-paragraph
+  gate or delete with it, 5 intended divergences get re-pointed (annotations render as **paint
+  layers** on the Homeric path — an assertion reading `style.decoration` is on the wrong layer, and
+  `homericPaintLayersFor` is where the parity lives), and 1 is `homeric_flag_seam_test`'s own guard,
+  which inverts to assert the flag is on.
+- Run `make mutants` (`Makefile:62`).
+
+**Deletion is Phase 5 (HOM-7), not here.** All of this machinery dies when AppFlowy does. Until then
+it is the live render path for headings, lists, quotes and comment-line wrappers.
 
 **Execution note:** if the flip surfaces a genuine homeric API gap, stop and re-plan rather than
 reaching into Phase 3. That boundary is the companion plan's risk R-1 and it still holds:

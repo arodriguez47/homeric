@@ -8,13 +8,15 @@ Canonical tracking lives in Linear (team **Homeric**, epic [HOM-1](https://linea
 |---|-------|----------|-------------------|--------|
 | 0 | Reset the repo; Linear; learnings | 1–2 days | — (setup) | HOM-2 |
 | 1 | Document, positions, StepMap, DecorationSet | 3–5 weeks | — (only phase without one) | HOM-3 |
-| 2 | `HomericParagraph` — one block, rendered properly | 6–10 weeks | All four workarounds die | HOM-4 |
+| 2 | `HomericParagraph` — one block, rendered properly | 6–10 weeks | The paragraph path stops using all four workarounds | HOM-4 |
 | 3 | Input and editing (the long pole) | 8–12 weeks | Journal on Homeric behind a flag | HOM-5 |
 | 4 | Multi-block document and virtualization | 4–6 weeks | Long-document performance | HOM-6 |
 | 5 | Nexus parity, then remove AppFlowy | 6–10 weeks | AppFlowy dependency deleted | HOM-7 |
 | 6 | Notes and longform on Homeric | TBD | Two more surfaces | HOM-8 |
 
 Phase 1's implementation plan: [`docs/plans/2026-08-08-001-feat-phase1-editor-core-plan.md`](plans/2026-08-08-001-feat-phase1-editor-core-plan.md). The benchmark harness and `.github/workflows/benchmark.yaml` return in Phase 4, wired against [`PERF_BUDGET.md`](PERF_BUDGET.md)'s fixtures and 5% regression gate.
+
+> **Phase 2's deliverable used to read "All four workarounds die."** It was measured and it is wrong. Three of the four are reached through AppFlowy's editor-wide `textSpanDecorator`, which is not gated on block type, and an aside anchor survives a `# ` conversion onto a heading — so the machinery stays reachable for the block types that remain on AppFlowy. A fourth, `journalAsideAnchorRunRangesIn`, turned out to be a pure delta query the Homeric projection itself depends on. What Phase 2 actually delivers is that the **paragraph path** stops using them; the deletion waits for Phase 5 (HOM-7), when AppFlowy goes. Pinned by `nexus/test/widgets/journal_aside_block_type_test.dart`.
 
 ## Checkpoints
 

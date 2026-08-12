@@ -2,6 +2,24 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-12 — Tokenize the block, not the op, when a layer attribute splits a mark
+
+**What:** A journal-layer attribute on the content character of `**B**` splits the delta into three ops (`**` / `B` / `**`). Homeric's projection tokenized each op in isolation and found no mark; AppFlowy's decorator tokenizes the full block then slices. The comment anchor lost its bold with no error.
+**Why it mattered:** The flag flip made this the production path. `journal_markdown_layer_composition_test` was already written to catch per-run parsing — it was the first new failure after the known 19. Matching `_decorateWritingSurfaceRun` on the *branch* (native vs layer-only) is not enough; the tokenizer's *input* has to match too (`buildAscendMarkdownEditorTextSpanForRange` takes the block text).
+**Rule going forward:** When a consumer's decorator tokenizes a range of a larger string, the projection that replaces it tokenizes that same larger string. Per-op parsing is only safe when delimiters and content are guaranteed to live in one op.
+
+## editor-architect — 2026-08-12 — A companion plan needs a named owning branch, not just a doc in `docs/plans/`
+
+**What:** Two agents forked the Homeric-paragraph companion plan 17 minutes apart and each implemented U1–U5. The merged branch was not the more advanced one. The plan document landing in `docs/plans/` was treated as a claim on the implementation; it is not.
+**Why it mattered:** HOM-12's measurements, the four "closed behind the flag" features, and the flip failure count were all taken on the unmerged duplicate. Reconciling cost more than writing the companion plan. The reusable rule is cheap: a cross-repo companion plan records one owning branch in the plan doc itself, and a second agent starting the same units treats that branch as the work, not a prompt to begin again.
+**Rule going forward:** When a plan spans two repos, the plan doc names the single implementation branch. A second session that finds the plan already in `docs/plans/` resumes that branch or stops; it does not open a parallel U1–U5.
+
+## editor-architect — 2026-08-12 — Phase 2's workarounds narrow to the blocks that stay on AppFlowy; they do not delete
+
+**What:** HOM-11's scope sentence said delete four workarounds when the journal flag flips. Measured: typing `# ` on an anchored paragraph carries both halves of the aside onto a heading, which still renders through AppFlowy. `journalAsideAnchorRunRangesIn` is a pure delta query Homeric's projection depends on. Notes and longform still mount AppFlowy paragraphs via `tightBlockComponentBuilders()`'s default-off flag.
+**Why it mattered:** Deleting the composite would make a writer's note vanish with no error after a heading conversion. Gating the journal overlay/composite to non-paragraph blocks, and leaving the shared decorator intact for other surfaces, is the actual retirement. Deletion waits for Phase 5 (HOM-7), when AppFlowy goes.
+**Rule going forward:** A workaround that is "only needed because of renderer X" is not dead when one surface leaves X. Check every block type and every surface that still mounts X before deleting. The journal flag is journal-scoped; do not thread it into `writing_surface_config.dart`.
+
 ## editor-architect — 2026-08-08 — StepMap semantics that anchor survival depends on
 
 ProseMirror's position mapping is small but exact: `[start, oldSize, newSize]` triples in old-doc coordinates, an `assoc` bias for boundary positions, four deletion flags, and `recover`/mirror machinery. Two traps: (1) `deleted` fires too eagerly for anchor-removal policies — `deletedAcross` (content removed on both sides) is the real "this anchor's content is gone" signal; (2) a block **move** expressed as delete+insert marks everything inside as `deletedAcross` — moves must register their delete/insert StepMaps as a mirror pair so positions recover into the destination, or every anchor and decoration in a moved block dies.

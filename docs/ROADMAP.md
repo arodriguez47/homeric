@@ -23,7 +23,7 @@ Phase 1's implementation plan: [`docs/plans/2026-08-08-001-feat-phase1-editor-co
 Not reasons to stop — reasons to re-scope, checked at each phase boundary:
 
 1. **Phase 1 runs past six weeks.** It is the most tractable layer and the only one provable in isolation. If it resists, the render and input layers will be worse.
-2. **Phase 2 does not land in Nexus.** The single most important signal. A Phase 2 that ends without the journal rendering paragraphs through Homeric has reproduced the failure this plan was designed against.
+2. **Phase 2 does not land in Nexus.** The single most important signal. A Phase 2 that ends without the journal rendering paragraphs through Homeric has reproduced the failure this plan was designed against. **Fired 2026-08-12:** the journal flag defaults on (`_useHomericParagraph = true`); paragraphs render through `HomericParagraph`.
 3. **Phase 3 IME stalls on one platform.** Ship the platforms that work; keep AppFlowy mounted for the one that doesn't. The flag exists for this.
 4. **Phases 0–2 take more than double their estimate.** That is the point to re-read the brainstorm's ranked options with real numbers in hand — not before, and not as a matter of taste.
 

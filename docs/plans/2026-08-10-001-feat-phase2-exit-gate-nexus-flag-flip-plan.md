@@ -1,7 +1,7 @@
 ---
 title: "feat: Phase 2 exit gate — reconcile the Nexus divergence and flip the Homeric flag"
 type: feat
-status: active
+status: completed
 date: 2026-08-10
 origin: https://linear.app/xana-studios/issue/HOM-11/exit-gate-author-land-the-nexus-companion-integration-plan-blocks
 ---

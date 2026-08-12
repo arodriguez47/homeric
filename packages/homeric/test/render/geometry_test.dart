@@ -232,21 +232,30 @@ void main() {
     });
   });
 
-  group('caret rect: trailing whitespace clamps like the framework', () {
-    testWidgets('caret past trailing spaces clamps to the content edge',
+  group('caret rect: trailing whitespace is a real caret slot', () {
+    testWidgets(
+        'caret at the end sits after trailing spaces, not at line.width',
         (tester) async {
+      // FlutterTest: every glyph including space is a 14px box, but
+      // `line.width` still excludes trailing whitespace (28 for "hi   ").
+      // TextPainter clamps to that; an editor caret must not, or typed
+      // spaces are invisible until the next non-space key.
       final source = sourceOf('hi   ');
       await tester
           .pumpWidget(harness(HomericParagraph(source: source), width: 200));
       final render = renderOf(tester);
       final line = render.layoutParagraph.getLineMetricsAt(0)!;
       final geometry = ParagraphGeometry(render);
+      final afterHi = geometry.caretRect(const DocOffset(2)).value;
       final end = geometry.caretRect(const DocOffset(5)).value;
-      // The clamp targets the line's own content width (left + width),
-      // whatever the engine reports it as for this font — pinned via the
-      // engine's own line metrics rather than a hand guess, since trailing
-      // -whitespace width handling is engine-defined.
-      expect(end.left, line.left + line.width);
+
+      expect(line.width, 28,
+          reason: 'engine still reports content width without the spaces');
+      expect(afterHi.left, 28);
+      expect(end.left, 70,
+          reason: 'MUTATION: clamping the end caret to line.width snaps '
+              'it back onto the last non-space glyph, so three typed '
+              'spaces never move the caret');
     });
   });
 

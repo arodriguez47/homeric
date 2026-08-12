@@ -47,9 +47,11 @@
 /// `_computeCaretMetrics` (GlyphInfo-based caret placement: anchor-to-
 /// leading/trailing-edge by affinity, the zero-size-placeholder recursion
 /// workaround for https://github.com/flutter/flutter/issues/120836, the
-/// end-of-text fallback) and `getOffsetForCaret`'s content-width clamp
-/// (trailing-whitespace caret behavior); `RenderEditable`'s selection box
-/// style defaults. See also `../view/view_map.dart` for the `assoc`
+/// end-of-text fallback). We deliberately do **not** reproduce
+/// `getOffsetForCaret`'s content-width clamp: that hides trailing spaces
+/// in a display `Text` widget, and Homeric is editor geometry. See
+/// [_endOfTextCaretMetrics]. `RenderEditable`'s selection box style
+/// defaults. See also `../view/view_map.dart` for the `assoc`
 /// convention this file reuses verbatim (`-1` associates with content
 /// before a position, `1` — the default — with content after it) rather
 /// than introducing a second, competing affinity vocabulary: the same
@@ -534,13 +536,16 @@ class ParagraphGeometry {
   }
 
   /// The caret at the very end of a non-empty paragraph: anchored to the
-  /// trailing edge of the last grapheme, clamped to the line's own content
-  /// width so a caret placed past trailing whitespace shows immediately
-  /// after the last visible glyph instead of past the whitespace — the
-  /// framework's documented trailing-whitespace behavior
-  /// (`TextPainter.getOffsetForCaret`'s content-width clamp), reproduced
-  /// here as a per-line clamp since Homeric has no separate paint-offset
-  /// concept to clamp against.
+  /// trailing edge of the last grapheme, **including trailing spaces**.
+  ///
+  /// `TextPainter.getOffsetForCaret` clamps to `line.width`, which the
+  /// engine reports excluding trailing whitespace. That is the right
+  /// behavior for a display `Text` widget. Homeric answers editor
+  /// geometry: a caret that snaps back to the last non-space glyph makes
+  /// typed spaces invisible until the next non-space keystroke — the
+  /// writer cannot tell they were inserted. Glyph boxes for those spaces
+  /// still have advance (`getBoxesForRange` on the last space is past
+  /// `line.width`); we follow the box, not the clamp.
   _CaretMetrics _endOfTextCaretMetrics() {
     final text = _viewText;
     // No block text ever embeds a hard line break (Homeric splits
@@ -556,11 +561,7 @@ class ParagraphGeometry {
         boxHeightStyle: ui.BoxHeightStyle.strut);
     final trailingLtr = info.writingDirection == TextDirection.ltr;
     final box = trailingLtr ? boxes.last : boxes.first;
-    final line = _paragraph.getLineMetricsAt(_paragraph.numberOfLines - 1)!;
-    final contentRight = line.left + line.width;
-    final x = trailingLtr
-        ? (box.right > contentRight ? contentRight : box.right)
-        : (box.left < line.left ? line.left : box.left);
+    final x = trailingLtr ? box.right : box.left;
     return _CaretMetrics(x: x, top: box.top, bottom: box.bottom);
   }
 

@@ -184,6 +184,10 @@ final class UnknownSlotError extends Error {
 /// that want to detect and re-query rather than crash (release builds skip
 /// the assert entirely, matching every other debug assert in this
 /// library).
+///
+/// To learn *when* to re-query rather than polling [isStale], take
+/// [HomericParagraph.onGeometryChanged] — it fires once per relayout and
+/// carries the new generation.
 final class GeometryResult<T> {
   const GeometryResult._(this._value, this.generation, this._owner);
 
@@ -241,6 +245,14 @@ final class GeometryResult<T> {
 /// discard before the next relayout: holding one across a relayout of its
 /// render object is a bug this class catches for you (debug asserts, see
 /// [_checkNotStale]), not a supported cache-reuse pattern.
+///
+/// "Discard before the next relayout" needs a way to know a relayout
+/// happened: that is [HomericParagraph.onGeometryChanged], which fires
+/// once after every layout and hands back the render object to build a
+/// fresh instance from. A consumer placing overlays — anything positioned
+/// *from* the paragraph rather than *inside* it — needs it not only to
+/// re-place on relayout but to mount at all, since geometry does not exist
+/// on the first build.
 class ParagraphGeometry {
   /// Wraps [render] — construct fresh per query burst; cheap. Captures
   /// [RenderHomericParagraph.layoutGeneration] at this exact moment (see

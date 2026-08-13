@@ -29,6 +29,13 @@
 /// * system font change → caches dropped + relayout
 ///   ([RelayoutWhenSystemFontsChangeMixin]).
 ///
+/// The matrix reads outward too: **every** relayout — and nothing else —
+/// dispatches [RenderHomericParagraph.onGeometryChanged] exactly once,
+/// deferred out of the layout phase. Paint-only rows above never reach
+/// `performLayout`, so an animated dim ticking `paintLayers` every frame
+/// cannot turn into a rebuild; and with no callback installed the signal
+/// costs one branch per layout.
+///
 /// Inline widget children (U3) follow the framework's placeholder dance,
 /// copied — not mixin-reused, because
 /// `RenderInlineChildrenContainerDefaults` assumes `PlaceholderSpan`
@@ -77,12 +84,25 @@
 /// * `flutter/lib/src/widgets/widget_span.dart` (`WidgetSpan.build`):
 ///   the `addPlaceholder` call shape (dimensions + alignment + baseline
 ///   + baselineOffset).
+/// * `flutter/lib/src/widgets/size_changed_layout_notifier.dart`
+///   (`_RenderSizeChangedWithCallback`): the notify-from-`performLayout`
+///   shape, read and deliberately **not** followed — it dispatches
+///   synchronously and skips the initial layout, and its own class doc
+///   names the resulting "backwards dependency in the frame pipeline".
+/// * `flutter/lib/src/widgets/text_selection.dart`
+///   (`SelectionOverlay.markNeedsBuild`) and
+///   `flutter/lib/src/widgets/overlay.dart` (`OverlayEntry.remove`): the
+///   `schedulerPhase == persistentCallbacks → addPostFrameCallback`
+///   deferral used instead, for [onGeometryChanged]. `RenderEditable`'s
+///   `selectionStartInViewport` is the precedent for a render object
+///   publishing a change signal an overlay consumes.
 library;
 
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
 import '../view/view_map.dart';
@@ -109,6 +129,37 @@ typedef PaintOnlyStyler = TextStyle Function(TextSegment<TextStyle> segment);
 /// Called once per slot per widget build, in slot-index (view-text)
 /// order; the slot's stable identity is [SlotSegment.spec].
 typedef SlotWidgetBuilder = Widget Function(SlotSegment<TextStyle> slot);
+
+/// Announces that [RenderHomericParagraph]'s geometry is available and
+/// current: once when a paragraph is first laid out, and once after every
+/// relayout.
+///
+/// This is the subscription half of the U4 geometry service. Every query
+/// on [ParagraphGeometry] is stamped with a layout generation and asserts
+/// when read against a newer one — but a consumer painting overlays from
+/// our geometry had no way to *observe* that generation, so it could only
+/// re-place its overlays when something else happened to rebuild it.
+/// Positioned overlays (footnote markers, hover and tap targets) therefore
+/// never mounted at all, while inline slot children — which are inside the
+/// paragraph rather than derived from its geometry — rendered on the first
+/// build.
+///
+/// [generation] is [RenderHomericParagraph.layoutGeneration] at dispatch.
+/// Stamp any geometry-derived response with it and drop the response when
+/// a newer generation arrives, rather than painting it.
+///
+/// [paragraph] is the render object, deliberately not a
+/// [ParagraphGeometry]: that class is contractually constructed fresh per
+/// query burst (it memoizes, and asserts if held across a relayout), so an
+/// instance handed over here and queried during the consumer's next build
+/// would be exactly the stale-held-instance case its guard exists to
+/// catch. Construct `ParagraphGeometry(paragraph)` at the point of use.
+///
+/// The signal is 1:1 with the layout generation advancing — "geometry is
+/// new", not "rects moved". Suppressing fires where nothing visibly moved
+/// would silently break [GeometryResult.isStale] for held results.
+typedef GeometryChangedCallback = void Function(
+    RenderHomericParagraph paragraph, int generation);
 
 /// Parent data for [RenderHomericParagraph]'s inline slot children.
 ///
@@ -201,6 +252,7 @@ class RenderHomericParagraph extends RenderBox
     PaintOnlyStyler? paintStyler,
     List<PaintLayer> paintLayers = const <PaintLayer>[],
     ParagraphSource<Object?>? semanticsSource,
+    GeometryChangedCallback? onGeometryChanged,
     List<RenderBox>? children,
   })  : assert(_checkSlotBaseline(slotAlignment, slotBaseline)),
         _source = source,
@@ -216,7 +268,11 @@ class RenderHomericParagraph extends RenderBox
             paintLayers.where((layer) => layer.band == PaintBand.underlay)),
         _overlayLayers = List<PaintLayer>.unmodifiable(
             paintLayers.where((layer) => layer.band == PaintBand.overlay)),
-        _semanticsSource = semanticsSource {
+        _semanticsSource = semanticsSource,
+        // Initializer-list assignment deliberately bypasses the setter's
+        // catch-up branch: nothing has been laid out yet, and the first
+        // performLayout dispatches on its own.
+        _onGeometryChanged = onGeometryChanged {
     addAll(children);
   }
 
@@ -471,6 +527,40 @@ class RenderHomericParagraph extends RenderBox
     markNeedsSemanticsUpdate();
   }
 
+  /// Called once after every layout, when this paragraph's geometry is
+  /// available and current. See [GeometryChangedCallback].
+  ///
+  /// **This setter invalidates nothing.** Unlike every other property on
+  /// this class it calls none of [markNeedsLayout], [markNeedsPaint], or
+  /// [markNeedsSemanticsUpdate] — installing an observer must never change
+  /// what is observed.
+  ///
+  /// It does one thing beyond assignment: on the null → non-null
+  /// transition, when a paragraph is *already* laid out, it schedules a
+  /// catch-up dispatch. A consumer whose overlay builder only becomes
+  /// non-null on a later build would otherwise install the callback with
+  /// no relayout following it and wait for an unrelated edit — the bug
+  /// this whole seam exists to fix, in miniature. A consumer passing a
+  /// freshly-built closure every build is unaffected: the previous value
+  /// was non-null, so nothing is scheduled.
+  ///
+  /// Only one observer is supported, which is deliberate — the single
+  /// owner of a [HomericParagraph] is the consumer's own block widget, and
+  /// a callback delivered through `createRenderObject` needs no
+  /// [GlobalKey] and survives a render-object swap without the consumer
+  /// holding (or leaking) a subscription. If a second observer is ever
+  /// genuinely needed, a lazily-allocated `ValueListenable<int>` can be
+  /// added on the same private dispatch point without breaking this.
+  GeometryChangedCallback? get onGeometryChanged => _onGeometryChanged;
+  GeometryChangedCallback? _onGeometryChanged;
+  set onGeometryChanged(GeometryChangedCallback? value) {
+    final wasSilent = _onGeometryChanged == null;
+    _onGeometryChanged = value;
+    if (wasSilent && value != null && hasSize && !debugNeedsLayout) {
+      _scheduleGeometryNotification();
+    }
+  }
+
   // --- Paragraph caches ---------------------------------------------------
 
   ui.Paragraph? _paragraph;
@@ -480,6 +570,7 @@ class RenderHomericParagraph extends RenderBox
   List<PlaceholderDimensions>? _intrinsicsDimensions;
   bool _rebuildForPaint = false;
   int _layoutGeneration = 0;
+  bool _geometryNotificationScheduled = false;
   bool _disposed = false;
 
   /// Content equality for a [ParagraphSource] of any style-handle type
@@ -505,6 +596,61 @@ class RenderHomericParagraph extends RenderBox
   void _markNeedsRebuild() {
     _dropParagraphs();
     markNeedsLayout();
+  }
+
+  /// Dispatches [onGeometryChanged], deferring out of the layout phase.
+  ///
+  /// A listener's natural reaction is to rebuild something, and the
+  /// framework forbids mutating render objects during
+  /// `PipelineOwner.flushLayout` (`RenderObject._debugCanPerformMutations`
+  /// asserts) — so firing straight from `performLayout` would assert the
+  /// moment a consumer touched anything outside our subtree. The
+  /// framework's own synchronous-from-layout notifier
+  /// (`_RenderSizeChangedWithCallback`) documents the same hazard as a
+  /// "backwards dependency in the frame pipeline" and sidesteps it by
+  /// skipping the *initial* layout — the opposite of what this signal must
+  /// do, since mounting first-build overlays is the whole point.
+  ///
+  /// So we use the framework's other idiom for the same problem
+  /// (`SelectionOverlay.markNeedsBuild`, `OverlayEntry.remove`): inside a
+  /// frame, hop to a post-frame callback; otherwise fire synchronously.
+  /// This costs no latency — geometry follows layout, which follows build,
+  /// so a consumer's `setState` lands in the next frame either way.
+  void _scheduleGeometryNotification() {
+    if (_onGeometryChanged == null) {
+      // Nobody listens: no closure, no allocation, no post-frame
+      // registration. This branch is the whole cost of the feature for
+      // the paragraphs that never opt in.
+      return;
+    }
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      if (_geometryNotificationScheduled) {
+        // Two layouts in one frame dispatch once, at the final
+        // generation — see _dispatchGeometryChanged.
+        return;
+      }
+      _geometryNotificationScheduled = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _geometryNotificationScheduled = false;
+        _dispatchGeometryChanged();
+      }, debugLabel: 'RenderHomericParagraph.onGeometryChanged');
+      return;
+    }
+    _dispatchGeometryChanged();
+  }
+
+  void _dispatchGeometryChanged() {
+    if (_disposed) {
+      // A post-frame callback cannot be cancelled once registered; this
+      // guard is the cancellation. Without it a queued dispatch would
+      // hand over a render object whose layoutParagraph asserts
+      // use-after-dispose.
+      return;
+    }
+    // Read live, not at schedule time, so a coalesced double-layout
+    // reports the generation a ParagraphGeometry built now would capture.
+    _onGeometryChanged?.call(this, _layoutGeneration);
   }
 
   void _dropParagraphs() {
@@ -803,6 +949,13 @@ class RenderHomericParagraph extends RenderBox
     _layoutGeneration += 1;
     size = constraints.constrain(natural);
     _positionChildren(paragraph);
+    // Last, not at the generation bump above: `size` and the children's
+    // paint offsets are only settled here, and blockRect/slotRectAt read
+    // both. This is the sole dispatch site in the class, which is what
+    // makes "a paint-only change never notifies" structural rather than a
+    // promise — paintStyler and paintLayers end in markNeedsPaint() and
+    // never reach performLayout at all.
+    _scheduleGeometryNotification();
   }
 
   /// Stamps each child's paint offset from `getBoxesForPlaceholders`
@@ -1116,6 +1269,7 @@ class RenderHomericParagraph extends RenderBox
   @override
   void dispose() {
     _disposed = true;
+    _onGeometryChanged = null;
     _dropParagraphs();
     super.dispose();
   }
@@ -1140,7 +1294,11 @@ class RenderHomericParagraph extends RenderBox
       ..add(FlagProperty('semanticsSource',
           value: _semanticsSource != null,
           ifTrue: 'independent of source',
-          ifFalse: 'reuses source'));
+          ifFalse: 'reuses source'))
+      ..add(FlagProperty('onGeometryChanged',
+          value: _onGeometryChanged != null,
+          ifTrue: 'observed',
+          ifFalse: 'unobserved'));
   }
 }
 
@@ -1161,6 +1319,39 @@ class RenderHomericParagraph extends RenderBox
 /// effective [TextScaler] is, in order: [textScaler], the source spec's
 /// scaler passthrough, the ambient [MediaQuery], or none — MediaQuery
 /// lookups live here, never in the render object.
+///
+/// ## Placing overlays from geometry
+///
+/// Anything positioned *from* the paragraph rather than *inside* it —
+/// footnote markers, hover and tap targets, a caret — cannot be placed on
+/// the first build, because geometry does not exist until after layout.
+/// Wrap the paragraph in a [Stack], take [onGeometryChanged], and rebuild
+/// the overlay children from `ParagraphGeometry(paragraph)`:
+///
+/// ```dart
+/// Stack(children: [
+///   HomericParagraph(
+///     source: source,
+///     onGeometryChanged: (paragraph, generation) {
+///       if (!mounted) return;
+///       setState(() { _paragraph = paragraph; _generation = generation; });
+///     },
+///   ),
+///   if (_paragraph != null)
+///     Positioned.fromRect(
+///       rect: ParagraphGeometry(_paragraph!).caretRect(anchor).value,
+///       child: const _Marker(),
+///     ),
+/// ])
+/// ```
+///
+/// Overlay children must be **layout-neutral** ([Positioned],
+/// [IgnorePointer], and the like). A child that participates in the
+/// surrounding layout can change this paragraph's own constraints, and a
+/// callback that rebuilds it is then a genuine relayout → notify →
+/// rebuild loop. There is no runtime detector for this: one would have to
+/// run on every layout, which would cost exactly the "free when nobody
+/// listens" guarantee the signal is built around.
 class HomericParagraph extends MultiChildRenderObjectWidget {
   /// Creates a paragraph view over [source].
   ///
@@ -1180,6 +1371,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
     this.paintStyler,
     this.paintLayers = const <PaintLayer>[],
     this.semanticsSource,
+    this.onGeometryChanged,
   })  : assert(RenderHomericParagraph._checkSlotBaseline(
             slotAlignment, slotBaseline)),
         super(children: _slotChildren(source, slotBuilder));
@@ -1242,6 +1434,12 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   /// [RenderHomericParagraph.semanticsSource].
   final ParagraphSource<Object?>? semanticsSource;
 
+  /// Called after every layout, once geometry is available and current —
+  /// the subscription half of the U4 geometry service. See
+  /// [GeometryChangedCallback] and
+  /// [RenderHomericParagraph.onGeometryChanged].
+  final GeometryChangedCallback? onGeometryChanged;
+
   TextScaler _resolveTextScaler(BuildContext context) {
     final specScaler = source.spec.textScaler;
     return textScaler ??
@@ -1262,6 +1460,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       paintStyler: paintStyler,
       paintLayers: paintLayers,
       semanticsSource: semanticsSource,
+      onGeometryChanged: onGeometryChanged,
     );
   }
 
@@ -1269,6 +1468,10 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   void updateRenderObject(
       BuildContext context, RenderHomericParagraph renderObject) {
     renderObject
+      // First in the cascade: it invalidates nothing, and its catch-up
+      // dispatch coalesces with any relayout the rest of the cascade
+      // triggers in this same frame.
+      ..onGeometryChanged = onGeometryChanged
       ..source = source
       ..baseStyle = baseStyle
       ..textAlign = textAlign
@@ -1300,6 +1503,10 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       ..add(FlagProperty('semanticsSource',
           value: semanticsSource != null,
           ifTrue: 'independent of source',
-          ifFalse: 'reuses source'));
+          ifFalse: 'reuses source'))
+      ..add(FlagProperty('onGeometryChanged',
+          value: onGeometryChanged != null,
+          ifTrue: 'observed',
+          ifFalse: 'unobserved'));
   }
 }

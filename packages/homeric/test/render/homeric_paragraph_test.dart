@@ -224,6 +224,9 @@ void main() {
     });
   });
 
+  // The outward half of the matrix — which of these triggers dispatch
+  // onGeometryChanged, and which must not — lives in
+  // `geometry_signal_test.dart`.
   group('invalidation matrix', () {
     testWidgets('width-only change relayouts the SAME paragraph',
         (tester) async {
@@ -313,7 +316,8 @@ void main() {
           tester.getSize(find.byType(HomericParagraph)), const Size(200, 20));
     });
 
-    testWidgets('textHeightBehavior suppresses first-ascent/last-descent '
+    testWidgets(
+        'textHeightBehavior suppresses first-ascent/last-descent '
         'leading', (tester) async {
       // The passthrough exists for consumers that render some blocks through
       // Homeric and some through another widget: Flutter's own `RichText`

@@ -149,10 +149,11 @@ class _BlockView extends StatefulWidget {
 }
 
 class _BlockViewState extends State<_BlockView> {
-  // Stable across rebuilds of this element (created once, unlike a key
-  // freshly allocated inside build()), so the render object it resolves
-  // to stays the same instance frame over frame.
-  final GlobalKey _paragraphKey = GlobalKey();
+  // Delivered by onGeometryChanged after every layout — which is why this
+  // widget needs no GlobalKey. The callback arrives before anything can
+  // ask for geometry, and again whenever geometry changes, so a held
+  // reference is always one a fresh ParagraphGeometry can be built from.
+  RenderHomericParagraph? _paragraph;
 
   @override
   Widget build(BuildContext context) {
@@ -166,6 +167,7 @@ class _BlockViewState extends State<_BlockView> {
     );
     final layers = _paintLayersForBlock(decorations);
     final localCaret = _caretLocalOffset();
+    final paragraph = _paragraph;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -173,18 +175,29 @@ class _BlockViewState extends State<_BlockView> {
       child: Stack(
         children: [
           HomericParagraph(
-            key: _paragraphKey,
             source: source,
             baseStyle: widget.baseStyle,
             paintLayers: layers,
             slotBuilder: (slot) => _ChipWidget(slot: slot),
+            onGeometryChanged: _handleGeometryChanged,
           ),
-          if (localCaret != null)
+          if (localCaret != null && paragraph != null)
             ..._buildCaretOverlay(
-                paragraphKey: _paragraphKey, localOffset: localCaret),
+                paragraph: paragraph, localOffset: localCaret),
         ],
       ),
     );
+  }
+
+  /// Re-places the caret overlay whenever the paragraph relayouts — a
+  /// window resize, a base-style change, an edit. The first call is what
+  /// mounts the overlay at all: on the first build there is no geometry to
+  /// position against yet.
+  void _handleGeometryChanged(RenderHomericParagraph paragraph, int _) {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _paragraph = paragraph);
   }
 
   int? _caretLocalOffset() {
@@ -198,8 +211,8 @@ class _BlockViewState extends State<_BlockView> {
   }
 
   void _handleTap(TapUpDetails details) {
-    final renderObject = _paragraphKey.currentContext?.findRenderObject();
-    if (renderObject is! RenderHomericParagraph) return;
+    final renderObject = _paragraph;
+    if (renderObject == null) return;
     final local = renderObject.globalToLocal(details.globalPosition);
     final docOffset =
         ParagraphGeometry(renderObject).positionForPoint(local).value;
@@ -266,31 +279,27 @@ List<PaintLayer> _paintLayersForBlock(List<Decoration> decorations) {
   return layers;
 }
 
-/// Computes the caret's local rect via [ParagraphGeometry] against the
-/// already-laid-out [paragraphKey] render object and returns the
-/// [Positioned] overlays for it: an exact-geometry probe (tagged
-/// [caretIndicatorKey], zero-width, matched bit-for-bit by the widget
-/// test) plus a 2px visual stroke for the running app.
+/// Computes the caret's local rect via [ParagraphGeometry] against
+/// [paragraph] and returns the [Positioned] overlays for it: an
+/// exact-geometry probe (tagged [caretIndicatorKey], zero-width, matched
+/// bit-for-bit by the widget test) plus a 2px visual stroke for the
+/// running app.
 ///
-/// Reading the sibling render object here — during this element's own
-/// build — is safe because [paragraphKey] was attached in an earlier
-/// frame (this `State`'s key is stable, see [_BlockViewState]): the
-/// paragraph's layout does not depend on the caret, so the previous
-/// frame's geometry is exactly this frame's answer too.
+/// [paragraph] comes from [HomericParagraph.onGeometryChanged], so it is
+/// laid out and current by construction — no `debugNeedsLayout` guard, and
+/// no argument about frame ordering. The [ParagraphGeometry] is built
+/// fresh here rather than held: that is the supported pattern, and the
+/// reason the callback hands back the render object.
 List<Widget> _buildCaretOverlay({
-  required GlobalKey paragraphKey,
+  required RenderHomericParagraph paragraph,
   required int localOffset,
 }) {
-  final renderObject = paragraphKey.currentContext?.findRenderObject();
-  if (renderObject is! RenderHomericParagraph ||
-      renderObject.debugNeedsLayout) {
-    return const <Widget>[];
-  }
   final Rect rect;
   try {
-    rect =
-        ParagraphGeometry(renderObject).caretRect(DocOffset(localOffset)).value;
+    rect = ParagraphGeometry(paragraph).caretRect(DocOffset(localOffset)).value;
   } on DocOffsetOutOfRangeError {
+    // A caret offset past the end of this block — a different failure
+    // from stale geometry, and still possible.
     return const <Widget>[];
   }
   return <Widget>[

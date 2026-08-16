@@ -28,6 +28,28 @@ starts with artifact, cache, environment, or focus provenance. Never assign
 ownership from geometry alone or manufacture a red test when the reported
 artifact is unavailable.
 
+## docs — 2026-08-15 — Consumers need a release-safe geometry freshness contract
+
+**What:** Nexus NEX-143 eventually reproduced only in a dart2js release build.
+Its Homeric adapter used Flutter's `RenderObject.debugNeedsLayout` as a geometry
+guard; the debug-only backing state was not initialized in release, so cursor
+queries threw before AppFlowy could paint. The consumer replaced that diagnostic
+with Flutter's public attached/sized render-object lifecycle and continued
+reconstructing Homeric geometry per query. No Homeric runtime change was
+required, and Homeric's generation signal remained scoped to overlay rebuilds.
+
+**Why it mattered:** Debug widget tests proved correct caret rectangles and
+pixels while missing the production-only exception. The document still accepted
+input, which made transaction-level smoke checks green even though the user saw
+no insertion point.
+
+**Rule going forward:** Geometry consumers must use public lifecycle APIs, never
+a framework `debug*` member, to decide whether a render object is ready.
+Consumer integration tests should include the final release compiler and inspect
+runtime errors as well as geometry and document mutations. Invalid Homeric
+geometry belongs here; a release-unsafe consumer gate remains owned by the
+consumer repository.
+
 ## editor-architect — 2026-08-13 — A generation stamp is not a subscription
 
 **What:** With the journal flag on, inline aside chips rendered and footnote markers, mention hover targets, and annotation tap targets did not. That split *is* the diagnosis, and it localizes the bug before any debugging: chips are slots **inside** the paragraph and land on the first build; everything else is a positioned overlay **derived from** geometry, and geometry does not exist until after layout. The consumer subscribed to the editor's selection notifier and its AppFlowy `Node`; neither fires after first layout, so `overlayBuilder` returned nothing and waited for a next build that only arrived if the writer happened to type in that block.

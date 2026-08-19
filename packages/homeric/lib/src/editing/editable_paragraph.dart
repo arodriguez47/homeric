@@ -849,7 +849,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   bool _canUsePointer(ParagraphGeometry geometry) =>
-      _controller.composing == null && _isCurrentGeometry(geometry);
+      _isCurrentGeometry(geometry) &&
+      (_controller.composing == null ||
+          _controller.activeBlockId != widget.blockId);
 
   void _startWordSelection(ParagraphGeometry geometry, Offset point) {
     final word = _wordForPoint(geometry, point);

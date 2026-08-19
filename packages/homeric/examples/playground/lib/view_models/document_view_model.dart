@@ -49,6 +49,9 @@ class DocumentViewModel extends ChangeNotifier {
   /// Whether an undo is available.
   bool get canUndo => editorController.canUndo;
 
+  /// Whether a redo is available.
+  bool get canRedo => editorController.canRedo;
+
   /// Whether [blockId]'s hide-delimiter decorations are currently applied.
   ///
   /// Derived on demand from [decorations] itself, rather than a
@@ -184,6 +187,9 @@ class DocumentViewModel extends ChangeNotifier {
   /// Undoes the latest keyboard, platform, debug, or decoration edit through
   /// the controller's exact snapshot history.
   bool undoLast() => editorController.undo();
+
+  /// Redoes the latest undone editor change through the same history owner.
+  bool redoLast() => editorController.redo();
 
   // --- Decorations ----------------------------------------------------------
 

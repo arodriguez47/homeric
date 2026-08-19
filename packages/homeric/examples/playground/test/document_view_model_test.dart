@@ -2,7 +2,7 @@
 // shared undo/decorations, and every block mounted as HomericEditableParagraph.
 
 import 'package:flutter/material.dart'
-    show ColoredBox, Colors, Size, Slider, Switch;
+    show ColoredBox, Colors, OutlinedButton, Size, Slider, SnackBar, Switch;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 import 'package:homeric_playground/decoration_spec.dart';
@@ -169,6 +169,20 @@ void main() {
       final vm = DocumentViewModel(document: buildFixtureDocument());
       expect(vm.canUndo, isFalse);
       expect(vm.undoLast(), isFalse);
+    });
+
+    test('redoLast restores the exact undone state', () {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      _placeCaret(vm, document.positionAt(0, 0));
+      expect(vm.insertTextAtCaret('XYZ'), isTrue);
+      final edited = vm.document;
+
+      expect(vm.undoLast(), isTrue);
+      expect(vm.canRedo, isTrue);
+      expect(vm.redoLast(), isTrue);
+      expect(vm.document, same(edited));
+      expect(vm.canRedo, isFalse);
     });
   });
 
@@ -365,6 +379,86 @@ void main() {
           isTrue);
       expect(vm.editorController.document, same(vm.document));
       expect(vm.inputSession.controller, same(vm.editorController));
+      expect(
+          editors.every((editor) => editor.spellCheckProvider != null), isTrue);
+      expect(editors.every((editor) => editor.onHostEvent != null), isTrue);
+    });
+
+    testWidgets('playground surfaces typed clipboard feedback safely',
+        (tester) async {
+      final vm = DocumentViewModel(document: buildFixtureDocument());
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      final editor = tester.widget<HomericEditableParagraph>(
+        find.byType(HomericEditableParagraph).first,
+      );
+
+      editor.onHostEvent!(const HomericPasteRejected());
+      await tester.pump();
+      expect(
+          find.text('Paste supports one paragraph at a time.'), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      editor.onHostEvent!(HomericClipboardFailure(
+        HomericClipboardOperation.copy,
+        StateError('private platform detail'),
+      ));
+      await tester.pump();
+      expect(find.text('Copy failed.'), findsOneWidget);
+      expect(find.textContaining('private platform detail'), findsNothing);
+    });
+
+    testWidgets('playground spelling fixture paints its deterministic range',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(HomericEditableParagraph).first);
+      await tester.pump();
+      await tester.pump();
+
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph).first,
+      );
+      final start = document.blocks.first.text.indexOf('Playgrond');
+      expect(start, greaterThanOrEqualTo(0));
+      expect(render.paintLayers, hasLength(1));
+      expect(render.paintLayers.single.range.start.value, start);
+      expect(render.paintLayers.single.range.end.value,
+          start + 'Playgrond'.length);
+      expect(render.paintLayers.single.band, PaintBand.overlay);
+    });
+
+    testWidgets('transaction panel exposes controller-owned undo and redo',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      _placeCaret(vm, document.positionAt(0, 0));
+      expect(vm.insertTextAtCaret('X'), isTrue);
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+
+      final undo = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'Undo'),
+      );
+      final redo = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'Redo'),
+      );
+      expect(undo.onPressed, isNotNull);
+      expect(redo.onPressed, isNull);
+      await tester.ensureVisible(find.widgetWithText(OutlinedButton, 'Undo'));
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Undo'));
+      await tester.pump();
+      expect(vm.canRedo, isTrue);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Redo'),
+            )
+            .onPressed,
+        isNotNull,
+      );
     });
 
     test('type, select, replace, delete, compose, and undo use public state',

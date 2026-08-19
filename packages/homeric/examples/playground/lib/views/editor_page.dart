@@ -13,6 +13,7 @@
 library;
 
 import 'package:flutter/material.dart' hide Decoration;
+import 'package:flutter/services.dart' show SuggestionSpan, TextRange;
 import 'package:homeric/homeric.dart';
 
 import '../decoration_spec.dart';
@@ -151,8 +152,43 @@ class _BlockView extends StatelessWidget {
       slotBuilder: (slot) => _ChipWidget(slot: slot),
       caretColor: Colors.blueAccent,
       selectionColor: const Color(0x554F64C8),
+      inactiveSelectionColor: const Color(0x224F64C8),
       composingColor: const Color(0xFF7E57C2),
+      spellCheckProvider: const _PlaygroundSpellCheckProvider(),
+      onHostEvent: (event) => _showHostEvent(context, event),
     );
+  }
+}
+
+void _showHostEvent(BuildContext context, HomericHostEvent event) {
+  final message = switch (event) {
+    HomericPasteRejected() => 'Paste supports one paragraph at a time.',
+    HomericClipboardFailure(operation: final operation) =>
+      '${switch (operation) {
+        HomericClipboardOperation.copy => 'Copy',
+        HomericClipboardOperation.cut => 'Cut',
+        HomericClipboardOperation.paste => 'Paste',
+      }} failed.',
+  };
+  ScaffoldMessenger.of(context)
+    ..removeCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
+}
+
+final class _PlaygroundSpellCheckProvider implements HomericSpellCheckProvider {
+  const _PlaygroundSpellCheckProvider();
+
+  @override
+  Future<List<SuggestionSpan>> check(HomericSpellCheckRequest request) async {
+    const misspelling = 'Playgrond';
+    final start = request.text.indexOf(misspelling);
+    if (start < 0) return const [];
+    return [
+      SuggestionSpan(
+        TextRange(start: start, end: start + misspelling.length),
+        const ['Playground'],
+      ),
+    ];
   }
 }
 

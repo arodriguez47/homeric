@@ -16,7 +16,7 @@ import 'decoration_spec.dart';
 Document buildFixtureDocument() {
   return Document([
     Block(id: 'heading', type: 'heading', runs: [
-      InlineRun('Homeric Playground'),
+      InlineRun('Homeric Playgrond'),
     ]),
     Block(id: 'intro', type: 'paragraph', runs: [
       InlineRun('This paragraph has **bold** text and a %%hidden%% '

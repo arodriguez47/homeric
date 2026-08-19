@@ -174,7 +174,14 @@ class _TransactionPanelState extends State<TransactionPanel> {
                 onPressed:
                     widget.viewModel.canUndo ? widget.viewModel.undoLast : null,
                 icon: const Icon(Icons.undo),
-                label: const Text('Undo last transaction'),
+                label: const Text('Undo'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed:
+                    widget.viewModel.canRedo ? widget.viewModel.redoLast : null,
+                icon: const Icon(Icons.redo),
+                label: const Text('Redo'),
               ),
             ]),
           ],

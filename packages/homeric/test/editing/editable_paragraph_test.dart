@@ -165,6 +165,133 @@ void main() {
     await _sendSelectors(binding, 1, const ['deleteBackward:']);
     await tester.pump();
     expect(controller.document.blocks.single.text, 'ac');
+
+    await _sendSelectors(binding, 1, const ['moveWordRight:']);
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(controller.document.blocks.single.text, 'ac');
+  });
+
+  testWidgets('focused state reuse transfers input to the replacement block',
+      (tester) async {
+    final document = Document([
+      Block(id: 'a', type: 'paragraph', runs: [InlineRun('abc')]),
+      Block(id: 'b', type: 'paragraph', runs: [InlineRun('xyz')]),
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    late StateSetter rebuild;
+    var blockId = 'a';
+
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: StatefulBuilder(builder: (context, setState) {
+        rebuild = setState;
+        return SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            key: const ValueKey('reused-editor'),
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: blockId,
+            resolveStyle: (_) => _style,
+          ),
+        );
+      }),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.activeBlockId, 'a');
+
+    rebuild(() => blockId = 'b');
+    await tester.pump();
+    expect(focusNode.hasFocus, isTrue);
+    expect(session.activeBlockId, 'b');
+    expect(controller.activeBlockId, 'b');
+
+    await _sendDeltas(binding, 2, [
+      _delta(
+        oldText: 'xyz',
+        deltaText: 'Q',
+        start: 0,
+        end: 0,
+        selection: 1,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blockById('a')!.text, 'abc');
+    expect(controller.document.blockById('b')!.text, 'Qxyz');
+  });
+
+  testWidgets('focused dependency swaps transfer connection ownership',
+      (tester) async {
+    final firstController = HomericEditorController(
+      document: _document('first'),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final secondController = HomericEditorController(
+      document: _document('second'),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final firstSession = HomericTextInputSession(controller: firstController);
+    final secondSession = HomericTextInputSession(
+      controller: secondController,
+    );
+    final firstFocus = FocusNode();
+    final secondFocus = FocusNode();
+    addTearDown(firstFocus.dispose);
+    addTearDown(secondFocus.dispose);
+    addTearDown(firstSession.dispose);
+    addTearDown(secondSession.dispose);
+    addTearDown(firstController.dispose);
+    addTearDown(secondController.dispose);
+    late StateSetter rebuild;
+    var controller = firstController;
+    var session = firstSession;
+    var focusNode = firstFocus;
+
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: StatefulBuilder(builder: (context, setState) {
+        rebuild = setState;
+        return SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            key: const ValueKey('dependency-swap-editor'),
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+          ),
+        );
+      }),
+    ));
+    firstFocus.requestFocus();
+    await tester.pump();
+    expect(firstSession.activeBlockId, 'b');
+
+    rebuild(() => focusNode = secondFocus);
+    await tester.pump();
+    expect(firstSession.activeBlockId, 'b');
+    expect(secondFocus.hasFocus, isTrue);
+
+    rebuild(() {
+      controller = secondController;
+      session = secondSession;
+    });
+    await tester.pump();
+    expect(firstSession.isAttached, isFalse);
+    expect(secondSession.activeBlockId, 'b');
+    expect(secondController.activeBlockId, 'b');
   });
 
   testWidgets('active composition leaves destructive keys to the platform',

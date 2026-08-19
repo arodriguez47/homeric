@@ -421,6 +421,6 @@ final class _EpochTextInputClient with DeltaTextInputClient {
     if (epoch != session._currentEpoch || session._disposed) return;
     final intent = intentForMacOSSelector(selectorName);
     final context = primaryFocus?.context;
-    if (intent != null && context != null) Actions.invoke(context, intent);
+    if (intent != null && context != null) Actions.maybeInvoke(context, intent);
   }
 }

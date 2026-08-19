@@ -316,6 +316,64 @@ void main() {
       expect(notifications, 2);
     });
 
+    test('later batch edits reveal decorations in shadow coordinates', () {
+      final hidden = Decoration.replace(
+        'a',
+        2,
+        4,
+        replacementLength: 0,
+      );
+      final targets = <CanonicalEditTarget>[];
+      late HomericEditorController controller;
+      controller = HomericEditorController(
+        document: Document([
+          Block(id: 'a', type: 'paragraph', runs: [InlineRun('abcdef')]),
+        ]),
+        decorations: DecorationSet.of([hidden]),
+        selection: const HomericSelection.collapsed(1),
+        onBeforeCanonicalMutation: (target) {
+          expect(controller.document.blocks.single.text, 'abcdef');
+          targets.add(target);
+        },
+      );
+
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [
+            CanonicalTextEdit(0, 0, 'XYZ'),
+            CanonicalTextEdit(5, 6, ''),
+          ],
+          selection: const BlockTextSelection.collapsed(5),
+        ),
+        isTrue,
+      );
+
+      expect(targets, const [CanonicalEditTarget('a', 2, 4)]);
+      expect(controller.document.blocks.single.text, 'XYZabdef');
+    });
+
+    test('undo history retains only the configured number of snapshots', () {
+      final controller = HomericEditorController(
+        document: Document([
+          Block(id: 'a', type: 'paragraph', runs: [InlineRun('')]),
+        ]),
+        selection: const HomericSelection.collapsed(1),
+        maxUndoDepth: 2,
+      );
+
+      expect(controller.replaceSelection('a'), isTrue);
+      expect(controller.replaceSelection('b'), isTrue);
+      expect(controller.replaceSelection('c'), isTrue);
+      expect(controller.document.blocks.single.text, 'abc');
+
+      expect(controller.undo(), isTrue);
+      expect(controller.document.blocks.single.text, 'ab');
+      expect(controller.undo(), isTrue);
+      expect(controller.document.blocks.single.text, 'a');
+      expect(controller.undo(), isFalse);
+    });
+
     test('selection-only batch preserves reverse direction and affinity', () {
       final doc = _document(['abcd']);
       final controller = HomericEditorController(

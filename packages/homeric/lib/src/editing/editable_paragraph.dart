@@ -141,18 +141,42 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   void didUpdateWidget(HomericEditableParagraph oldWidget) {
     super.didUpdateWidget(oldWidget);
     _validateSession();
-    if (!identical(oldWidget.controller, widget.controller)) {
+    final hadFocus = _focusNode.hasFocus;
+    final controllerChanged =
+        !identical(oldWidget.controller, widget.controller);
+    final sessionChanged =
+        !identical(oldWidget.inputSession, widget.inputSession);
+    final blockChanged = oldWidget.blockId != widget.blockId;
+    final focusNodeChanged = !identical(oldWidget.focusNode, widget.focusNode);
+    if (hadFocus &&
+        (controllerChanged ||
+            sessionChanged ||
+            blockChanged ||
+            focusNodeChanged)) {
+      oldWidget.inputSession.blur();
+    }
+    if (controllerChanged) {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
     }
-    if (!identical(oldWidget.focusNode, widget.focusNode)) {
+    if (focusNodeChanged) {
       if (oldWidget.focusNode == null) _focusNode.dispose();
       _focusNode = widget.focusNode ?? FocusNode();
+      if (hadFocus) _focusNode.requestFocus();
     }
-    if (!identical(oldWidget.inputSession, widget.inputSession) &&
-        _focusNode.hasFocus) {
-      oldWidget.inputSession.blur();
-      widget.inputSession.attach(blockId: widget.blockId);
+    if (hadFocus &&
+        _focusNode.hasFocus &&
+        (controllerChanged ||
+            sessionChanged ||
+            blockChanged ||
+            focusNodeChanged)) {
+      if (_controller.document.indexOfBlockId(widget.blockId) != null) {
+        if (_controller.activeBlockId != widget.blockId) {
+          _relocate(0, 0);
+        } else {
+          widget.inputSession.attach(blockId: widget.blockId);
+        }
+      }
     }
   }
 

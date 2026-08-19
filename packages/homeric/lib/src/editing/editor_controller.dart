@@ -180,12 +180,20 @@ class HomericEditorController extends ChangeNotifier {
     HomericSelection? selection,
     HomericTextRange? composing,
     double? preferredX,
+    this.maxUndoDepth = 100,
     this.onBeforeCanonicalMutation,
   })  : _document = document,
         _decorations = decorations,
         _selection = selection,
         _composing = composing,
         _preferredX = preferredX {
+    if (maxUndoDepth < 1) {
+      throw ArgumentError.value(
+        maxUndoDepth,
+        'maxUndoDepth',
+        'must be at least 1',
+      );
+    }
     if (!_isValidSelection(document, selection)) {
       throw ArgumentError.value(selection, 'selection',
           'endpoints must resolve inside the same block');
@@ -212,6 +220,9 @@ class HomericEditorController extends ChangeNotifier {
   /// grapheme being removed. A host can therefore reveal the projection
   /// before accepting the canonical mutation.
   final ValueChanged<CanonicalEditTarget>? onBeforeCanonicalMutation;
+
+  /// Maximum number of committed editor snapshots retained for undo.
+  final int maxUndoDepth;
 
   /// Current canonical document.
   Document get document => _document;
@@ -408,7 +419,9 @@ class HomericEditorController extends ChangeNotifier {
         if (currentIndex == null) return false;
         final block = tx.doc.blocks[currentIndex];
         if (!_validEdit(edit, block.contentLength)) return false;
-        revealTargets.addAll(_hiddenTargets(blockId, edit.start, edit.end));
+        revealTargets.addAll(
+          _hiddenTargets(tx, blockId, edit.start, edit.end),
+        );
         if (edit.start == edit.end && edit.text.isEmpty) continue;
         _replaceBlockText(tx, currentIndex, edit);
       }
@@ -473,7 +486,7 @@ class HomericEditorController extends ChangeNotifier {
       _compositionDidEdit = _compositionDidEdit || tx.docChanged;
       if (composing == null) _finishComposition(notify: false);
     } else if (tx.docChanged) {
-      _undoStack.add(before);
+      _pushUndo(before);
     }
     notifyListeners();
     return true;
@@ -502,7 +515,7 @@ class HomericEditorController extends ChangeNotifier {
     )
         ? mappedComposing
         : null;
-    _undoStack.add(before);
+    _pushUndo(before);
     notifyListeners();
     return true;
   }
@@ -520,7 +533,7 @@ class HomericEditorController extends ChangeNotifier {
     }
     final before = _snapshot();
     _decorations = value;
-    _undoStack.add(before);
+    _pushUndo(before);
     notifyListeners();
     return true;
   }
@@ -544,7 +557,7 @@ class HomericEditorController extends ChangeNotifier {
   bool _finishComposition({required bool notify}) {
     final start = _compositionStart;
     if (start == null && _composing == null) return false;
-    if (start != null && _compositionDidEdit) _undoStack.add(start);
+    if (start != null && _compositionDidEdit) _pushUndo(start);
     _compositionStart = null;
     _compositionDidEdit = false;
     _composing = null;
@@ -613,16 +626,33 @@ class HomericEditorController extends ChangeNotifier {
     return block.runs.last.attributes;
   }
 
+  void _pushUndo(_EditorSnapshot snapshot) {
+    _undoStack.add(snapshot);
+    final overflow = _undoStack.length - maxUndoDepth;
+    if (overflow > 0) {
+      _undoStack.removeRange(0, overflow);
+    }
+  }
+
   Iterable<CanonicalEditTarget> _hiddenTargets(
+    Transaction tx,
     String blockId,
     int start,
     int end,
   ) sync* {
-    if (start == end) return;
+    if (start == end) {
+      return;
+    }
     for (final decoration in _decorations.forBlock(blockId)) {
-      if (decoration.kind != DecorationKind.replace ||
-          decoration.end <= start ||
-          decoration.start >= end) {
+      if (decoration.kind != DecorationKind.replace) {
+        continue;
+      }
+      final mapped = DecorationSet.of([decoration])
+          .map(tx.mapping, tx.changes)
+          .forBlock(blockId);
+      if (mapped.isEmpty ||
+          mapped.single.end <= start ||
+          mapped.single.start >= end) {
         continue;
       }
       yield CanonicalEditTarget(

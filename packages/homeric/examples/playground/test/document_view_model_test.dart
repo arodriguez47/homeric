@@ -348,6 +348,21 @@ void main() {
 
       expect(find.byType(HomericEditableParagraph),
           findsNWidgets(document.blockCount));
+      final editors = tester.widgetList<HomericEditableParagraph>(
+        find.byType(HomericEditableParagraph),
+      );
+      expect(
+          editors.every((editor) => identical(
+                editor.controller,
+                vm.editorController,
+              )),
+          isTrue);
+      expect(
+          editors.every((editor) => identical(
+                editor.inputSession,
+                vm.inputSession,
+              )),
+          isTrue);
       expect(vm.editorController.document, same(vm.document));
       expect(vm.inputSession.controller, same(vm.editorController));
     });

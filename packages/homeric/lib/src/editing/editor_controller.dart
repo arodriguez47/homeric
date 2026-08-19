@@ -507,6 +507,24 @@ class HomericEditorController extends ChangeNotifier {
     return true;
   }
 
+  /// Replaces the canonical decoration set as one undoable editor change.
+  ///
+  /// Decoration-only consumer controls use this instead of retaining a
+  /// parallel decoration set beside the controller. An active composition is
+  /// committed first, and [undo] restores the exact prior editor snapshot.
+  bool replaceDecorations(DecorationSet value) {
+    final compositionChanged = _finishComposition(notify: false);
+    if (identical(value, _decorations)) {
+      if (compositionChanged) notifyListeners();
+      return compositionChanged;
+    }
+    final before = _snapshot();
+    _decorations = value;
+    _undoStack.add(before);
+    notifyListeners();
+    return true;
+  }
+
   /// Applies the composition policy for [event].
   bool interruptComposition(CompositionInterruption event) {
     if (event == CompositionInterruption.staleEpoch) return false;

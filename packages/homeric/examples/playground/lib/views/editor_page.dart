@@ -1,8 +1,8 @@
-/// The editor page: a `ListView` of [HomericParagraph] views over the
+/// The editor page: a `ListView` of [HomericEditableParagraph] views over the
 /// current document (R8), with per-build style resolution from a small
 /// in-page theme (R7 — no special plumbing, just calling [resolveStyle]
-/// with the current theme each build) and a tap-to-place caret display
-/// driven by [ParagraphGeometry] (U4).
+/// with the current theme each build). Every paragraph is an editing entry
+/// point backed by the same controller and epoch-bound input session.
 ///
 /// This is the "view" side of the flutter-architecture MVVM split: no
 /// business logic lives here — every widget either reads
@@ -17,12 +17,6 @@ import 'package:homeric/homeric.dart';
 
 import '../decoration_spec.dart';
 import '../view_models/document_view_model.dart';
-
-/// The key the caret's exact-geometry indicator carries — read by
-/// `test/document_view_model_test.dart` to cross-check
-/// [ParagraphGeometry.caretRect] end to end against what tapping actually
-/// produces on screen.
-const Key caretIndicatorKey = ValueKey('caret-indicator');
 
 /// Renders [viewModel]'s document as a scrolling list of blocks.
 class EditorPage extends StatefulWidget {
@@ -130,9 +124,8 @@ class _ThemeBar extends StatelessWidget {
   }
 }
 
-/// One block's paragraph, with tap-to-place caret and per-block decoration
-/// derivation.
-class _BlockView extends StatefulWidget {
+/// One block's public editable host with per-block paint derivation.
+class _BlockView extends StatelessWidget {
   const _BlockView({
     super.key,
     required this.viewModel,
@@ -145,70 +138,21 @@ class _BlockView extends StatefulWidget {
   final TextStyle baseStyle;
 
   @override
-  State<_BlockView> createState() => _BlockViewState();
-}
-
-class _BlockViewState extends State<_BlockView> {
-  // Retained only for tap hit-testing. ParagraphOverlay owns the geometry
-  // subscription and overlay rebuild lifecycle.
-  RenderHomericParagraph? _paragraph;
-
-  @override
   Widget build(BuildContext context) {
-    final decorations = widget.viewModel.decorations.forBlock(widget.block.id);
-    final reveal = widget.viewModel.revealStateForBlock(widget.block.id);
-    final source = ParagraphSource.build(
-      block: widget.block,
-      decorations: decorations,
-      reveal: reveal,
-      resolveStyle: (run) => _resolveRunStyle(run, widget.baseStyle),
-    );
+    final decorations = viewModel.decorations.forBlock(block.id);
     final layers = _paintLayersForBlock(decorations);
-    final localCaret = _caretLocalOffset();
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapUp: _handleTap,
-      child: ParagraphOverlay(
-        paragraph: HomericParagraph(
-          source: source,
-          baseStyle: widget.baseStyle,
-          paintLayers: layers,
-          slotBuilder: (slot) => _ChipWidget(slot: slot),
-          onGeometryChanged: (render, _) => _paragraph = render,
-        ),
-        // Chip identity and dimensions are derived entirely from `source`.
-        slotLayoutRevision: null,
-        overlayBuilder: (context, geometry) => localCaret == null
-            ? const <Widget>[]
-            : _buildCaretOverlay(
-                geometry: geometry,
-                localOffset: localCaret,
-              ),
-      ),
+    return HomericEditableParagraph(
+      controller: viewModel.editorController,
+      inputSession: viewModel.inputSession,
+      blockId: block.id,
+      baseStyle: baseStyle,
+      resolveStyle: (run) => _resolveRunStyle(run, baseStyle),
+      paintLayers: layers,
+      slotBuilder: (slot) => _ChipWidget(slot: slot),
+      caretColor: Colors.blueAccent,
+      selectionColor: const Color(0x554F64C8),
+      composingColor: const Color(0xFF7E57C2),
     );
-  }
-
-  int? _caretLocalOffset() {
-    final caret = widget.viewModel.caret;
-    if (caret == null) return null;
-    final resolved = widget.viewModel.document.resolve(caret);
-    if (resolved is! InlinePosition || resolved.block.id != widget.block.id) {
-      return null;
-    }
-    return resolved.offset;
-  }
-
-  void _handleTap(TapUpDetails details) {
-    final renderObject = _paragraph;
-    if (renderObject == null) return;
-    final local = renderObject.globalToLocal(details.globalPosition);
-    final docOffset =
-        ParagraphGeometry(renderObject).positionForPoint(local).value;
-    final document = widget.viewModel.document;
-    final index = document.indexOfBlockId(widget.block.id);
-    if (index == null) return;
-    widget.viewModel.placeCaretAt(document.positionAt(index, docOffset.value));
   }
 }
 
@@ -266,43 +210,6 @@ List<PaintLayer> _paintLayersForBlock(List<Decoration> decorations) {
     }
   }
   return layers;
-}
-
-/// Computes the caret's local rect through current [geometry] and returns
-/// the [Positioned] overlays for it: an
-/// exact-geometry probe (tagged [caretIndicatorKey], zero-width, matched
-/// bit-for-bit by the widget test) plus a 2px visual stroke for the
-/// running app.
-///
-/// [geometry] comes from [ParagraphOverlay], so it is laid out and current
-/// by construction — no `debugNeedsLayout` guard or frame-ordering argument.
-List<Widget> _buildCaretOverlay({
-  required ParagraphGeometry geometry,
-  required int localOffset,
-}) {
-  final Rect rect;
-  try {
-    rect = geometry.caretRect(DocOffset(localOffset)).value;
-  } on DocOffsetOutOfRangeError {
-    // A caret offset past the end of this block — a different failure
-    // from stale geometry, and still possible.
-    return const <Widget>[];
-  }
-  return <Widget>[
-    Positioned.fromRect(
-      rect: rect,
-      child: const IgnorePointer(
-        child: ColoredBox(key: caretIndicatorKey, color: Colors.transparent),
-      ),
-    ),
-    Positioned(
-      left: rect.left - 1,
-      top: rect.top,
-      width: 2,
-      height: rect.height == 0 ? 16 : rect.height,
-      child: const IgnorePointer(child: ColoredBox(color: Colors.blueAccent)),
-    ),
-  ];
 }
 
 /// The widget rendered for a widget-chip decoration's placeholder slot.

@@ -1,16 +1,14 @@
-// DocumentViewModel (U7): every Phase 1 builder command wrapped as a
-// view-model method, undo via Step.invert, decoration add/remove/toggle,
-// reveal-on-selection (R10), and a widget-level cross-check of the
-// tap-to-place caret display against ParagraphGeometry (U4) directly —
-// the plan's required end-to-end proof.
+// Playground integration: Phase 1 debug commands, public canonical editing,
+// shared undo/decorations, and every block mounted as HomericEditableParagraph.
 
+import 'package:flutter/material.dart'
+    show ColoredBox, Colors, Size, Slider, Switch;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 import 'package:homeric_playground/decoration_spec.dart';
 import 'package:homeric_playground/fixtures.dart';
 import 'package:homeric_playground/main.dart';
 import 'package:homeric_playground/view_models/document_view_model.dart';
-import 'package:homeric_playground/views/editor_page.dart';
 
 /// Deep, value-level document equality. [Document]/[Block]/[InlineRun] use
 /// identity equality by design (structural sharing relies on it), so undo
@@ -113,7 +111,7 @@ void main() {
     });
   });
 
-  group('undo restores the prior document via Step.invert (R3 live)', () {
+  group('controller undo restores exact shared editor state', () {
     test('undoLast restores the document by deep equality', () {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(document: document);
@@ -315,9 +313,9 @@ void main() {
     });
   });
 
-  group('widget integration: tap-to-place caret matches U4 geometry', () {
+  group('widget integration: public editable paragraphs', () {
     testWidgets(
-        'tapping a paragraph places the caret exactly where ParagraphGeometry says',
+        'tapping a paragraph places canonical selection through its geometry',
         (tester) async {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(
@@ -327,7 +325,11 @@ void main() {
       await tester.pumpWidget(PlaygroundApp(viewModel: vm));
       await tester.pumpAndSettle();
 
-      final paragraphFinder = find.byType(HomericParagraph).first;
+      final editableFinder = find.byType(HomericEditableParagraph).first;
+      final paragraphFinder = find.descendant(
+        of: editableFinder,
+        matching: find.byType(HomericParagraph),
+      );
       final renderObject =
           tester.renderObject<RenderHomericParagraph>(paragraphFinder);
       final topLeft = tester.getTopLeft(paragraphFinder);
@@ -343,19 +345,154 @@ void main() {
           ParagraphGeometry(renderObject).positionForPoint(localTap).value;
       final expectedGlobalPosition =
           document.positionAt(0, expectedDocOffset.value);
-      expect(vm.caret, expectedGlobalPosition);
+      expect(vm.editorController.selection,
+          HomericSelection.collapsed(expectedGlobalPosition));
+      expect(vm.inputSession.activeBlockId, document.blocks.first.id);
+    });
+  });
 
-      final expectedLocalRect = ParagraphGeometry(renderObject)
-          .caretRect(DocOffset(expectedDocOffset.value))
-          .value;
-      final expectedGlobalRect =
-          expectedLocalRect.shift(renderObject.localToGlobal(Offset.zero));
+  group('HOM-18 public editing integration', () {
+    testWidgets(
+        'every paragraph uses the shared controller and one input session',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(
+        document: document,
+        decorations: buildFixtureDecorations(document),
+      );
 
-      final indicatorRect = tester.getRect(find.byKey(caretIndicatorKey));
-      expect(indicatorRect.left, closeTo(expectedGlobalRect.left, 0.01));
-      expect(indicatorRect.top, closeTo(expectedGlobalRect.top, 0.01));
-      expect(indicatorRect.right, closeTo(expectedGlobalRect.right, 0.01));
-      expect(indicatorRect.bottom, closeTo(expectedGlobalRect.bottom, 0.01));
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomericEditableParagraph),
+          findsNWidgets(document.blockCount));
+      expect(vm.editorController.document, same(vm.document));
+      expect(vm.inputSession.controller, same(vm.editorController));
+    });
+
+    test('type, select, replace, delete, compose, and undo use public state',
+        () {
+      final document = Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('abc')]),
+      ]);
+      final vm = DocumentViewModel(document: document);
+      final editor = vm.editorController;
+
+      vm.placeCaretAt(document.positionAt(0, 1));
+      expect(editor.replaceSelection('X'), isTrue);
+      expect(editor.document.blocks.single.text, 'aXbc');
+
+      editor.relocateSelection(HomericSelection(
+        anchor: editor.globalPositionForBlockOffset('a', 1),
+        head: editor.globalPositionForBlockOffset('a', 3),
+      ));
+      expect(editor.replaceSelection('Y'), isTrue);
+      expect(editor.document.blocks.single.text, 'aYc');
+      expect(editor.deleteBackward(), isTrue);
+      expect(editor.document.blocks.single.text, 'ac');
+      expect(vm.undoLast(), isTrue);
+      expect(editor.document.blocks.single.text, 'aYc');
+
+      expect(
+        editor.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [CanonicalTextEdit(1, 1, 'é')],
+          selection: const BlockTextSelection.collapsed(2),
+          composing: const BlockTextRange(1, 2),
+        ),
+        isTrue,
+      );
+      expect(editor.composing, isNotNull);
+      expect(
+        editor.applyBlockEditBatch(
+          blockId: 'a',
+          selection: const BlockTextSelection.collapsed(2),
+        ),
+        isTrue,
+      );
+      expect(editor.composing, isNull);
+      expect(editor.document.blocks.single.text, 'aéYc');
+      expect(vm.undoLast(), isTrue);
+      expect(editor.document.blocks.single.text, 'aYc');
+    });
+
+    testWidgets(
+        'theme, font geometry, window width, and hide changes keep selection',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1200, 800);
+      addTearDown(tester.view.reset);
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(
+        document: document,
+        decorations: buildFixtureDecorations(document),
+      );
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(HomericEditableParagraph).first);
+      await tester.pumpAndSettle();
+      final selection = vm.editorController.selection;
+      final activeBlock = vm.inputSession.activeBlockId;
+
+      await tester.tap(find.byType(Switch));
+      await tester.drag(find.byType(Slider), const Offset(80, 0));
+      vm.toggleHideDelimiters('intro');
+      tester.view.physicalSize = const Size(1320, 800);
+      await tester.pumpAndSettle();
+
+      expect(vm.editorController.selection, selection);
+      expect(vm.inputSession.activeBlockId, activeBlock);
+      expect(vm.isHidingDelimiters('intro'), isTrue);
+    });
+
+    testWidgets(
+        'block switch commits composition and leaves one active caret overlay',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      final editor = vm.editorController;
+      vm.placeCaretAt(document.positionAt(0, 1));
+      vm.inputSession.attach(blockId: document.blocks.first.id);
+      expect(
+        editor.applyBlockEditBatch(
+          blockId: document.blocks.first.id,
+          edits: const [CanonicalTextEdit(1, 1, 'x')],
+          selection: const BlockTextSelection.collapsed(2),
+          composing: const BlockTextRange(1, 2),
+        ),
+        isTrue,
+      );
+
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(HomericEditableParagraph).at(1));
+      await tester.pumpAndSettle();
+
+      expect(editor.composing, isNull);
+      expect(editor.document.blocks.first.text, startsWith('Hxomeric'));
+      expect(editor.activeBlockId, document.blocks[1].id);
+      expect(vm.inputSession.activeBlockId, document.blocks[1].id);
+      expect(
+        find.byWidgetPredicate((widget) =>
+            widget is ColoredBox && widget.color == Colors.blueAccent),
+        findsOneWidget,
+      );
+    });
+
+    test('debug controls and editor input share one undo pipeline', () {
+      final document = Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('abc')]),
+      ]);
+      final vm = DocumentViewModel(document: document);
+      vm.placeCaretAt(document.positionAt(0, 1));
+
+      expect(vm.insertTextAtCaret('D'), isTrue);
+      expect(vm.editorController.replaceSelection('K'), isTrue);
+      expect(vm.document.blocks.single.text, 'aDKbc');
+      expect(vm.undoLast(), isTrue);
+      expect(vm.document.blocks.single.text, 'aDbc');
+      expect(vm.undoLast(), isTrue);
+      expect(vm.document, same(document));
     });
   });
 }

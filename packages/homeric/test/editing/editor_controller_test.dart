@@ -254,6 +254,34 @@ void main() {
       expect(controller.decorations.forBlock('a').single.start, 3);
       expect(notifications, 1);
     });
+
+    test('decoration replacement is observable and exactly undoable', () {
+      final doc = _document(['abcd']);
+      final before = DecorationSet.of([Decoration.inline('a', 0, 1)]);
+      final after = before.add([Decoration.inline('a', 2, 4)]);
+      final selection = HomericSelection.collapsed(doc.positionAt(0, 2));
+      final controller = HomericEditorController(
+        document: doc,
+        decorations: before,
+        selection: selection,
+      );
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      expect(controller.replaceDecorations(after), isTrue);
+      expect(controller.document, same(doc));
+      expect(controller.decorations, same(after));
+      expect(controller.selection, selection);
+      expect(notifications, 1);
+
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(doc));
+      expect(controller.decorations, same(before));
+      expect(controller.selection, selection);
+      expect(notifications, 2);
+      expect(controller.replaceDecorations(before), isFalse);
+      expect(notifications, 2);
+    });
   });
 
   group('atomic batches, composition, and undo', () {

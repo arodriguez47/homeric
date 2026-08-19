@@ -16,6 +16,26 @@ Canonical tracking lives in Linear (team **Homeric**, epic [HOM-1](https://linea
 
 Phase 1's implementation plan: [`docs/plans/2026-08-08-001-feat-phase1-editor-core-plan.md`](plans/2026-08-08-001-feat-phase1-editor-core-plan.md). The benchmark harness and `.github/workflows/benchmark.yaml` return in Phase 4, wired against [`PERF_BUDGET.md`](PERF_BUDGET.md)'s fixtures and 5% regression gate.
 
+### Phase 3 status — macOS-first foundation
+
+[HOM-18](https://linear.app/xana-studios/issue/HOM-18) now has a local,
+automated playground integration for one active editable block at a time:
+canonical directional selection, grapheme deletion, visual navigation,
+epoch-bound delta input, composition grouping, pointer/keyboard interactions,
+editable paint/semantics, and a shared undo pipeline. Every playground
+paragraph can become active, while cross-block selection and structural input
+remain outside this slice. A real macOS acceptance pass is still required, and
+Windows/Linux behavior is explicitly unverified.
+
+Deferred Phase 3 slices are tracked rather than hidden in the foundation:
+[HOM-19](https://linear.app/xana-studios/issue/HOM-19) owns desktop clipboard,
+history/word gestures, and native menus;
+[HOM-20](https://linear.app/xana-studios/issue/HOM-20) owns touch selection and
+mobile gestures; [HOM-21](https://linear.app/xana-studios/issue/HOM-21) owns
+cross-platform IME certification. Multi-block editing remains
+[HOM-6](https://linear.app/xana-studios/issue/HOM-6), and Nexus parity/default
+switching remains [HOM-7](https://linear.app/xana-studios/issue/HOM-7).
+
 > **Phase 2's deliverable used to read "All four workarounds die."** It was measured and it is wrong. Three of the four are reached through AppFlowy's editor-wide `textSpanDecorator`, which is not gated on block type, and an aside anchor survives a `# ` conversion onto a heading — so the machinery stays reachable for the block types that remain on AppFlowy. A fourth, `journalAsideAnchorRunRangesIn`, turned out to be a pure delta query the Homeric projection itself depends on. What Phase 2 actually delivers is that the **paragraph path** stops using them; the deletion waits for Phase 5 (HOM-7), when AppFlowy goes. Pinned by `nexus/test/widgets/journal_aside_block_type_test.dart`.
 
 ## Checkpoints

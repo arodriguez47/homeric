@@ -1,6 +1,6 @@
-/// Homeric playground entry point (U7): a runnable Flutter app rendering
-/// documents through [HomericParagraph] and driving every Phase 1/2 editing
-/// primitive by hand, importing only `package:homeric/homeric.dart`.
+/// Homeric playground entry point: a runnable Flutter app editing every block
+/// through the public experimental controller, input session, and editable
+/// paragraph APIs while retaining the Phase 1/2 debug controls.
 library;
 
 import 'package:flutter/material.dart' hide Decoration;

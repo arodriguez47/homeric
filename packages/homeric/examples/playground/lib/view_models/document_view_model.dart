@@ -1,18 +1,12 @@
-/// The playground's one [ChangeNotifier]: owns the document, the
-/// decoration set, a tap-to-place caret stub, and undo history, and
-/// exposes every Phase 1 transaction builder plus decoration
-/// add/remove/toggle as commands.
+/// The playground adapter around one public [HomericEditorController] and one
+/// shared [HomericTextInputSession].
 ///
 /// Deliberately free of Flutter/`dart:ui` types (no [Color], no
 /// [TextStyle]) — this is the "model" side of the flutter-architecture
 /// skill's MVVM split; `views/` resolves style/paint from theme + the
 /// [PlaygroundSpec] kinds this file's decorations carry. Every mutating
-/// method funnels through [_run], which wraps exactly one [Transaction]
-/// per call and calls [notifyListeners] exactly once, only when the
-/// transaction actually changed the document — commands on an empty
-/// document or a degenerate range fail the builder's own validation (or
-/// its own documented no-op, e.g. `deleteRange` on an empty range) and
-/// return `false` as a value; nothing throws out to the UI.
+/// method funnels through the same controller transaction and undo pipeline
+/// used by keyboard, pointer, semantics, and platform composition input.
 library;
 
 import 'package:flutter/foundation.dart';
@@ -20,57 +14,44 @@ import 'package:homeric/homeric.dart';
 
 import '../decoration_spec.dart';
 
-/// One committed transaction's undo record: the transaction itself (for
-/// [Step.invert]-based document undo — the plan's explicit ask to exercise
-/// Phase 1's R3 invert guarantee live) plus the decoration set and caret
-/// snapshotted immediately before it, restored verbatim on undo.
-///
-/// Decorations are restored by snapshot rather than by inverse-mapping
-/// them through the transaction: [DecorationSet.map] is a forward-mapping
-/// operation (document edit → re-anchored decorations) with no declared
-/// inverse, and a snapshot is exactly correct and cheap (the set shares
-/// untouched shards by reference with every other version).
-final class _UndoEntry {
-  _UndoEntry(this.tx, this.decorationsBefore, this.caretBefore);
-
-  final Transaction tx;
-  final DecorationSet decorationsBefore;
-  final int? caretBefore;
-}
-
-/// Owns `(Document, DecorationSet, caret)` and exposes every Phase 1
-/// builder, decoration commands, and undo as methods views call in
-/// response to user input.
+/// Exposes the playground's debug commands without duplicating editor state.
 class DocumentViewModel extends ChangeNotifier {
   /// Creates a view-model starting from [document] and [decorations].
   DocumentViewModel({
     required Document document,
     DecorationSet decorations = DecorationSet.empty,
-  })  : _document = document,
-        _decorations = decorations;
+  }) {
+    editorController = HomericEditorController(
+      document: document,
+      decorations: decorations,
+    );
+    inputSession = HomericTextInputSession(controller: editorController);
+    editorController.addListener(_editorChanged);
+  }
 
-  Document _document;
-  DecorationSet _decorations;
-  int? _caret;
-  final List<_UndoEntry> _undoStack = <_UndoEntry>[];
+  /// The sole owner of document, decorations, selection, composition, and
+  /// undo state used by the playground.
+  late final HomericEditorController editorController;
+
+  /// The one epoch-bound platform input session shared by every paragraph.
+  late final HomericTextInputSession inputSession;
 
   /// The current document.
-  Document get document => _document;
+  Document get document => editorController.document;
 
   /// The current decoration set.
-  DecorationSet get decorations => _decorations;
+  DecorationSet get decorations => editorController.decorations;
 
-  /// The tap-to-place caret, as a global document position, or `null` when
-  /// nothing has been tapped yet. This is a display/anchor stub, not a
-  /// real selection — Phase 3 owns selection gestures.
-  int? get caret => _caret;
+  /// Compatibility name used by the debug panel for the active selection
+  /// head. Selection remains canonical controller state.
+  int? get caret => editorController.selection?.head;
 
   /// Whether an undo is available.
-  bool get canUndo => _undoStack.isNotEmpty;
+  bool get canUndo => editorController.canUndo;
 
   /// Whether [blockId]'s hide-delimiter decorations are currently applied.
   ///
-  /// Derived on demand from [_decorations] itself, rather than a
+  /// Derived on demand from [decorations] itself, rather than a
   /// separately-tracked flag: a flag can drift out of sync with the
   /// decoration set whenever something other than [toggleHideDelimiters]
   /// changes it wholesale — [undoLast] restoring a decoration snapshot is
@@ -80,31 +61,29 @@ class DocumentViewModel extends ChangeNotifier {
   /// state). Scanning is cheap: `forBlock` is already a per-block view and
   /// a block carries only a handful of decorations.
   bool isHidingDelimiters(String blockId) =>
-      _decorations.forBlock(blockId).any((d) =>
+      decorations.forBlock(blockId).any((d) =>
           d.kind == DecorationKind.replace &&
           d.spec is PlaygroundSpec &&
           (d.spec! as PlaygroundSpec).kind ==
               PlaygroundDecorationKind.hideMarker);
 
-  // --- Caret (display-only stub; R10 demo input) --------------------------
+  // --- Selection compatibility for the debug panel ------------------------
 
   /// Places the caret at document [position]. No-ops on an out-of-range
   /// position instead of throwing (positions come from tap geometry, which
   /// is always in range for the block it queried, but a stale/foreign
   /// value should never crash the view-model).
   void placeCaretAt(int position) {
-    if (position < 0 || position > _document.size || position == _caret) {
-      return;
-    }
-    _caret = position;
-    notifyListeners();
+    if (position < 0 || position > document.size) return;
+    final resolved = document.resolve(position);
+    if (resolved is! InlinePosition) return;
+    editorController.relocateSelection(HomericSelection.collapsed(position));
   }
 
   /// Clears the caret (nothing tapped / focus lost).
   void clearCaret() {
-    if (_caret == null) return;
-    _caret = null;
-    notifyListeners();
+    inputSession.blur();
+    editorController.setSelection(null, resetPreferredX: true);
   }
 
   /// The [RevealState] for [blockId]'s derivation this frame (R10): reveals
@@ -113,15 +92,15 @@ class DocumentViewModel extends ChangeNotifier {
   /// mechanism `MarkerRevealController` becomes. Every other block gets
   /// [RevealState.none].
   RevealState revealStateForBlock(String blockId) {
-    final caret = _caret;
+    final caret = this.caret;
     if (caret == null) return RevealState.none;
-    final resolved = _document.resolve(caret);
+    final resolved = document.resolve(caret);
     if (resolved is! InlinePosition || resolved.block.id != blockId) {
       return RevealState.none;
     }
     final local = resolved.offset;
     final revealed = <Decoration>[
-      for (final d in _decorations.forBlock(blockId))
+      for (final d in decorations.forBlock(blockId))
         if (d.kind == DecorationKind.replace &&
             d.start <= local &&
             local <= d.end)
@@ -144,7 +123,7 @@ class DocumentViewModel extends ChangeNotifier {
   /// [notifyListeners] call — only a transaction that actually changed the
   /// document notifies, and it does so exactly once.
   bool _run(void Function(Transaction tx) build) {
-    final tx = Transaction(_document);
+    final tx = Transaction(document);
     try {
       build(tx);
     } on ArgumentError {
@@ -154,20 +133,7 @@ class DocumentViewModel extends ChangeNotifier {
     } on StepFailedError {
       return false;
     }
-    if (!tx.docChanged) return false;
-
-    final decorationsBefore = _decorations;
-    final caretBefore = _caret;
-    final result = tx.finish();
-    _document = result.doc;
-    _decorations = _decorations.map(result.mapping, result.changes);
-    final caret = _caret;
-    if (caret != null) {
-      _caret = result.mapping.map(caret, assoc: 1).clamp(0, _document.size);
-    }
-    _undoStack.add(_UndoEntry(tx, decorationsBefore, caretBefore));
-    notifyListeners();
-    return true;
+    return tx.docChanged && editorController.applyTransaction(tx);
   }
 
   // --- Builder commands (every Phase 1 TransactionBuilders member) --------
@@ -176,131 +142,104 @@ class DocumentViewModel extends ChangeNotifier {
   /// with empty [text].
   bool insertTextAtCaret(String text,
       {Attributes attributes = emptyAttributes}) {
-    final pos = _caret;
+    final pos = caret;
     if (pos == null || text.isEmpty) return false;
     return _run((tx) => tx.insertText(pos, text, attributes: attributes));
   }
 
   /// Deletes document range `[from, to)`.
   bool deleteRange(int from, int to) {
-    if (from < 0 || to < from || to > _document.size) return false;
+    if (from < 0 || to < from || to > document.size) return false;
     return _run((tx) => tx.deleteRange(from, to));
   }
 
   /// Deletes the [count] positions immediately before the caret.
   bool deleteBackwardFromCaret(int count) {
-    final pos = _caret;
+    final pos = caret;
     if (pos == null || count <= 0) return false;
-    final from = (pos - count).clamp(0, _document.size);
+    final from = (pos - count).clamp(0, document.size);
     return deleteRange(from, pos);
   }
 
   /// Splits the block at the current caret.
   bool splitAtCaret({String? trailingBlockId}) {
-    final pos = _caret;
+    final pos = caret;
     if (pos == null) return false;
     return _run((tx) => tx.splitBlock(pos, trailingBlockId: trailingBlockId));
   }
 
   /// Joins the two blocks meeting at document [boundary].
   bool joinAtBoundary(int boundary) {
-    if (boundary < 0 || boundary > _document.size) return false;
+    if (boundary < 0 || boundary > document.size) return false;
     return _run((tx) => tx.joinBlocks(boundary));
   }
 
   /// Joins the block [blockId] with the block immediately after it.
   bool joinBlockWithNext(String blockId) {
-    final index = _document.indexOfBlockId(blockId);
-    if (index == null || index >= _document.blockCount - 1) return false;
-    return joinAtBoundary(_document.positionAfterBlock(index));
+    final index = document.indexOfBlockId(blockId);
+    if (index == null || index >= document.blockCount - 1) return false;
+    return joinAtBoundary(document.positionAfterBlock(index));
   }
 
   /// Moves block [blockId] to [targetIndex].
   bool moveBlock(String blockId, int targetIndex) {
-    if (_document.indexOfBlockId(blockId) == null) return false;
-    if (targetIndex < 0 || targetIndex >= _document.blockCount) return false;
+    if (document.indexOfBlockId(blockId) == null) return false;
+    if (targetIndex < 0 || targetIndex >= document.blockCount) return false;
     return _run((tx) => tx.moveBlock(blockId, targetIndex));
   }
 
   /// Moves block [blockId] one position earlier.
   bool moveBlockUp(String blockId) {
-    final index = _document.indexOfBlockId(blockId);
+    final index = document.indexOfBlockId(blockId);
     if (index == null || index == 0) return false;
     return moveBlock(blockId, index - 1);
   }
 
   /// Moves block [blockId] one position later.
   bool moveBlockDown(String blockId) {
-    final index = _document.indexOfBlockId(blockId);
-    if (index == null || index >= _document.blockCount - 1) return false;
+    final index = document.indexOfBlockId(blockId);
+    if (index == null || index >= document.blockCount - 1) return false;
     return moveBlock(blockId, index + 1);
   }
 
   /// Changes block [blockId]'s type.
   bool setBlockType(String blockId, String type) {
-    if (_document.indexOfBlockId(blockId) == null) return false;
+    if (document.indexOfBlockId(blockId) == null) return false;
     return _run((tx) => tx.setBlockType(blockId, type));
   }
 
   /// Replaces block [blockId]'s attribute bag.
   bool setBlockAttributes(String blockId, Attributes attributes) {
-    if (_document.indexOfBlockId(blockId) == null) return false;
+    if (document.indexOfBlockId(blockId) == null) return false;
     return _run((tx) => tx.setBlockAttributes(blockId, attributes));
   }
 
   /// Toggles inline attribute [key] = [value] over document range
   /// `[from, to)`.
   bool toggleMark(int from, int to, String key, Object? value) {
-    if (from < 0 || to < from || to > _document.size) return false;
+    if (from < 0 || to < from || to > document.size) return false;
     return _run((tx) => tx.toggleMark(from, to, key, value));
   }
 
-  // --- Undo (Step.invert, applied in reverse — R3 live) -------------------
+  // --- Undo ----------------------------------------------------------------
 
-  /// Undoes the most recently committed transaction by inverting each of
-  /// its steps, in reverse order, against the document it produced —
-  /// exactly Phase 1's documented invert contract
-  /// (`Step.invert(docBefore)`; `docBefore` is `tx.docs[i]`, the document
-  /// `tx.steps[i]` was applied to). Decorations and the caret are restored
-  /// from the snapshot taken before the transaction ran (see
-  /// [_UndoEntry]).
-  bool undoLast() {
-    if (_undoStack.isEmpty) return false;
-    final entry = _undoStack.removeLast();
-    final tx = entry.tx;
-    var doc = tx.doc;
-    for (var i = tx.steps.length - 1; i >= 0; i--) {
-      final inverted = tx.steps[i].invert(tx.docs[i]);
-      final result = inverted.apply(doc);
-      if (result.failed) {
-        // Should be unreachable given Phase 1's lossless-invert guarantee
-        // (R3); fail safe rather than leave the document half-restored.
-        return false;
-      }
-      doc = result.doc!;
-    }
-    _document = doc;
-    _decorations = entry.decorationsBefore;
-    _caret = entry.caretBefore;
-    notifyListeners();
-    return true;
-  }
+  /// Undoes the latest keyboard, platform, debug, or decoration edit through
+  /// the controller's exact snapshot history.
+  bool undoLast() => editorController.undo();
 
   // --- Decorations ----------------------------------------------------------
 
   /// Adds [decoration] to the set.
   void addDecoration(Decoration decoration) {
-    _decorations = _decorations.add([decoration]);
-    notifyListeners();
+    editorController.replaceDecorations(decorations.add([decoration]));
   }
 
   /// Removes [decoration] from the set. No-ops (no notify) if it is not
   /// present.
   void removeDecoration(Decoration decoration) {
-    final next = _decorations.remove([decoration]);
-    if (identical(next, _decorations)) return;
-    _decorations = next;
-    notifyListeners();
+    final next = decorations.remove([decoration]);
+    if (identical(next, decorations)) return;
+    editorController.replaceDecorations(next);
   }
 
   /// Toggles hide-delimiter decorations over [blockId]'s `**`/`%%` markers
@@ -313,10 +252,10 @@ class DocumentViewModel extends ChangeNotifier {
   /// this as decorations rather than a pure text-scan-at-render-time
   /// effect.
   void toggleHideDelimiters(String blockId) {
-    final block = _document.blockById(blockId);
+    final block = document.blockById(blockId);
     if (block == null) return;
     if (isHidingDelimiters(blockId)) {
-      final existing = _decorations
+      final existing = decorations
           .forBlock(blockId)
           .where((d) =>
               d.kind == DecorationKind.replace &&
@@ -324,13 +263,12 @@ class DocumentViewModel extends ChangeNotifier {
               (d.spec! as PlaygroundSpec).kind ==
                   PlaygroundDecorationKind.hideMarker)
           .toList();
-      _decorations = _decorations.remove(existing);
+      editorController.replaceDecorations(decorations.remove(existing));
     } else {
       final markers = markerDecorationsFor(block);
       if (markers.isEmpty) return;
-      _decorations = _decorations.add(markers);
+      editorController.replaceDecorations(decorations.add(markers));
     }
-    notifyListeners();
   }
 
   /// Adds a mention/annotation background-wash decoration over
@@ -354,12 +292,22 @@ class DocumentViewModel extends ChangeNotifier {
   /// a widget decoration never requires document content at its offset
   /// (`deriveViewText` injects the placeholder character in view space).
   bool insertWidgetChip(String blockId, int offset, {required String label}) {
-    final block = _document.blockById(blockId);
+    final block = document.blockById(blockId);
     if (block == null || offset < 0 || offset > block.contentLength) {
       return false;
     }
     addDecoration(
         Decoration.widget(blockId, offset, spec: PlaygroundSpec.chip(label)));
     return true;
+  }
+
+  void _editorChanged() => notifyListeners();
+
+  @override
+  void dispose() {
+    editorController.removeListener(_editorChanged);
+    inputSession.dispose();
+    editorController.dispose();
+    super.dispose();
   }
 }

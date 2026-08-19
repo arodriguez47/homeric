@@ -2,6 +2,14 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-19 — A demo consumer must not become a second editor core
+
+**What:** The playground used to own its own document, decorations, caret, transaction application, and undo stack. Adding the real editable paragraph on top would have left keyboard input in `HomericEditorController` while debug buttons and decoration controls mutated a parallel view-model. The migration instead made the view-model a thin adapter around one public controller and one shared epoch-bound input session. A narrow undoable `replaceDecorations` controller intent closed the only missing public seam, so decoration-only controls did not need to reconstruct the controller or retain shadow state.
+
+**Why it mattered:** Parallel state can look correct while each path is tested alone, then lose selection, composition, decoration mapping, or undo order when a writer alternates between keyboard input and consumer controls. Active-block switching raises the same risk for platform input: every paragraph can be an entry point, but exactly one shared session must own the live epoch, committing the old block's visible composition before attaching the new one.
+
+**Rule going forward:** A consumer adapter may translate UI commands into editor intents, but it does not own canonical document, decoration, selection, composition, or history state. If a legitimate consumer control cannot express its change through the controller, add and pin the smallest atomic controller intent instead of creating a shadow store. Share one input session across all one-active-block hosts, and treat theme, width, and projection changes as presentation rebuilds that preserve controller identity, focus, and logical selection.
+
 ## editor-architect — 2026-08-19 — Geometry overlays need a structural layout boundary and a current-input gate
 
 **What:** Packaging the repeated paragraph-overlay dance exposed two separate responsibilities. First, overlay presentation must not participate in the paragraph's layout: the paragraph is the sole non-positioned child, while every consumer widget lives inside a fixed `Positioned.fill` plane. Second, a parent rebuild can happen *before* the child render object receives its new width, source, style, or scaler. Building from the held render object during that gap briefly reuses the old generation even though its `GeometryResult` is not stale yet; the relayout that would mark it stale has not run.

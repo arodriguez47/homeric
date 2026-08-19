@@ -191,6 +191,72 @@ void main() {
     });
   });
 
+  group('caret rect: hidden fold at a soft-wrap boundary (HOM-16)', () {
+    ParagraphSource<TextStyle> hiddenWrapSource() => sourceOf(
+          'aaaa **bold**',
+          decorations: [
+            Decoration.replace('b', 5, 7, replacementLength: 0),
+            Decoration.replace('b', 11, 13, replacementLength: 0),
+          ],
+        );
+
+    testWidgets('folded offset keeps upstream and downstream visual lines',
+        (tester) async {
+      final source = hiddenWrapSource();
+      expect(source.viewText, 'aaaa bold');
+      expect(source.viewMap.docToView(6, assoc: -1), 5);
+      expect(source.viewMap.docToView(6, assoc: 1), 5);
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 2);
+      final geometry = ParagraphGeometry(render);
+
+      expect(
+        geometry.caretRect(const DocOffset(4), assoc: -1).value,
+        const Rect.fromLTRB(56, 0, 56, 14),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(4), assoc: 1).value,
+        const Rect.fromLTRB(56, 0, 56, 14),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(6), assoc: -1).value,
+        const Rect.fromLTRB(70, 0, 70, 14),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(6), assoc: 1).value,
+        const Rect.fromLTRB(0, 14, 0, 28),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(8), assoc: -1).value,
+        const Rect.fromLTRB(14, 14, 14, 28),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(8), assoc: 1).value,
+        const Rect.fromLTRB(14, 14, 14, 28),
+      );
+    });
+
+    testWidgets('without a wrap both associations share the visible edge',
+        (tester) async {
+      await tester.pumpWidget(
+        harness(HomericParagraph(source: hiddenWrapSource()), width: 200),
+      );
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 1);
+      final geometry = ParagraphGeometry(render);
+
+      for (final assoc in const [-1, 1]) {
+        expect(
+          geometry.caretRect(const DocOffset(6), assoc: assoc).value,
+          const Rect.fromLTRB(70, 0, 70, 14),
+        );
+      }
+    });
+  });
+
   group('caret rect: slots', () {
     testWidgets('caret at a slot boundary sits at the placeholder edge',
         (tester) async {

@@ -477,6 +477,28 @@ void main() {
   });
 
   group('wrapped lines', () {
+    testWidgets('a hidden fold shares the soft-wrap view offset (HOM-16)',
+        (tester) async {
+      final source = ParagraphSource.build(
+        block: para('a', 'aaaa **bold**'),
+        decorations: [
+          Decoration.replace('a', 5, 7, replacementLength: 0),
+          Decoration.replace('a', 11, 13, replacementLength: 0),
+        ],
+        resolveStyle: (_) => style14,
+      );
+      expect(source.viewText, 'aaaa bold');
+      expect(source.viewMap.docToView(6, assoc: -1), 5);
+      expect(source.viewMap.docToView(6, assoc: 1), 5);
+
+      final (decorated, baseline) =
+          await pumpPair(tester, decoratedSource: source, width: 70);
+      expect(decorated.layoutParagraph.numberOfLines, 2);
+      expect(baseline.layoutParagraph.numberOfLines, 2);
+      expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+    });
+
     testWidgets('hidden delimiters across a forced wrap', (tester) async {
       final source = ParagraphSource.build(
         block: para('a', '**aaaa** bbbb cccc'),

@@ -91,6 +91,21 @@ The Phase 2 render layer's `ParagraphGeometry` (U4) never takes or returns a bar
 
 Homeric's render layer now has two families of caller-supplied opaque payload: `Decoration.spec`/`BlockParagraphSpec` (identity-equality — "same instance means same state, don't over-fire a rebuild") and `PaintLayer.spec` (value-equality — "same visual meaning even if freshly reconstructed this frame, don't over-repaint"). Both are correct for their own caller shape: decorations are typically held and mutated in place, so identity tracks real state changes; paint layers are typically rebuilt fresh every frame from animation state, so identity would make every frame register as "changed" and value equality is what actually detects "nothing visually different happened." The risk is a future opaque-spec type assuming a library-wide default and picking the wrong one silently. Rule: a new opaque-spec type must state which convention it uses in its own doc comment and pick deliberately based on how callers are expected to construct it (held-and-mutated vs. rebuilt-per-frame) — never inherit an assumption from a sibling type.
 
+## orchestrator — 2026-08-18 — A folded delimiter and a soft wrap share one affinity decision
+
+**What was verified:** In `aaaa **bold**`, hiding both delimiter pairs makes
+document offset 6, strictly inside the opening delimiter, map to view offset 5,
+exactly where the visible text wraps.
+`ParagraphGeometry.caretRect` already carries the same `assoc` through both
+the document-to-view fold and the visual-line choice: upstream lands at the
+end of line 1, downstream at the start of line 2.
+
+**Rule going forward:** A caret regression involving hidden text and wrapping
+needs a fixture where the fold edge and wrap offset are literally identical.
+Assert the full rectangle for both associations plus pre-wrap, post-wrap, and
+wide-layout controls. Comparing two paths that share the same caret algorithm
+is useful for mapping drift, but cannot replace independent pixel expectations.
+
 ## editor-architect — 2026-08-09 — A seam-adapter contract test proves sufficiency, never agreement
 
 Phase 2's U4 shipped a `SelectableMixin`-shaped adapter test proving every member AppFlowy requires is implementable purely from `ParagraphGeometry`. That claim was true and the test was worth having, and it could not have caught the first three bugs Nexus hit when it actually rendered through us — because *implementable* and *agrees with the renderer next to it* are different properties, and only the second one matters to a consumer running both. Nexus renders paragraphs through Homeric and headings, lists and quotes through AppFlowy in the same document, so a caret that is internally consistent but 4px off its neighbour is still a defect. The reusable rule: an API-sufficiency test belongs in the producing repo, but a *differential* test — both renderers mounted over the same document, answers compared offset by offset — belongs in the consuming one, and no amount of the former substitutes for the latter. Corollary for future phases: when a Phase's exit criterion is "the consumer uses it", the consumer's differential test is the exit criterion, not the producer's contract test.

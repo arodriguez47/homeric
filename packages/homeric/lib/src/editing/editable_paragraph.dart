@@ -1,6 +1,7 @@
 /// Experimental one-block desktop editing host.
 library;
 
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
@@ -55,6 +56,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.paintLayers = const <PaintLayer>[],
     this.caretColor,
     this.selectionColor,
+    this.inactiveSelectionColor,
     this.composingColor,
     this.caretWidth = 1.5,
     this.clipboard = const SystemHomericClipboard(),
@@ -117,10 +119,13 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Focused selection color, or a visible brightness-aware default.
   final Color? selectionColor;
 
+  /// Unfocused expanded-selection color, or a subdued default.
+  final Color? inactiveSelectionColor;
+
   /// Focused composing underline color, or a visible default.
   final Color? composingColor;
 
-  /// Width of the static focused caret.
+  /// Width of the focused caret.
   final double caretWidth;
 
   /// Injectable plain-text clipboard boundary.
@@ -147,6 +152,8 @@ class HomericEditableParagraph extends StatefulWidget {
 }
 
 class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
+  static const _caretBlinkHalfPeriod = Duration(milliseconds: 500);
+
   late FocusNode _focusNode;
   int _geometryPublicationSerial = 0;
   int? _dragAnchor;
@@ -170,6 +177,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   int _spellRequestGeneration = 0;
   _SpellRequestKey? _spellRequestKey;
   List<_ResolvedSpellingSuggestion> _spellingSuggestions = const [];
+  Timer? _caretTimer;
+  final ValueNotifier<bool> _caretVisibility = ValueNotifier<bool>(true);
+  HomericSelection? _caretSelection;
+  HomericTextRange? _caretComposing;
+  int _caretContentRevision = 0;
+  bool _tickerEnabled = true;
+  bool _disableAnimations = false;
   bool _disposing = false;
 
   HomericEditorController get _controller => widget.controller;
@@ -190,7 +204,25 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           const SelectAllTextIntent(SelectionChangedCause.toolbar),
         );
     _renewHostBindings();
+    _captureCaretState();
     _controller.addListener(_controllerChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // `valuesOf` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    final tickerEnabled = TickerMode.of(context);
+    final disableAnimations =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (_tickerEnabled == tickerEnabled &&
+        _disableAnimations == disableAnimations) {
+      return;
+    }
+    _tickerEnabled = tickerEnabled;
+    _disableAnimations = disableAnimations;
+    _syncCaretBlink(resetVisible: disableAnimations);
   }
 
   @override
@@ -204,6 +236,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         !identical(oldWidget.inputSession, widget.inputSession);
     final blockChanged = oldWidget.blockId != widget.blockId;
     final focusNodeChanged = !identical(oldWidget.focusNode, widget.focusNode);
+    final caretDependenciesChanged =
+        controllerChanged || sessionChanged || blockChanged || focusNodeChanged;
     final spellProviderChanged =
         !identical(oldWidget.spellCheckProvider, widget.spellCheckProvider);
     final hostDependenciesChanged = controllerChanged ||
@@ -242,6 +276,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         }
       }
     }
+    if (controllerChanged) _captureCaretState();
+    if (caretDependenciesChanged) {
+      _syncCaretBlink(resetVisible: hadFocus);
+    }
   }
 
   @override
@@ -249,6 +287,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _disposing = true;
     _hostEpoch++;
     _clearTransientState();
+    _stopCaretBlink();
+    _caretVisibility.dispose();
     _clipboard.dispose();
     _controller.removeListener(_controllerChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
@@ -299,7 +339,48 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
             _controller.contentRevision) {
       _spellingSuggestions = const [];
     }
+    final caretStateChanged = _captureCaretState();
+    if (caretStateChanged) _syncCaretBlink(resetVisible: true);
     setState(() {});
+  }
+
+  bool _captureCaretState() {
+    final selection = _controller.selection;
+    final composing = _controller.composing;
+    final contentRevision = _controller.contentRevision;
+    final changed = selection != _caretSelection ||
+        composing != _caretComposing ||
+        contentRevision != _caretContentRevision;
+    _caretSelection = selection;
+    _caretComposing = composing;
+    _caretContentRevision = contentRevision;
+    return changed;
+  }
+
+  bool get _canBlinkCaret {
+    final selection = _localSelection();
+    return _ownsEditingFocus &&
+        selection != null &&
+        selection.isCollapsed &&
+        _controller.composing == null;
+  }
+
+  void _syncCaretBlink({required bool resetVisible}) {
+    _stopCaretBlink();
+    if (resetVisible || _disableAnimations) _caretVisibility.value = true;
+    if (!_canBlinkCaret || !_tickerEnabled || _disableAnimations) return;
+    _caretTimer = Timer.periodic(_caretBlinkHalfPeriod, (_) {
+      if (!_canBlinkCaret) {
+        _stopCaretBlink();
+        return;
+      }
+      _caretVisibility.value = !_caretVisibility.value;
+    });
+  }
+
+  void _stopCaretBlink() {
+    _caretTimer?.cancel();
+    _caretTimer = null;
   }
 
   Block? get _block => _controller.document.blockById(widget.blockId);
@@ -337,6 +418,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         (brightness == Brightness.dark
             ? const Color(0x668FA8FF)
             : const Color(0x664F64C8));
+    final inactiveSelectionColor = widget.inactiveSelectionColor ??
+        (brightness == Brightness.dark
+            ? const Color(0x338FA8FF)
+            : const Color(0x334F64C8));
     final composingColor = widget.composingColor ??
         (brightness == Brightness.dark
             ? const Color(0xFF9DB2FF)
@@ -347,7 +432,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
             : const Color(0xFFD93025));
     final editingLayers = <PaintLayer>[
       ...widget.paintLayers,
-      if (focused && !localSelection.isCollapsed)
+      if (localSelection != null && !localSelection.isCollapsed)
         PaintLayer(
           range: DocRange(
             DocOffset(localSelection.start),
@@ -355,7 +440,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           ),
           band: PaintBand.underlay,
           painter: solidWashPainter,
-          spec: SolidWashSpec(selectionColor),
+          spec: SolidWashSpec(
+            focused ? selectionColor : inactiveSelectionColor,
+          ),
         ),
       for (final suggestion in _currentSpellingSuggestions)
         PaintLayer(
@@ -436,7 +523,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                 widget.caretWidth,
                 caret.height,
               ),
-              child: IgnorePointer(child: ColoredBox(color: caretColor)),
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _caretVisibility,
+                builder: (_, visible, __) => IgnorePointer(
+                  child: visible
+                      ? ColoredBox(color: caretColor)
+                      : const SizedBox.shrink(),
+                ),
+              ),
             ),
         ];
       },
@@ -1333,6 +1427,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _renewHostBindings();
       widget.inputSession.blur();
     }
+    _syncCaretBlink(resetVisible: true);
     if (mounted) setState(() {});
   }
 

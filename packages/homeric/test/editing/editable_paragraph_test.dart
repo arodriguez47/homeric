@@ -812,6 +812,9 @@ void main() {
     expect(render.paintLayers.last.painter, same(underlinePainter));
     expect(find.byType(ColoredBox), findsOneWidget,
         reason: 'collapsed focused selection paints one static caret');
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byType(ColoredBox), findsOneWidget,
+        reason: 'composition pauses blinking with the caret visible');
 
     focusNode.unfocus();
     await tester.pump();
@@ -857,6 +860,196 @@ void main() {
     ]);
     await tester.pump();
     expect(controller.document.blocks.single.text, 'A');
+  });
+
+  testWidgets('focused caret blinks, resets visible, and cancels on disposal',
+      (tester) async {
+    const caretColor = Color(0xFF123456);
+    final controller = HomericEditorController(document: _document('abc'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    var resolveCalls = 0;
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    final caret = find.byWidgetPredicate(
+      (widget) => widget is ColoredBox && widget.color == caretColor,
+    );
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      caretColor: caretColor,
+      resolveStyle: (_) {
+        resolveCalls++;
+        return _style;
+      },
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    expect(caret, findsOneWidget);
+    final callsBeforeBlink = resolveCalls;
+    await tester.pump(const Duration(milliseconds: 499));
+    expect(caret, findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(caret, findsNothing);
+    expect(resolveCalls, callsBeforeBlink,
+        reason: 'a blink rebuilds only the caret overlay');
+    controller.setSelection(HomericSelection.collapsed(
+      controller.globalPositionForBlockOffset('b', 1),
+    ));
+    await tester.pump();
+    expect(caret, findsOneWidget,
+        reason: 'selection movement restarts visible');
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(caret, findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unrelated rebuilds and decoration updates preserve blink phase',
+      (tester) async {
+    const caretColor = Color(0xFF2468AC);
+    final controller = HomericEditorController(document: _document('abc'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    late StateSetter rebuild;
+    final caret = find.byWidgetPredicate(
+      (widget) => widget is ColoredBox && widget.color == caretColor,
+    );
+    await tester.pumpWidget(_harness(StatefulBuilder(
+      builder: (context, setState) {
+        rebuild = setState;
+        return HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          focusNode: focusNode,
+          blockId: 'b',
+          caretColor: caretColor,
+          resolveStyle: (_) => _style,
+        );
+      },
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    await tester.pump(const Duration(milliseconds: 200));
+    rebuild(() {});
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    controller.replaceDecorations(
+      DecorationSet.of([Decoration.inline('b', 0, 1)]),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(caret, findsNothing,
+        reason: 'neither update restarts the original 500ms blink phase');
+  });
+
+  testWidgets('reduced motion keeps a focused caret steadily visible',
+      (tester) async {
+    const caretColor = Color(0xFF654321);
+    final controller = HomericEditorController(document: _document('abc'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    final caret = find.byWidgetPredicate(
+      (widget) => widget is ColoredBox && widget.color == caretColor,
+    );
+    await tester.pumpWidget(MediaQuery(
+      data: const MediaQueryData(disableAnimations: true),
+      child: _harness(HomericEditableParagraph(
+        controller: controller,
+        inputSession: session,
+        focusNode: focusNode,
+        blockId: 'b',
+        caretColor: caretColor,
+        resolveStyle: (_) => _style,
+      )),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    expect(caret, findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(caret, findsOneWidget);
+  });
+
+  testWidgets('disabled TickerMode pauses a focused caret while visible',
+      (tester) async {
+    const caretColor = Color(0xFFABCDEF);
+    final controller = HomericEditorController(document: _document('abc'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    final caret = find.byWidgetPredicate(
+      (widget) => widget is ColoredBox && widget.color == caretColor,
+    );
+    await tester.pumpWidget(TickerMode(
+      enabled: false,
+      child: _harness(HomericEditableParagraph(
+        controller: controller,
+        inputSession: session,
+        focusNode: focusNode,
+        blockId: 'b',
+        caretColor: caretColor,
+        resolveStyle: (_) => _style,
+      )),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    expect(caret, findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(caret, findsOneWidget);
+  });
+
+  testWidgets('blur retains an expanded selection with its inactive tint',
+      (tester) async {
+    const active = Color(0xFF112233);
+    const inactive = Color(0xFF445566);
+    final controller = HomericEditorController(
+      document: _document('abc'),
+      selection: const HomericSelection(anchor: 1, head: 3),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      selectionColor: active,
+      inactiveSelectionColor: inactive,
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    var render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect((render.paintLayers.single.spec as SolidWashSpec).color, active);
+    focusNode.unfocus();
+    await tester.pump();
+    await tester.pump();
+    render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect((render.paintLayers.single.spec as SolidWashSpec).color, inactive);
+    expect(controller.selection, const HomericSelection(anchor: 1, head: 3));
+    expect(find.byType(ColoredBox), findsNothing);
   });
 
   testWidgets('desktop selection is arbitrated by the text selection detector',

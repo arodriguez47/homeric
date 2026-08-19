@@ -4,6 +4,7 @@ library;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
 import 'package:flutter/rendering.dart' hide Decoration;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -16,8 +17,10 @@ import '../render/homeric_paragraph.dart';
 import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/paragraph_source.dart';
+import '../view/view_map.dart';
 import 'editor_clipboard.dart';
 import 'editor_controller.dart';
+import 'spell_check.dart';
 
 /// A directly editable Homeric paragraph backed by canonical editor state.
 ///
@@ -57,6 +60,8 @@ class HomericEditableParagraph extends StatefulWidget {
     this.clipboard = const SystemHomericClipboard(),
     this.onHostEvent,
     this.onShowToolbar,
+    this.spellCheckProvider,
+    this.spellingColor,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -127,6 +132,15 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Optional toolbar request used by the desktop menu layer.
   final VoidCallback? onShowToolbar;
 
+  /// Optional projected-text spelling provider.
+  ///
+  /// Desktop spelling is disabled when this is null; Homeric never silently
+  /// substitutes a platform spell engine.
+  final HomericSpellCheckProvider? spellCheckProvider;
+
+  /// Color of transient spelling squiggles.
+  final Color? spellingColor;
+
   @override
   State<HomericEditableParagraph> createState() =>
       _HomericEditableParagraphState();
@@ -136,6 +150,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   late FocusNode _focusNode;
   int _geometryPublicationSerial = 0;
   int? _dragAnchor;
+  BlockTextRange? _dragWordAnchor;
+  _DragSelectionMode? _dragMode;
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
   ParagraphGeometry? _paragraphGeometry;
@@ -147,6 +163,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   late final VoidCallback _semanticsPaste;
   late final VoidCallback _semanticsSelectAll;
   BuildContext? _commandContext;
+  BuildContext? _overlayContext;
+  Offset? _secondaryLocalPosition;
+  BlockTextRange? _secondaryWordRange;
+  ContextMenuController? _contextMenuController;
+  int _spellRequestGeneration = 0;
+  _SpellRequestKey? _spellRequestKey;
+  List<_ResolvedSpellingSuggestion> _spellingSuggestions = const [];
+  bool _disposing = false;
 
   HomericEditorController get _controller => widget.controller;
 
@@ -180,6 +204,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         !identical(oldWidget.inputSession, widget.inputSession);
     final blockChanged = oldWidget.blockId != widget.blockId;
     final focusNodeChanged = !identical(oldWidget.focusNode, widget.focusNode);
+    final spellProviderChanged =
+        !identical(oldWidget.spellCheckProvider, widget.spellCheckProvider);
     final hostDependenciesChanged = controllerChanged ||
         sessionChanged ||
         blockChanged ||
@@ -201,7 +227,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _focusNode = widget.focusNode ?? FocusNode();
       if (hadFocus) _focusNode.requestFocus();
     }
-    if (hostDependenciesChanged) _renewHostBindings();
+    if (hostDependenciesChanged || spellProviderChanged) {
+      _clearTransientState();
+    }
+    if (hostDependenciesChanged) {
+      _renewHostBindings();
+    }
     if (hadFocus && _focusNode.hasFocus && hostDependenciesChanged) {
       if (_controller.document.indexOfBlockId(widget.blockId) != null) {
         if (_controller.activeBlockId != widget.blockId) {
@@ -215,7 +246,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
 
   @override
   void dispose() {
+    _disposing = true;
     _hostEpoch++;
+    _clearTransientState();
     _clipboard.dispose();
     _controller.removeListener(_controllerChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
@@ -241,9 +274,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   bool _isHostEpochCurrent(int epoch) =>
       mounted &&
       epoch == _hostEpoch &&
-      _focusNode.hasFocus &&
+      _ownsEditingFocus &&
       _controller.activeBlockId == widget.blockId &&
       widget.inputSession.activeBlockId == widget.blockId;
+
+  bool get _ownsEditingFocus =>
+      _focusNode.hasFocus || (_contextMenuController?.isShown ?? false);
 
   bool _attachInput() => widget.inputSession.attach(
         blockId: widget.blockId,
@@ -257,7 +293,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   void _controllerChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (_spellingSuggestions.isNotEmpty &&
+        _spellingSuggestions.first.contentRevision !=
+            _controller.contentRevision) {
+      _spellingSuggestions = const [];
+    }
+    setState(() {});
   }
 
   Block? get _block => _controller.document.blockById(widget.blockId);
@@ -283,7 +325,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       resolveStyle: (_) => null,
       spec: widget.paragraphSpec,
     );
-    final focused = _focusNode.hasFocus && localSelection != null;
+    _ensureSpellCheck(semanticsSource);
+    final focused = _ownsEditingFocus && localSelection != null;
     final brightness = MediaQuery.maybePlatformBrightnessOf(context) ??
         ui.PlatformDispatcher.instance.platformBrightness;
     final caretColor = widget.caretColor ??
@@ -298,6 +341,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         (brightness == Brightness.dark
             ? const Color(0xFF9DB2FF)
             : const Color(0xFF3F51B5));
+    final spellingColor = widget.spellingColor ??
+        (brightness == Brightness.dark
+            ? const Color(0xFFFF7B72)
+            : const Color(0xFFD93025));
     final editingLayers = <PaintLayer>[
       ...widget.paintLayers,
       if (focused && !localSelection.isCollapsed)
@@ -309,6 +356,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           band: PaintBand.underlay,
           painter: solidWashPainter,
           spec: SolidWashSpec(selectionColor),
+        ),
+      for (final suggestion in _currentSpellingSuggestions)
+        PaintLayer(
+          range: DocRange(
+            DocOffset(suggestion.range.start),
+            DocOffset(suggestion.range.end),
+          ),
+          band: PaintBand.overlay,
+          painter: _paintSpellingSquiggle,
+          spec: UnderlineSpec(spellingColor),
         ),
       if (focused && localComposing != null && !localComposing.isCollapsed)
         PaintLayer(
@@ -341,6 +398,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       paragraph: paragraph,
       slotLayoutRevision: widget.slotLayoutRevision,
       overlayBuilder: (overlayContext, geometry) {
+        _overlayContext = overlayContext;
         _scheduleGeometryPublication(overlayContext, geometry);
         final caret = focused && localSelection.isCollapsed
             ? geometry
@@ -352,17 +410,22 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
             : null;
         return <Widget>[
           Positioned.fill(
-            child: GestureDetector(
+            child: TextSelectionGestureDetector(
               behavior: HitTestBehavior.translucent,
-              dragStartBehavior: DragStartBehavior.down,
-              onTapDown: (details) =>
-                  _placeCaret(geometry, details.localPosition),
-              onPanStart: (details) =>
-                  _startDrag(geometry, details.localPosition),
-              onPanUpdate: (details) =>
-                  _updateDrag(geometry, details.localPosition),
-              onPanEnd: (_) => _dragAnchor = null,
-              onPanCancel: () => _dragAnchor = null,
+              onTapDown: (details) => _tapDown(geometry, details),
+              onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
+              onTripleTapDown: (details) => _tripleTapDown(geometry, details),
+              onDragSelectionStart: (details) =>
+                  _startSelectionDrag(geometry, details),
+              onDragSelectionUpdate: (details) =>
+                  _updateSelectionDrag(geometry, details.localPosition),
+              onDragSelectionEnd: (_) => _resetPointerState(),
+              onSingleTapCancel: _resetPointerState,
+              onTapTrackReset: _resetPointerState,
+              onSecondaryTapDown: (details) =>
+                  _secondaryTapDown(geometry, details.localPosition),
+              onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
+              child: const SizedBox.expand(),
             ),
           ),
           if (caret != null)
@@ -396,6 +459,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         invoke: (intent) => intent.backward
             ? _focusNode.previousFocus()
             : _focusNode.nextFocus(),
+      ),
+      DismissIntent: _HostAction<DismissIntent>(
+        enabled: (_) => _contextMenuController?.isShown ?? false,
+        invoke: (_) => _dismissContextMenu(),
       ),
       DeleteCharacterIntent: _HostAction<DeleteCharacterIntent>(
         enabled: (_) => _canUseActions,
@@ -518,7 +585,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   bool get _canUseActions =>
-      _focusNode.hasFocus &&
+      _ownsEditingFocus &&
       _controller.activeBlockId == widget.blockId &&
       _controller.composing == null;
 
@@ -609,30 +676,466 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     return rangeStart < end && rangeEnd > start;
   }
 
-  void _placeCaret(ParagraphGeometry geometry, Offset point) {
-    if (!_isCurrentGeometry(geometry)) return;
-    final hit = _caretForPoint(geometry, point);
-    _dragAnchor = null;
+  void _tapDown(ParagraphGeometry geometry, TapDragDownDetails details) {
+    if (details.consecutiveTapCount != 1 || !_canUsePointer(geometry)) return;
+    _dismissContextMenu();
+    final hit = _caretForPoint(geometry, details.localPosition);
+    _resetPointerState();
     _relocate(hit.position, hit.position, affinity: hit.affinity);
   }
 
-  void _startDrag(ParagraphGeometry geometry, Offset point) {
-    if (!_isCurrentGeometry(geometry)) return;
-    final hit = _caretForPoint(geometry, point);
+  void _doubleTapDown(
+    ParagraphGeometry geometry,
+    TapDragDownDetails details,
+  ) {
+    if (!_canUsePointer(geometry)) return;
+    _dismissContextMenu();
+    _startWordSelection(geometry, details.localPosition);
+  }
+
+  void _tripleTapDown(
+    ParagraphGeometry geometry,
+    TapDragDownDetails details,
+  ) {
+    if (!_canUsePointer(geometry)) return;
+    _dismissContextMenu();
+    _startParagraphSelection();
+  }
+
+  void _startSelectionDrag(
+    ParagraphGeometry geometry,
+    TapDragStartDetails details,
+  ) {
+    if (!_canUsePointer(geometry)) return;
+    _dismissContextMenu();
+    final count = details.consecutiveTapCount;
+    if (count >= 3) {
+      _startParagraphSelection();
+      return;
+    }
+    if (count == 2) {
+      _startWordSelection(geometry, details.localPosition);
+      return;
+    }
+    final hit = _caretForPoint(geometry, details.localPosition);
+    _dragMode = _DragSelectionMode.character;
     _dragAnchor = hit.position;
+    _dragWordAnchor = null;
     _relocate(hit.position, hit.position, affinity: hit.affinity);
   }
 
-  void _updateDrag(ParagraphGeometry geometry, Offset point) {
+  void _updateSelectionDrag(ParagraphGeometry geometry, Offset point) {
     final anchor = _dragAnchor;
-    if (anchor == null || !_isCurrentGeometry(geometry)) return;
+    final mode = _dragMode;
+    if (anchor == null || mode == null || !_canUsePointer(geometry)) return;
+    if (mode == _DragSelectionMode.paragraph) {
+      final length = _block?.contentLength ?? 0;
+      _relocate(0, length);
+      return;
+    }
     final rect = geometry.blockRect.value;
     final clamped = Offset(
       point.dx.clamp(rect.left, rect.right),
       point.dy.clamp(rect.top, rect.bottom),
     );
+    if (mode == _DragSelectionMode.word) {
+      final initial = _dragWordAnchor;
+      if (initial == null) return;
+      final word = _wordForPoint(geometry, clamped);
+      if (word.end <= initial.start) {
+        _relocate(initial.end, word.start,
+            affinity: HomericCaretAffinity.upstream);
+      } else {
+        _relocate(initial.start, word.end);
+      }
+      return;
+    }
     final hit = _caretForPoint(geometry, clamped);
     _relocate(anchor, hit.position, affinity: hit.affinity);
+  }
+
+  bool _canUsePointer(ParagraphGeometry geometry) =>
+      _controller.composing == null && _isCurrentGeometry(geometry);
+
+  void _startWordSelection(ParagraphGeometry geometry, Offset point) {
+    final word = _wordForPoint(geometry, point);
+    _dragMode = _DragSelectionMode.word;
+    _dragWordAnchor = word;
+    _dragAnchor = word.start;
+    _relocate(word.start, word.end);
+  }
+
+  void _startParagraphSelection() {
+    final length = _block?.contentLength ?? 0;
+    _dragMode = _DragSelectionMode.paragraph;
+    _dragAnchor = 0;
+    _dragWordAnchor = null;
+    _relocate(0, length);
+  }
+
+  BlockTextRange _wordForPoint(ParagraphGeometry geometry, Offset point) {
+    final hit = _caretForPoint(geometry, point);
+    return _wordForHit(geometry, hit);
+  }
+
+  BlockTextRange _wordForHit(
+    ParagraphGeometry geometry,
+    ({int position, HomericCaretAffinity affinity}) hit,
+  ) {
+    final range = geometry
+        .wordBoundaryAt(
+          DocOffset(hit.position),
+          assoc: _assoc(hit.affinity),
+        )
+        .value;
+    return BlockTextRange(range.start.value, range.end.value);
+  }
+
+  void _resetPointerState() {
+    _dragAnchor = null;
+    _dragWordAnchor = null;
+    _dragMode = null;
+  }
+
+  void _secondaryTapDown(ParagraphGeometry geometry, Offset point) {
+    if (!_canUsePointer(geometry)) return;
+    _resetPointerState();
+    final hit = _caretForPoint(geometry, point);
+    final selection = _localSelection();
+    final insideSelection = selection != null &&
+        !selection.isCollapsed &&
+        hit.position >= selection.start &&
+        hit.position < selection.end;
+    final word = _wordForHit(geometry, hit);
+    if (!insideSelection) _relocate(word.start, word.end);
+    _secondaryLocalPosition = point;
+    _secondaryWordRange = word;
+  }
+
+  void _showContextMenu({bool useSecondaryAnchor = false}) {
+    final context = _overlayContext;
+    final point =
+        useSecondaryAnchor ? _secondaryLocalPosition : _selectionMenuAnchor();
+    if (context == null || point == null || !_canUseActions) return;
+    if (!useSecondaryAnchor) {
+      final geometry = _currentGeometry();
+      final selection = _localSelection();
+      if (geometry != null && selection != null) {
+        final range = geometry
+            .wordBoundaryAt(
+              DocOffset(selection.head),
+              assoc: _assoc(selection.affinity),
+            )
+            .value;
+        _secondaryWordRange =
+            BlockTextRange(range.start.value, range.end.value);
+      }
+    }
+    widget.onShowToolbar?.call();
+    if (Overlay.maybeOf(context, rootOverlay: true) == null) return;
+    final render = context.findRenderObject();
+    if (render is! RenderBox || !render.attached) return;
+    final witness = _MenuWitness(
+      epoch: _hostEpoch,
+      stateRevision: _controller.stateRevision,
+    );
+    final anchor = render.localToGlobal(point);
+    _dismissContextMenu();
+    late final ContextMenuController menu;
+    menu = ContextMenuController(onRemove: () {
+      if (identical(_contextMenuController, menu)) {
+        _contextMenuController = null;
+      }
+      if (mounted && !_disposing) _focusNode.requestFocus();
+    });
+    _contextMenuController = menu;
+    var focusScheduled = false;
+    menu.show(
+      context: context,
+      debugRequiredFor: widget,
+      contextMenuBuilder: (menuContext) {
+        if (!focusScheduled) {
+          focusScheduled = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && menu.isShown) {
+              FocusScope.of(menuContext).nextFocus();
+            }
+          });
+        }
+        return Shortcuts(
+          shortcuts: const <ShortcutActivator, Intent>{
+            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          },
+          child: Focus(
+            canRequestFocus: false,
+            onFocusChange: (focused) {
+              if (!focused && menu.isShown) _dismissContextMenu();
+            },
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.escape) {
+                _dismissContextMenu();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: AdaptiveTextSelectionToolbar.buttonItems(
+              anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
+              buttonItems: _contextMenuItems(witness),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Offset? _selectionMenuAnchor() {
+    final geometry = _currentGeometry();
+    final selection = _localSelection();
+    if (geometry == null || selection == null) return null;
+    if (selection.isCollapsed) {
+      return geometry
+          .caretRect(
+            DocOffset(selection.head),
+            assoc: _assoc(selection.affinity),
+          )
+          .value
+          .topCenter;
+    }
+    final boxes = geometry
+        .rectsForRange(DocRange(
+          DocOffset(selection.start),
+          DocOffset(selection.end),
+        ))
+        .value;
+    if (boxes.isEmpty) return null;
+    var rect = boxes.first.toRect();
+    for (final box in boxes.skip(1)) {
+      rect = rect.expandToInclude(box.toRect());
+    }
+    return rect.topCenter;
+  }
+
+  List<ContextMenuButtonItem> _contextMenuItems(_MenuWitness witness) {
+    final selection = _localSelection();
+    final block = _block;
+    final canCopy = selection != null && !selection.isCollapsed;
+    final canSelectAll = block != null &&
+        block.contentLength > 0 &&
+        (selection == null ||
+            selection.start != 0 ||
+            selection.end != block.contentLength);
+    final spelling = _spellingSuggestions.where((suggestion) {
+      final word = _secondaryWordRange;
+      return word != null &&
+          suggestion.range.start <= word.start &&
+          suggestion.range.end >= word.end;
+    });
+    return <ContextMenuButtonItem>[
+      for (final suggestion in spelling)
+        for (final replacement in suggestion.replacements)
+          ContextMenuButtonItem(
+            label: replacement,
+            onPressed: () => _applySpellingSuggestion(
+              witness,
+              suggestion,
+              replacement,
+            ),
+          ),
+      ContextMenuButtonItem(
+        type: ContextMenuButtonType.cut,
+        onPressed: canCopy
+            ? () => _invokeMenuIntent(
+                  witness,
+                  const CopySelectionTextIntent.cut(
+                    SelectionChangedCause.toolbar,
+                  ),
+                )
+            : null,
+      ),
+      ContextMenuButtonItem(
+        type: ContextMenuButtonType.copy,
+        onPressed: canCopy
+            ? () => _invokeMenuIntent(witness, CopySelectionTextIntent.copy)
+            : null,
+      ),
+      ContextMenuButtonItem(
+        type: ContextMenuButtonType.paste,
+        onPressed: () => _invokeMenuIntent(
+          witness,
+          const PasteTextIntent(SelectionChangedCause.toolbar),
+        ),
+      ),
+      ContextMenuButtonItem(
+        type: ContextMenuButtonType.selectAll,
+        onPressed: canSelectAll
+            ? () => _invokeMenuIntent(
+                  witness,
+                  const SelectAllTextIntent(SelectionChangedCause.toolbar),
+                )
+            : null,
+      ),
+      ContextMenuButtonItem(
+        // Flutter exposes localized button types for Cut through Select All,
+        // but no public Undo/Redo context-menu label in the supported SDKs.
+        label: 'Undo',
+        onPressed: _controller.canUndo
+            ? () => _invokeMenuIntent(
+                  witness,
+                  const UndoTextIntent(SelectionChangedCause.toolbar),
+                )
+            : null,
+      ),
+      ContextMenuButtonItem(
+        label: 'Redo',
+        onPressed: _controller.canRedo
+            ? () => _invokeMenuIntent(
+                  witness,
+                  const RedoTextIntent(SelectionChangedCause.toolbar),
+                )
+            : null,
+      ),
+    ];
+  }
+
+  void _invokeMenuIntent(_MenuWitness witness, Intent intent) {
+    final isCurrent = _isMenuWitnessCurrent(witness);
+    if (!isCurrent) {
+      _dismissContextMenu();
+      return;
+    }
+    _focusNode.requestFocus();
+    // Dispatch while the menu still counts as this host's editing focus. The
+    // focus request settles after this callback, but Actions enablement and an
+    // async clipboard witness must be captured synchronously.
+    _dispatchIntent(intent);
+    _dismissContextMenu();
+  }
+
+  void _applySpellingSuggestion(
+    _MenuWitness witness,
+    _ResolvedSpellingSuggestion suggestion,
+    String replacement,
+  ) {
+    final isCurrent = _isMenuWitnessCurrent(witness);
+    _dismissContextMenu();
+    if (!isCurrent ||
+        suggestion.contentRevision != _controller.contentRevision ||
+        replacement.contains('\n') ||
+        replacement.contains('\r')) {
+      return;
+    }
+    _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[
+        CanonicalTextEdit(
+          suggestion.range.start,
+          suggestion.range.end,
+          replacement,
+        ),
+      ],
+      selection: BlockTextSelection.collapsed(
+        suggestion.range.start + replacement.length,
+      ),
+    );
+    _focusNode.requestFocus();
+  }
+
+  bool _isMenuWitnessCurrent(_MenuWitness witness) =>
+      _isHostEpochCurrent(witness.epoch) &&
+      witness.stateRevision == _controller.stateRevision &&
+      _controller.composing == null;
+
+  void _dismissContextMenu() {
+    final menu = _contextMenuController;
+    _contextMenuController = null;
+    menu?.remove();
+  }
+
+  void _clearTransientState() {
+    _resetPointerState();
+    _secondaryLocalPosition = null;
+    _secondaryWordRange = null;
+    _dismissContextMenu();
+    _spellRequestGeneration++;
+    _spellRequestKey = null;
+    _spellingSuggestions = const [];
+  }
+
+  Iterable<_ResolvedSpellingSuggestion> get _currentSpellingSuggestions =>
+      _spellingSuggestions.where(
+        (suggestion) =>
+            suggestion.contentRevision == _controller.contentRevision,
+      );
+
+  void _ensureSpellCheck(ParagraphSource<Object?> source) {
+    final provider = widget.spellCheckProvider;
+    if (provider == null ||
+        _controller.composing != null ||
+        !_isHostEpochCurrent(_hostEpoch)) {
+      return;
+    }
+    final key = _SpellRequestKey(
+      provider: provider,
+      blockId: widget.blockId,
+      contentRevision: _controller.contentRevision,
+      text: source.viewText,
+      viewMap: source.viewMap,
+    );
+    if (_spellRequestKey == key) return;
+    _spellRequestKey = key;
+    _spellingSuggestions = const [];
+    final generation = ++_spellRequestGeneration;
+    final epoch = _hostEpoch;
+    late final Future<List<SuggestionSpan>> pending;
+    try {
+      pending = provider.check(HomericSpellCheckRequest(
+        blockId: key.blockId,
+        text: key.text,
+        contentRevision: key.contentRevision,
+      ));
+    } on Object {
+      return;
+    }
+    pending.then((suggestions) {
+      if (!mounted ||
+          epoch != _hostEpoch ||
+          generation != _spellRequestGeneration ||
+          _spellRequestKey != key ||
+          _controller.contentRevision != key.contentRevision ||
+          _controller.composing != null) {
+        return;
+      }
+      final resolved = <_ResolvedSpellingSuggestion>[];
+      for (final suggestion in suggestions) {
+        if (suggestion.range.start < 0 ||
+            suggestion.range.end <= suggestion.range.start ||
+            suggestion.range.end > source.viewText.length ||
+            suggestion.suggestions.isEmpty) {
+          continue;
+        }
+        final start =
+            source.viewMap.viewToDoc(suggestion.range.start, assoc: -1);
+        final end = source.viewMap.viewToDoc(suggestion.range.end, assoc: 1);
+        if (start >= end) continue;
+        resolved.add(_ResolvedSpellingSuggestion(
+          range: BlockTextRange(start, end),
+          replacements: List<String>.unmodifiable(suggestion.suggestions),
+          contentRevision: key.contentRevision,
+        ));
+      }
+      setState(() => _spellingSuggestions = List.unmodifiable(resolved));
+    }, onError: (_) {
+      if (!mounted ||
+          epoch != _hostEpoch ||
+          generation != _spellRequestGeneration ||
+          _spellRequestKey != key) {
+        return;
+      }
+      setState(() => _spellingSuggestions = const []);
+    });
   }
 
   ({int position, HomericCaretAffinity affinity}) _caretForPoint(
@@ -822,8 +1325,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       } else {
         _attachInput();
       }
+    } else if (_contextMenuController?.isShown ?? false) {
+      // The adaptive toolbar is part of this host's editing focus. Keyboard
+      // traversal may focus a menu button without ending the input epoch.
     } else {
-      _dragAnchor = null;
+      _clearTransientState();
       _renewHostBindings();
       widget.inputSession.blur();
     }
@@ -917,6 +1423,90 @@ final class _MoveCaretIntent extends Intent {
   final bool extend;
 }
 
+enum _DragSelectionMode { character, word, paragraph }
+
+final class _MenuWitness {
+  const _MenuWitness({
+    required this.epoch,
+    required this.stateRevision,
+  });
+
+  final int epoch;
+  final int stateRevision;
+}
+
+final class _SpellRequestKey {
+  const _SpellRequestKey({
+    required this.provider,
+    required this.blockId,
+    required this.contentRevision,
+    required this.text,
+    required this.viewMap,
+  });
+
+  final HomericSpellCheckProvider provider;
+  final String blockId;
+  final int contentRevision;
+  final String text;
+  final ViewMap viewMap;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _SpellRequestKey &&
+      identical(other.provider, provider) &&
+      other.blockId == blockId &&
+      other.contentRevision == contentRevision &&
+      other.text == text &&
+      other.viewMap == viewMap;
+
+  @override
+  int get hashCode => Object.hash(
+        identityHashCode(provider),
+        blockId,
+        contentRevision,
+        text,
+        viewMap,
+      );
+}
+
+final class _ResolvedSpellingSuggestion {
+  const _ResolvedSpellingSuggestion({
+    required this.range,
+    required this.replacements,
+    required this.contentRevision,
+  });
+
+  final BlockTextRange range;
+  final List<String> replacements;
+  final int contentRevision;
+}
+
+void _paintSpellingSquiggle(
+  ui.Canvas canvas,
+  Rect rect,
+  Object? spec,
+) {
+  final style = spec! as UnderlineSpec;
+  final baseline = rect.bottom - 0.25;
+  const halfWave = 2.0;
+  const amplitude = 1.0;
+  final path = ui.Path()..moveTo(rect.left, baseline);
+  var x = rect.left;
+  var rises = true;
+  while (x < rect.right) {
+    x = x + halfWave < rect.right ? x + halfWave : rect.right;
+    path.lineTo(x, baseline + (rises ? -amplitude : amplitude));
+    rises = !rises;
+  }
+  canvas.drawPath(
+    path,
+    ui.Paint()
+      ..color = style.color
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 1.0,
+  );
+}
+
 final class _TraverseIntent extends Intent {
   const _TraverseIntent(this.backward);
 
@@ -956,7 +1546,7 @@ final class _EditableHostCommandDelegate
   @override
   void showToolbar() {
     if (!state._isHostEpochCurrent(epoch)) return;
-    state.widget.onShowToolbar?.call();
+    state._showContextMenu();
   }
 }
 

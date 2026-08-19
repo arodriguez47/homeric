@@ -2,6 +2,10 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart'
+    show kDoubleTapTimeout, kSecondaryMouseButton;
+import 'package:flutter/material.dart'
+    show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
@@ -855,6 +859,623 @@ void main() {
     expect(controller.document.blocks.single.text, 'A');
   });
 
+  testWidgets('desktop selection is arbitrated by the text selection detector',
+      (tester) async {
+    final controller = HomericEditorController(document: _document('one two'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+
+    expect(find.byType(TextSelectionGestureDetector), findsOneWidget);
+  });
+
+  testWidgets('macOS rapid clicks clamp at whole paragraph selection',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(document: _document('one two'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+    final point = tester.getTopLeft(find.byType(HomericEditableParagraph)) +
+        const Offset(12, 7);
+
+    await tester.tapAt(point);
+    expect(controller.selection!.isCollapsed, isTrue);
+    await tester.tapAt(point);
+    var local = _localSelection(controller);
+    expect('one two'.substring(local.start, local.end), 'one');
+    await tester.tapAt(point);
+    local = _localSelection(controller);
+    expect((local.start, local.end), (0, 7));
+    await tester.tapAt(point);
+    local = _localSelection(controller);
+    expect((local.start, local.end), (0, 7));
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('word drag expands by words and pointer cancel clears its anchor',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller =
+        HomericEditorController(document: _document('one two three'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+    final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
+    final firstWord = origin + const Offset(10, 7);
+    final geometry = ParagraphGeometry(tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph)));
+    final thirdWord = geometry
+        .rectsForRange(
+          DocRange(const DocOffset(8), const DocOffset(13)),
+        )
+        .value
+        .first
+        .toRect()
+        .center;
+    await tester.tapAt(firstWord);
+    final gesture = await tester.startGesture(firstWord);
+    await gesture.moveTo(origin + thirdWord);
+    await tester.pump();
+    var local = _localSelection(controller);
+    expect((local.start, local.end), (0, 13));
+    await gesture.cancel();
+
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+    final fresh = await tester.startGesture(origin + const Offset(35, 7));
+    await fresh.moveTo(origin + const Offset(52, 7));
+    await tester.pump();
+    await fresh.up();
+    local = _localSelection(controller);
+    expect(local.start, greaterThan(0),
+        reason: 'the cancelled word anchor cannot leak into the next drag');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('triple-click drag remains clamped to the active paragraph',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(document: _document('one two'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+    final point = tester.getTopLeft(find.byType(HomericEditableParagraph)) +
+        const Offset(10, 7);
+    await tester.tapAt(point);
+    await tester.tapAt(point);
+    final gesture = await tester.startGesture(point);
+    await gesture.moveBy(const Offset(-300, 300));
+    await tester.pump();
+    await gesture.up();
+    final local = _localSelection(controller);
+    expect((local.start, local.end), (0, 7));
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+      'secondary click preserves inside selection and menu is stale safe',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final clipboard = _FakeClipboard();
+    final controller = HomericEditorController(
+      document: _document('one two'),
+      selection: const HomericSelection(anchor: 1, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            clipboard: clipboard,
+            resolveStyle: (_) => _style,
+          ),
+        ),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
+    await tester.tapAt(
+      origin + const Offset(10, 7),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+    expect(_localSelection(controller),
+        const BlockTextSelection(anchor: 0, head: 3));
+    final toolbar = tester.widget<AdaptiveTextSelectionToolbar>(
+      find.byType(AdaptiveTextSelectionToolbar),
+    );
+    expect(toolbar.buttonItems!.map((item) => item.type), [
+      ContextMenuButtonType.cut,
+      ContextMenuButtonType.copy,
+      ContextMenuButtonType.paste,
+      ContextMenuButtonType.selectAll,
+      ContextMenuButtonType.custom,
+      ContextMenuButtonType.custom,
+    ]);
+    expect(toolbar.buttonItems!.map((item) => item.onPressed != null), [
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ]);
+    final staleCut = toolbar.buttonItems!.first.onPressed!;
+    controller.setSelection(const HomericSelection.collapsed(8));
+    await tester.pump();
+    staleCut();
+    await tester.pump();
+    expect(clipboard.writes, isEmpty);
+    expect(controller.document.blocks.single.text, 'one two');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+
+    final geometry = ParagraphGeometry(tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph)));
+    final secondWord = geometry
+        .rectsForRange(
+          DocRange(const DocOffset(4), const DocOffset(7)),
+        )
+        .value
+        .first
+        .toRect()
+        .center;
+    await tester.tapAt(
+      origin + secondWord,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+    final outside = _localSelection(controller);
+    expect('one two'.substring(outside.start, outside.end), 'two');
+    ContextMenuController.removeAny();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('adaptive menu supports keyboard traversal and activation',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final clipboard = _FakeClipboard();
+    final controller = HomericEditorController(
+      document: _document('one two'),
+      selection: const HomericSelection(anchor: 1, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            clipboard: clipboard,
+            resolveStyle: (_) => _style,
+          ),
+        ),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
+    await tester.tapAt(
+      origin + const Offset(10, 7),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(primaryFocus, isNot(same(focusNode)));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    await tester.pump();
+
+    expect(clipboard.writes, <String>['one']);
+    expect(controller.document.blocks.single.text, 'one two');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('current projected spell results paint outside controller state',
+      (tester) async {
+    final provider = _FakeSpellProvider();
+    final controller = HomericEditorController(document: _document('mispell'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    final decorations = controller.decorations;
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+      spellCheckProvider: provider,
+    )));
+    await tester.pump();
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+    expect(provider.requests, hasLength(1));
+    final revision = controller.stateRevision;
+    provider.complete(const <SuggestionSpan>[
+      SuggestionSpan(TextRange(start: 0, end: 7), <String>['misspell']),
+    ]);
+    await tester.pump();
+    await tester.pump();
+
+    final render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect(render.paintLayers.last.band, PaintBand.overlay);
+    expect(controller.decorations, same(decorations));
+    expect(controller.stateRevision, revision);
+  });
+
+  testWidgets('inactive paragraphs never schedule spelling work',
+      (tester) async {
+    final firstProvider = _FakeSpellProvider();
+    final secondProvider = _FakeSpellProvider();
+    final firstController =
+        HomericEditorController(document: _document('first'));
+    final secondController = HomericEditorController(
+      document: Document([
+        Block(id: 'c', type: 'paragraph', runs: [InlineRun('second')]),
+      ]),
+    );
+    final firstSession = HomericTextInputSession(controller: firstController);
+    final secondSession = HomericTextInputSession(controller: secondController);
+    final firstFocus = FocusNode();
+    final secondFocus = FocusNode();
+    addTearDown(firstFocus.dispose);
+    addTearDown(secondFocus.dispose);
+    addTearDown(firstSession.dispose);
+    addTearDown(secondSession.dispose);
+    addTearDown(firstController.dispose);
+    addTearDown(secondController.dispose);
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: Column(children: [
+        SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: firstController,
+            inputSession: firstSession,
+            focusNode: firstFocus,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+            spellCheckProvider: firstProvider,
+          ),
+        ),
+        SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: secondController,
+            inputSession: secondSession,
+            focusNode: secondFocus,
+            blockId: 'c',
+            resolveStyle: (_) => _style,
+            spellCheckProvider: secondProvider,
+          ),
+        ),
+      ]),
+    ));
+    await tester.pump();
+    expect(firstProvider.requests, isEmpty);
+    expect(secondProvider.requests, isEmpty);
+
+    firstFocus.requestFocus();
+    await tester.pump();
+    await tester.pump();
+    expect(firstProvider.requests, hasLength(1));
+    expect(secondProvider.requests, isEmpty);
+  });
+
+  testWidgets('spell provider swap refreshes without reconnecting input',
+      (tester) async {
+    final firstProvider = _FakeSpellProvider();
+    final secondProvider = _FakeSpellProvider();
+    final controller = HomericEditorController(document: _document('mispell'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    late StateSetter rebuild;
+    HomericSpellCheckProvider provider = firstProvider;
+    var toolbarRequests = 0;
+
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: StatefulBuilder(builder: (context, setState) {
+        rebuild = setState;
+        return SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+            spellCheckProvider: provider,
+            onShowToolbar: () => toolbarRequests++,
+          ),
+        );
+      }),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+    expect(firstProvider.requests, hasLength(1));
+
+    rebuild(() => provider = secondProvider);
+    await tester.pump();
+    await tester.pump();
+
+    expect(secondProvider.requests, hasLength(1));
+    await _sendShowToolbar(binding, 1);
+    expect(toolbarRequests, 1,
+        reason: 'a spelling-only swap keeps the current input client');
+  });
+
+  testWidgets('stale spell result is discarded and current result is painted',
+      (tester) async {
+    final provider = _FakeSpellProvider();
+    final controller = HomericEditorController(document: _document('bad'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+      spellCheckProvider: provider,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+    expect(provider.requests, hasLength(1));
+
+    controller.applyBlockEditBatch(
+      blockId: 'b',
+      edits: const <CanonicalTextEdit>[CanonicalTextEdit(0, 1, 's')],
+      selection: const BlockTextSelection.collapsed(1),
+    );
+    await tester.pump();
+    expect(provider.requests, hasLength(2));
+    provider.completeAt(0, const <SuggestionSpan>[
+      SuggestionSpan(TextRange(start: 0, end: 3), <String>['good']),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    var render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect(render.paintLayers, isEmpty);
+
+    provider.completeAt(1, const <SuggestionSpan>[
+      SuggestionSpan(TextRange(start: 0, end: 3), <String>['sad']),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect(render.paintLayers, hasLength(1));
+    expect(render.paintLayers.single.band, PaintBand.overlay);
+  });
+
+  testWidgets(
+      'projected spelling maps hidden syntax and replacement is one undo unit',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final provider = _FakeSpellProvider();
+    final controller = HomericEditorController(
+      document: _document('**bold**'),
+      decorations: DecorationSet.of([
+        Decoration.replace('b', 0, 2, replacementLength: 0),
+        Decoration.replace('b', 6, 8, replacementLength: 0),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+            spellCheckProvider: provider,
+          ),
+        ),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+    expect(provider.requests.single.text, 'bold');
+    provider.complete(const <SuggestionSpan>[
+      SuggestionSpan(TextRange(start: 0, end: 4), <String>['strong']),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.canUndo, isFalse,
+        reason: 'transient spelling state never enters controller history');
+
+    final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
+    final geometry = ParagraphGeometry(tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph)));
+    final visibleWord = geometry
+        .rectsForRange(
+          DocRange(const DocOffset(0), const DocOffset(8)),
+        )
+        .value
+        .first
+        .toRect()
+        .center;
+    await tester.tapAt(
+      origin + visibleWord,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+    final toolbar = tester.widget<AdaptiveTextSelectionToolbar>(
+      find.byType(AdaptiveTextSelectionToolbar),
+    );
+    expect(toolbar.buttonItems!.first.label, 'strong');
+    toolbar.buttonItems!.first.onPressed!();
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'strong');
+    expect(controller.canUndo, isTrue);
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.single.text, '**bold**');
+    expect(controller.canUndo, isFalse);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('no spell provider leaves ordinary editing enabled',
+      (tester) async {
+    final controller = HomericEditorController(document: _document('plain'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+    await tester.tapAt(
+      tester.getTopLeft(find.byType(HomericEditableParagraph)) +
+          const Offset(12, 7),
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, isNot('plain'));
+  });
+
+  testWidgets('current platform toolbar callback opens one adaptive menu',
+      (tester) async {
+    final controller = HomericEditorController(
+      document: _document('one two'),
+      selection: const HomericSelection(anchor: 1, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    final replacementFocusNode = FocusNode();
+    var toolbarRequests = 0;
+    addTearDown(focusNode.dispose);
+    addTearDown(replacementFocusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            key: const ValueKey('first-host'),
+            controller: controller,
+            inputSession: session,
+            focusNode: replacementFocusNode,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+            onShowToolbar: () => toolbarRequests++,
+          ),
+        ),
+      ),
+    ));
+    replacementFocusNode.requestFocus();
+    await tester.pump();
+    await _sendShowToolbar(binding, 1);
+    await tester.pump();
+    expect(toolbarRequests, 1);
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            key: const ValueKey('replacement-host'),
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+            onShowToolbar: () => toolbarRequests++,
+          ),
+        ),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    await _sendShowToolbar(binding, 1);
+    await tester.pump();
+    expect(toolbarRequests, 1,
+        reason: 'the superseded text-input client is inert');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    await _sendShowToolbar(binding, 2);
+    await tester.pump();
+    expect(toolbarRequests, 2);
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    ContextMenuController.removeAny();
+  });
+
   testWidgets('Tab and Shift-Tab traverse without inserting text',
       (tester) async {
     final controller = HomericEditorController(document: _document('abc'));
@@ -916,6 +1537,15 @@ Document _document(String text) => Document([
         runs: [if (text.isNotEmpty) InlineRun(text)],
       ),
     ]);
+
+BlockTextSelection _localSelection(HomericEditorController controller) {
+  final selection = controller.selection!;
+  return BlockTextSelection(
+    anchor: controller.blockOffsetForGlobalPosition('b', selection.anchor),
+    head: controller.blockOffsetForGlobalPosition('b', selection.head),
+    affinity: selection.affinity,
+  );
+}
 
 Widget _harness(Widget child, {double width = 200}) => Directionality(
       textDirection: TextDirection.ltr,
@@ -980,6 +1610,21 @@ Future<void> _sendSelectors(
   );
 }
 
+Future<void> _sendShowToolbar(
+  TestWidgetsFlutterBinding binding,
+  int clientId,
+) async {
+  final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+    'method': 'TextInputClient.showToolbar',
+    'args': <Object?>[clientId, 0, 1],
+  });
+  await binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/textinput',
+    message,
+    (_) {},
+  );
+}
+
 final class _FakeClipboard implements HomericClipboardAdapter {
   _FakeClipboard({this.readValue, this.pendingRead});
 
@@ -992,4 +1637,25 @@ final class _FakeClipboard implements HomericClipboardAdapter {
 
   @override
   Future<void> writeText(String text) async => writes.add(text);
+}
+
+final class _FakeSpellProvider implements HomericSpellCheckProvider {
+  final List<HomericSpellCheckRequest> requests = [];
+  final List<Completer<List<SuggestionSpan>>> _pending = [];
+
+  @override
+  Future<List<SuggestionSpan>> check(HomericSpellCheckRequest request) {
+    requests.add(request);
+    final completer = Completer<List<SuggestionSpan>>();
+    _pending.add(completer);
+    return completer.future;
+  }
+
+  void complete(List<SuggestionSpan> suggestions) {
+    completeAt(0, suggestions);
+  }
+
+  void completeAt(int index, List<SuggestionSpan> suggestions) {
+    _pending[index].complete(suggestions);
+  }
 }

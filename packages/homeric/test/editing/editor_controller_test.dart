@@ -285,6 +285,217 @@ void main() {
   });
 
   group('atomic batches, composition, and undo', () {
+    test('undo and redo restore exact snapshots and notify once', () {
+      final doc = _document(['abcd']);
+      final beforeDecorations =
+          DecorationSet.of([Decoration.inline('a', 0, 1)]);
+      final afterDecorations =
+          beforeDecorations.add([Decoration.inline('a', 2, 4)]);
+      final beforeSelection = HomericSelection(
+        anchor: doc.positionAt(0, 4),
+        head: doc.positionAt(0, 1),
+        affinity: HomericCaretAffinity.upstream,
+      );
+      final controller = HomericEditorController(
+        document: doc,
+        decorations: beforeDecorations,
+        selection: beforeSelection,
+        preferredX: 27,
+      );
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      expect(controller.replaceDecorations(afterDecorations), isTrue);
+      expect(controller.canUndo, isTrue);
+      expect(controller.canRedo, isFalse);
+
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(doc));
+      expect(controller.decorations, same(beforeDecorations));
+      expect(controller.selection, beforeSelection);
+      expect(controller.composing, isNull);
+      expect(controller.preferredX, 27);
+      expect(controller.canUndo, isFalse);
+      expect(controller.canRedo, isTrue);
+
+      expect(controller.redo(), isTrue);
+      expect(controller.document, same(doc));
+      expect(controller.decorations, same(afterDecorations));
+      expect(controller.selection, beforeSelection);
+      expect(controller.composing, isNull);
+      expect(controller.preferredX, 27);
+      expect(controller.canUndo, isTrue);
+      expect(controller.canRedo, isFalse);
+      expect(notifications, 3);
+    });
+
+    test('state and content revisions are monotonic witnesses', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+
+      expect(controller.stateRevision, 0);
+      expect(controller.contentRevision, 0);
+
+      expect(
+        controller.setSelection(
+          HomericSelection.collapsed(doc.positionAt(0, 0)),
+        ),
+        isTrue,
+      );
+      expect(controller.stateRevision, 1);
+      expect(controller.contentRevision, 0);
+
+      final beforeMutation = controller.stateRevision;
+      expect(controller.replaceSelection('x'), isTrue);
+      expect(controller.stateRevision, 2);
+      expect(controller.contentRevision, 1);
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(doc));
+      expect(controller.stateRevision, 3);
+      expect(controller.stateRevision, greaterThan(beforeMutation));
+      expect(controller.contentRevision, 2);
+
+      expect(controller.redo(), isTrue);
+      expect(controller.stateRevision, 4);
+      expect(controller.contentRevision, 3);
+    });
+
+    test('attribute-only edits do not advance the content revision', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [
+            CanonicalTextEdit(
+              0,
+              1,
+              'a',
+              attributes: {'strong': true},
+            ),
+          ],
+          selection: const BlockTextSelection.collapsed(1),
+        ),
+        isTrue,
+      );
+      expect(controller.stateRevision, 1);
+      expect(controller.contentRevision, 0);
+      expect(controller.document.blocks.single.text, 'ab');
+    });
+
+    test('selection and preferred-x changes preserve redo', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+      controller.replaceSelection('x');
+      controller.undo();
+      final contentRevision = controller.contentRevision;
+
+      expect(
+        controller.setSelection(
+          HomericSelection.collapsed(doc.positionAt(0, 0)),
+          preferredX: 12,
+        ),
+        isTrue,
+      );
+      expect(controller.canRedo, isTrue);
+      expect(controller.contentRevision, contentRevision);
+      expect(controller.resetPreferredX(), isTrue);
+      expect(controller.canRedo, isTrue);
+      expect(controller.contentRevision, contentRevision);
+      expect(controller.redo(), isTrue);
+      expect(controller.document.blocks.single.text, 'axb');
+    });
+
+    test('new committed mutations clear redo', () {
+      HomericEditorController editedController() {
+        final doc = _document(['ab']);
+        final controller = HomericEditorController(
+          document: doc,
+          selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+        );
+        controller.replaceSelection('x');
+        controller.undo();
+        expect(controller.canRedo, isTrue);
+        return controller;
+      }
+
+      final textController = editedController();
+      expect(textController.replaceSelection('y'), isTrue);
+      expect(textController.canRedo, isFalse);
+
+      final decorationController = editedController();
+      expect(
+        decorationController.replaceDecorations(
+          DecorationSet.of([Decoration.inline('a', 0, 1)]),
+        ),
+        isTrue,
+      );
+      expect(decorationController.canRedo, isFalse);
+      expect(decorationController.contentRevision, 2);
+
+      final transactionController = editedController();
+      final tx = Transaction(transactionController.document)
+        ..insertText(transactionController.document.positionAt(0, 0), '!');
+      expect(transactionController.applyTransaction(tx), isTrue);
+      expect(transactionController.canRedo, isFalse);
+    });
+
+    test('composition remains one symmetric bounded history unit', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+        maxUndoDepth: 2,
+      );
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      controller.applyBlockEditBatch(
+        blockId: 'a',
+        edits: const [CanonicalTextEdit(1, 1, 'x')],
+        selection: const BlockTextSelection.collapsed(2),
+        composing: const BlockTextRange(1, 2),
+      );
+      controller.applyBlockEditBatch(
+        blockId: 'a',
+        edits: const [CanonicalTextEdit(1, 2, 'xy')],
+        selection: const BlockTextSelection.collapsed(3),
+        composing: const BlockTextRange(1, 3),
+      );
+
+      final beforeUndoNotifications = notifications;
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(doc));
+      expect(controller.composing, isNull);
+      expect(notifications, beforeUndoNotifications + 1);
+      expect(controller.canRedo, isTrue);
+
+      expect(controller.redo(), isTrue);
+      expect(controller.document.blocks.single.text, 'axyb');
+      expect(controller.composing, isNull);
+      expect(notifications, beforeUndoNotifications + 2);
+
+      expect(controller.replaceSelection('1'), isTrue);
+      expect(controller.replaceSelection('2'), isTrue);
+      expect(controller.replaceSelection('3'), isTrue);
+      expect(controller.undo(), isTrue);
+      expect(controller.undo(), isTrue);
+      expect(controller.undo(), isFalse);
+      expect(controller.redo(), isTrue);
+      expect(controller.redo(), isTrue);
+      expect(controller.redo(), isFalse);
+    });
+
     test('ordered batch commits once and undoes exact state', () {
       final doc = _document(['abcd']);
       final selection = HomericSelection.collapsed(doc.positionAt(0, 1));

@@ -211,8 +211,11 @@ class HomericEditorController extends ChangeNotifier {
   double? _preferredX;
 
   final List<_EditorSnapshot> _undoStack = <_EditorSnapshot>[];
+  final List<_EditorSnapshot> _redoStack = <_EditorSnapshot>[];
   _EditorSnapshot? _compositionStart;
   bool _compositionDidEdit = false;
+  int _stateRevision = 0;
+  int _contentRevision = 0;
 
   /// Called synchronously before a mutation touching hidden canonical text.
   ///
@@ -241,6 +244,15 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Whether a committed document edit can be undone.
   bool get canUndo => _undoStack.isNotEmpty;
+
+  /// Whether an undone editor snapshot can be restored.
+  bool get canRedo => _redoStack.isNotEmpty;
+
+  /// Monotonic witness for every listener-visible state transition.
+  int get stateRevision => _stateRevision;
+
+  /// Monotonic witness for changes to canonical block text.
+  int get contentRevision => _contentRevision;
 
   /// Stable id of the selection's active block, or `null` without selection.
   String? get activeBlockId {
@@ -295,7 +307,7 @@ class HomericEditorController extends ChangeNotifier {
     }
     _selection = value;
     _preferredX = nextPreferredX;
-    notifyListeners();
+    _notifyTransition();
     return true;
   }
 
@@ -304,12 +316,12 @@ class HomericEditorController extends ChangeNotifier {
     if (!_isValidSelection(_document, value)) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (value == _selection) {
-      if (compositionChanged) notifyListeners();
+      if (compositionChanged) _notifyTransition();
       return compositionChanged;
     }
     _selection = value;
     _preferredX = null;
-    notifyListeners();
+    _notifyTransition();
     return true;
   }
 
@@ -317,7 +329,7 @@ class HomericEditorController extends ChangeNotifier {
   bool setPreferredX(double value) {
     if (!value.isFinite || value == _preferredX) return false;
     _preferredX = value;
-    notifyListeners();
+    _notifyTransition();
     return true;
   }
 
@@ -325,7 +337,7 @@ class HomericEditorController extends ChangeNotifier {
   bool resetPreferredX() {
     if (_preferredX == null) return false;
     _preferredX = null;
-    notifyListeners();
+    _notifyTransition();
     return true;
   }
 
@@ -488,7 +500,10 @@ class HomericEditorController extends ChangeNotifier {
     } else if (tx.docChanged) {
       _pushUndo(before);
     }
-    notifyListeners();
+    if (tx.docChanged) _redoStack.clear();
+    _notifyTransition(
+      contentChanged: _canonicalTextDiffers(before.document, _document),
+    );
     return true;
   }
 
@@ -497,7 +512,7 @@ class HomericEditorController extends ChangeNotifier {
     if (!identical(transaction.before, _document)) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (!transaction.docChanged) {
-      if (compositionChanged) notifyListeners();
+      if (compositionChanged) _notifyTransition();
       return compositionChanged;
     }
     final before = _snapshot();
@@ -516,7 +531,10 @@ class HomericEditorController extends ChangeNotifier {
         ? mappedComposing
         : null;
     _pushUndo(before);
-    notifyListeners();
+    _redoStack.clear();
+    _notifyTransition(
+      contentChanged: _canonicalTextDiffers(before.document, _document),
+    );
     return true;
   }
 
@@ -528,13 +546,14 @@ class HomericEditorController extends ChangeNotifier {
   bool replaceDecorations(DecorationSet value) {
     final compositionChanged = _finishComposition(notify: false);
     if (identical(value, _decorations)) {
-      if (compositionChanged) notifyListeners();
+      if (compositionChanged) _notifyTransition();
       return compositionChanged;
     }
     final before = _snapshot();
     _decorations = value;
     _pushUndo(before);
-    notifyListeners();
+    _redoStack.clear();
+    _notifyTransition();
     return true;
   }
 
@@ -546,11 +565,39 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Restores the exact state before the latest committed edit group.
   bool undo() {
-    if (_compositionStart != null) _finishComposition(notify: false);
-    if (_undoStack.isEmpty) return false;
+    final compositionChanged = _finishComposition(notify: false);
+    if (_undoStack.isEmpty) {
+      if (compositionChanged) _notifyTransition();
+      return compositionChanged;
+    }
+    final current = _snapshot();
     final snapshot = _undoStack.removeLast();
+    _pushHistory(_redoStack, current);
+    final contentChanged = _canonicalTextDiffers(
+      current.document,
+      snapshot.document,
+    );
     _restore(snapshot);
-    notifyListeners();
+    _notifyTransition(contentChanged: contentChanged);
+    return true;
+  }
+
+  /// Restores the exact state most recently displaced by [undo].
+  bool redo() {
+    final compositionChanged = _finishComposition(notify: false);
+    if (_redoStack.isEmpty) {
+      if (compositionChanged) _notifyTransition();
+      return compositionChanged;
+    }
+    final current = _snapshot();
+    final snapshot = _redoStack.removeLast();
+    _pushUndo(current);
+    final contentChanged = _canonicalTextDiffers(
+      current.document,
+      snapshot.document,
+    );
+    _restore(snapshot);
+    _notifyTransition(contentChanged: contentChanged);
     return true;
   }
 
@@ -561,7 +608,7 @@ class HomericEditorController extends ChangeNotifier {
     _compositionStart = null;
     _compositionDidEdit = false;
     _composing = null;
-    if (notify) notifyListeners();
+    if (notify) _notifyTransition();
     return true;
   }
 
@@ -627,11 +674,33 @@ class HomericEditorController extends ChangeNotifier {
   }
 
   void _pushUndo(_EditorSnapshot snapshot) {
-    _undoStack.add(snapshot);
-    final overflow = _undoStack.length - maxUndoDepth;
+    _pushHistory(_undoStack, snapshot);
+  }
+
+  void _pushHistory(
+    List<_EditorSnapshot> stack,
+    _EditorSnapshot snapshot,
+  ) {
+    stack.add(snapshot);
+    final overflow = stack.length - maxUndoDepth;
     if (overflow > 0) {
-      _undoStack.removeRange(0, overflow);
+      stack.removeRange(0, overflow);
     }
+  }
+
+  void _notifyTransition({bool contentChanged = false}) {
+    _stateRevision++;
+    if (contentChanged) _contentRevision++;
+    notifyListeners();
+  }
+
+  static bool _canonicalTextDiffers(Document before, Document after) {
+    if (identical(before, after)) return false;
+    if (before.blockCount != after.blockCount) return true;
+    for (var index = 0; index < before.blockCount; index++) {
+      if (before.blocks[index].text != after.blocks[index].text) return true;
+    }
+    return false;
   }
 
   Iterable<CanonicalEditTarget> _hiddenTargets(

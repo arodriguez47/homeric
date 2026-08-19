@@ -561,8 +561,8 @@ class RenderHomericParagraph extends RenderBox
   set onGeometryChanged(GeometryChangedCallback? value) {
     final wasSilent = _onGeometryChanged == null;
     _onGeometryChanged = value;
-    if (wasSilent && value != null && hasSize && !debugNeedsLayout) {
-      _scheduleGeometryNotification();
+    if (wasSilent && value != null && hasCurrentGeometry) {
+      _scheduleGeometryNotification(defer: true);
     }
   }
 
@@ -575,6 +575,7 @@ class RenderHomericParagraph extends RenderBox
   List<PlaceholderDimensions>? _intrinsicsDimensions;
   bool _rebuildForPaint = false;
   int _layoutGeneration = 0;
+  bool _geometryReady = false;
   bool _geometryNotificationScheduled = false;
   bool _disposed = false;
 
@@ -621,15 +622,16 @@ class RenderHomericParagraph extends RenderBox
   /// frame, hop to a post-frame callback; otherwise fire synchronously.
   /// This costs no latency — geometry follows layout, which follows build,
   /// so a consumer's `setState` lands in the next frame either way.
-  void _scheduleGeometryNotification() {
+  void _scheduleGeometryNotification({bool defer = false}) {
     if (_onGeometryChanged == null) {
       // Nobody listens: no closure, no allocation, no post-frame
       // registration. This branch is the whole cost of the feature for
       // the paragraphs that never opt in.
       return;
     }
-    if (SchedulerBinding.instance.schedulerPhase ==
-        SchedulerPhase.persistentCallbacks) {
+    if (defer ||
+        SchedulerBinding.instance.schedulerPhase ==
+            SchedulerPhase.persistentCallbacks) {
       if (_geometryNotificationScheduled) {
         // Two layouts in one frame dispatch once, at the final
         // generation — see _dispatchGeometryChanged.
@@ -646,7 +648,7 @@ class RenderHomericParagraph extends RenderBox
   }
 
   void _dispatchGeometryChanged() {
-    if (_disposed) {
+    if (_disposed || !hasCurrentGeometry) {
       // A post-frame callback cannot be cancelled once registered; this
       // guard is the cancellation. Without it a queued dispatch would
       // hand over a render object whose layoutParagraph asserts
@@ -887,6 +889,15 @@ class RenderHomericParagraph extends RenderBox
   /// reads become asserts. Paint-only rebuilds do not increment it.
   int get layoutGeneration => _layoutGeneration;
 
+  /// Whether the last completed layout still describes this render object.
+  ///
+  /// This is the release-safe counterpart to debug-only render lifecycle
+  /// probes. It becomes false synchronously when layout is invalidated and
+  /// true only after paragraph size and inline-child offsets are settled.
+  @internal
+  bool get hasCurrentGeometry =>
+      attached && hasSize && _geometryReady && _paragraph != null;
+
   /// The live, laid-out `ui.Paragraph`.
   ///
   /// Render-layer internal: consumed by the U4 geometry service (and
@@ -932,7 +943,14 @@ class RenderHomericParagraph extends RenderBox
   // --- Layout -------------------------------------------------------------
 
   @override
+  void markNeedsLayout() {
+    _geometryReady = false;
+    super.markNeedsLayout();
+  }
+
+  @override
   void performLayout() {
+    _geometryReady = false;
     // Children first, one pass, width-only constraint — they are never
     // re-laid-out after the text is (no feedback loop).
     final dimensions = childCount > 0
@@ -954,6 +972,7 @@ class RenderHomericParagraph extends RenderBox
     _layoutGeneration += 1;
     size = constraints.constrain(natural);
     _positionChildren(paragraph);
+    _geometryReady = true;
     // Last, not at the generation bump above: `size` and the children's
     // paint offsets are only settled here, and blockRect/slotRectAt read
     // both. This is the sole dispatch site in the class, which is what

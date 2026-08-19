@@ -153,9 +153,7 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
     RenderHomericParagraph paragraph,
     HomericParagraph paragraphWidget,
   ) {
-    return paragraph.attached &&
-        paragraph.hasSize &&
-        !paragraph.debugNeedsLayout &&
+    return paragraph.hasCurrentGeometry &&
         paragraph.constraints == constraints &&
         RenderHomericParagraph._paragraphSourceEquals(
             paragraph.source, paragraphWidget.source) &&
@@ -209,8 +207,7 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
           !identical(_paragraph, pending.paragraph) ||
           widget.paragraph.key != pending.paragraphKey ||
           widget.slotLayoutRevision != pending.slotLayoutRevision ||
-          !pending.paragraph.attached ||
-          pending.paragraph.debugNeedsLayout ||
+          !pending.paragraph.hasCurrentGeometry ||
           pending.paragraph.layoutGeneration != pending.generation) {
         return;
       }
@@ -233,8 +230,7 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
           generation == null ||
           _paragraphKey != widget.paragraph.key ||
           _slotLayoutRevision != widget.slotLayoutRevision ||
-          !paragraph.attached ||
-          paragraph.debugNeedsLayout ||
+          !paragraph.hasCurrentGeometry ||
           paragraph.layoutGeneration != generation ||
           !_matchesCurrentLayout(
               context, paragraph.constraints, paragraph, widget.paragraph)) {

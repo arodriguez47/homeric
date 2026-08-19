@@ -172,6 +172,76 @@ void main() {
     expect(controller.document.blocks.single.text, 'ac');
   });
 
+  testWidgets('macOS word selectors preserve direction and reversal semantics',
+      (tester) async {
+    final controller = HomericEditorController(document: _document('one two'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+    await tester.tapAt(
+      tester.getTopLeft(find.byType(HomericEditableParagraph)) +
+          const Offset(15, 7),
+    );
+    await tester.pump();
+    controller.setSelection(HomericSelection.collapsed(
+        controller.globalPositionForBlockOffset('b', 7)));
+    await tester.pump();
+
+    await _sendSelectors(binding, 1, const ['moveWordLeft:']);
+    await tester.pump();
+    expect(controller.selection, const HomericSelection.collapsed(5));
+
+    await _sendSelectors(binding, 1, const ['moveWordLeftAndModifySelection:']);
+    await tester.pump();
+    expect(controller.selection, const HomericSelection(anchor: 5, head: 1));
+
+    await _sendSelectors(
+        binding, 1, const ['moveWordRightAndModifySelection:']);
+    await tester.pump();
+    expect(controller.selection, const HomericSelection(anchor: 5, head: 4));
+
+    await _sendSelectors(
+        binding, 1, const ['moveWordRightAndModifySelection:']);
+    await tester.pump();
+    expect(controller.selection, const HomericSelection.collapsed(5),
+        reason: 'macOS collapses at the anchor before reversing direction');
+  });
+
+  testWidgets('word deletion uses the canonical directional range',
+      (tester) async {
+    final controller = HomericEditorController(document: _document('one two'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+    await tester.tapAt(
+      tester.getTopLeft(find.byType(HomericEditableParagraph)) +
+          const Offset(15, 7),
+    );
+    await tester.pump();
+    controller.setSelection(HomericSelection.collapsed(
+        controller.globalPositionForBlockOffset('b', 7)));
+    await tester.pump();
+
+    await _sendSelectors(binding, 1, const ['deleteWordBackward:']);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one ');
+    expect(controller.selection, const HomericSelection.collapsed(5));
+  });
+
   testWidgets('focused state reuse transfers input to the replacement block',
       (tester) async {
     final document = Document([

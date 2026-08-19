@@ -595,6 +595,236 @@ void main() {
     });
   });
 
+  group('directional word movement', () {
+    testWidgets('skips separator runs and always progresses at boundaries',
+        (tester) async {
+      await tester.pumpWidget(
+          harness(HomericParagraph(source: sourceOf('one,   two'))));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(0),
+              direction: WordMovementDirection.forward,
+            )
+            .value
+            .position,
+        const DocOffset(3),
+      );
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(3),
+              direction: WordMovementDirection.forward,
+            )
+            .value
+            .position,
+        const DocOffset(10),
+      );
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(7),
+              direction: WordMovementDirection.backward,
+            )
+            .value
+            .position,
+        const DocOffset(0),
+      );
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(10),
+              direction: WordMovementDirection.backward,
+            )
+            .value
+            .position,
+        const DocOffset(7),
+      );
+    });
+
+    testWidgets('clamps empty text and paragraph edges', (tester) async {
+      await tester.pumpWidget(harness(HomericParagraph(source: sourceOf(''))));
+      var geometry = ParagraphGeometry(renderOf(tester));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf('word'))));
+      geometry = ParagraphGeometry(renderOf(tester));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(4),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(4));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+    });
+
+    testWidgets('never splits emoji or combining graphemes', (tester) async {
+      const emoji = '👩‍👩‍👧‍👦';
+      const combined = 'e\u0301';
+      const text = '$emoji $combined next';
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf(text))));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      const emojiEnd = emoji.length;
+      const combinedStart = emojiEnd + 1;
+      const combinedEnd = combinedStart + combined.length;
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(emojiEnd));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(emojiEnd),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(combinedEnd));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(combinedEnd),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(combinedStart));
+    });
+
+    testWidgets('is logical across bidi runs and independent of soft wraps',
+        (tester) async {
+      const text = 'abc אבג def';
+      await tester.pumpWidget(
+          harness(HomericParagraph(source: sourceOf(text)), width: 42));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(3),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(7));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(8),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(4));
+    });
+
+    testWidgets('absorbs hidden delimiters without exposing view offsets',
+        (tester) async {
+      final source = sourceOf(
+        '**bold**',
+        decorations: [
+          Decoration.replace('b', 0, 2, replacementLength: 0),
+          Decoration.replace('b', 6, 8, replacementLength: 0),
+        ],
+      );
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(8));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(1),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(8),
+          reason: 'a start inside the opening fold must still progress');
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(8),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(7),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0),
+          reason: 'a start inside the trailing fold must still progress');
+    });
+
+    testWidgets('carries downstream affinity at a wrapped target',
+        (tester) async {
+      await tester.pumpWidget(
+          harness(HomericParagraph(source: sourceOf('abc def')), width: 42));
+      final result = ParagraphGeometry(renderOf(tester))
+          .moveByWord(
+            const DocOffset(7),
+            direction: WordMovementDirection.backward,
+          )
+          .value;
+
+      expect(result.position, const DocOffset(4));
+      expect(result.affinity, HomericCaretAffinity.downstream,
+          reason: 'the word at the next visual line starts downstream');
+    });
+  });
+
   group('per-slot rect', () {
     testWidgets('by index and by spec identity', (tester) async {
       final source = sourceOf(

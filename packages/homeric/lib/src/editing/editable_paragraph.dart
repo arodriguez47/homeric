@@ -387,6 +387,28 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           !intent.collapseSelection,
         )),
       ),
+      ExtendSelectionToNextWordBoundaryIntent:
+          _HostAction<ExtendSelectionToNextWordBoundaryIntent>(
+        enabled: (_) => _canUseActions,
+        invoke: (intent) => _moveByWord(
+          forward: intent.forward,
+          collapseSelection: intent.collapseSelection,
+        ),
+      ),
+      ExtendSelectionToNextWordBoundaryOrCaretLocationIntent:
+          _HostAction<ExtendSelectionToNextWordBoundaryOrCaretLocationIntent>(
+        enabled: (_) => _canUseActions,
+        invoke: (intent) => _moveByWord(
+          forward: intent.forward,
+          collapseSelection: intent.collapseSelection,
+          collapseAtReversal: intent.collapseAtReversal,
+        ),
+      ),
+      DeleteToNextWordBoundaryIntent:
+          _HostAction<DeleteToNextWordBoundaryIntent>(
+        enabled: (_) => _canUseActions,
+        invoke: (intent) => _deleteByWord(forward: intent.forward),
+      ),
     };
 
     final semanticsSelection = localSelection == null
@@ -587,11 +609,72 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     return null;
   }
 
+  Object? _moveByWord({
+    required bool forward,
+    required bool collapseSelection,
+    bool collapseAtReversal = false,
+  }) {
+    final local = _localSelection();
+    final geometry = _currentGeometry();
+    if (local == null || geometry == null) return null;
+    final result = geometry
+        .moveByWord(
+          DocOffset(local.head),
+          direction: forward
+              ? WordMovementDirection.forward
+              : WordMovementDirection.backward,
+          affinity: local.affinity,
+        )
+        .value;
+    final crossedAnchor = collapseAtReversal &&
+        (local.anchor - local.head) * (local.anchor - result.position.value) <
+            0;
+    final collapseAtAnchor = !collapseSelection &&
+        (crossedAnchor || result.position.value == local.anchor);
+    final target = collapseAtAnchor ? local.anchor : result.position.value;
+    _setLocalSelection(
+      collapseSelection || collapseAtAnchor ? target : local.anchor,
+      target,
+      affinity:
+          collapseAtAnchor ? HomericCaretAffinity.downstream : result.affinity,
+      resetPreferredX: true,
+    );
+    return null;
+  }
+
+  Object? _deleteByWord({required bool forward}) {
+    final local = _localSelection();
+    if (local == null) return null;
+    if (!local.isCollapsed) {
+      _controller.deleteBackward();
+      return null;
+    }
+    final geometry = _currentGeometry();
+    if (geometry == null) return null;
+    final result = geometry
+        .moveByWord(
+          DocOffset(local.head),
+          direction: forward
+              ? WordMovementDirection.forward
+              : WordMovementDirection.backward,
+          affinity: local.affinity,
+        )
+        .value;
+    final start = forward ? local.head : result.position.value;
+    final end = forward ? result.position.value : local.head;
+    if (start == end) return null;
+    _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[CanonicalTextEdit(start, end, '')],
+      selection: BlockTextSelection.collapsed(start),
+    );
+    return null;
+  }
+
   ParagraphGeometry? _currentGeometry() {
     final render = _renderParagraph;
     if (render == null ||
-        !render.attached ||
-        render.debugNeedsLayout ||
+        !render.hasCurrentGeometry ||
         render.layoutGeneration != _renderGeneration) {
       return null;
     }
@@ -605,8 +688,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   bool _isCurrentGeometry(ParagraphGeometry geometry) {
     final render = _renderParagraph;
     return render != null &&
-        render.attached &&
-        !render.debugNeedsLayout &&
+        render.hasCurrentGeometry &&
         render.layoutGeneration == _renderGeneration &&
         geometry.generation == _renderGeneration;
   }

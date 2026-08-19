@@ -242,6 +242,25 @@ final class GeometryResult<T> {
 /// lines.
 enum CaretMovementDirection { left, right, up, down }
 
+/// A logical direction for editor-style word movement.
+///
+/// Unlike [CaretMovementDirection.left] and [CaretMovementDirection.right],
+/// these directions follow document order through bidi text. They are kept
+/// separate because modifier-word commands are logical editing operations,
+/// not visual caret navigation.
+enum WordMovementDirection { backward, forward }
+
+/// The canonical position and visual affinity produced by word movement.
+final class WordMovementResult {
+  const WordMovementResult({required this.position, required this.affinity});
+
+  /// The resulting block-local canonical position.
+  final DocOffset position;
+
+  /// The visual side of [position].
+  final HomericCaretAffinity affinity;
+}
+
 /// The result of one visual caret movement in document coordinates.
 ///
 /// [position] and [affinity] together identify a visible caret stop. The
@@ -909,6 +928,120 @@ class ParagraphGeometry {
             assoc < 0 ? ui.TextAffinity.upstream : ui.TextAffinity.downstream);
     final range = _paragraph.getWordBoundary(position);
     return _stamp(_docRangeOf(range.start, range.end));
+  }
+
+  /// Moves from [doc] to the next editor-style word boundary in [direction].
+  ///
+  /// This deliberately differs from [wordBoundaryAt], which returns the UAX
+  /// word containing a point for pointer selection. Movement skips adjacent
+  /// space-separator and punctuation segments, follows logical document order
+  /// through bidi text, and always advances unless already at a block edge.
+  /// The UAX boundaries come from the laid-out visible text, preserving emoji
+  /// and combining graphemes; only the final position crosses this API and is
+  /// mapped back into canonical document space. Hidden runs touching the
+  /// target boundary are therefore absorbed by the directional association.
+  GeometryResult<WordMovementResult> moveByWord(
+    DocOffset doc, {
+    required WordMovementDirection direction,
+    HomericCaretAffinity affinity = HomericCaretAffinity.downstream,
+  }) {
+    _checkOffset(doc);
+    final forward = direction == WordMovementDirection.forward;
+    final view = _viewMap.docToView(doc.value, assoc: _assocFor(affinity));
+    final target = forward
+        ? _nextForwardWordBoundary(view)
+        : _nextBackwardWordBoundary(view);
+    final docTarget = _viewMap.viewToDoc(target, assoc: forward ? 1 : -1);
+    final upstreamMatches = _viewMap.docToView(docTarget, assoc: -1) == target;
+    final downstreamMatches = _viewMap.docToView(docTarget, assoc: 1) == target;
+    return _stamp(WordMovementResult(
+      position: DocOffset(docTarget),
+      // Prefer Flutter's conventional downstream position when both sides
+      // paint identically. At a fold or inline-slot anchor, retain the unique
+      // association that round-trips to the targeted visible boundary.
+      affinity: upstreamMatches && !downstreamMatches
+          ? HomericCaretAffinity.upstream
+          : HomericCaretAffinity.downstream,
+    ));
+  }
+
+  int _nextForwardWordBoundary(int view) {
+    var cursor = view;
+    while (cursor < _viewText.length) {
+      final boundary = _paragraph.getWordBoundary(
+        ui.TextPosition(offset: cursor),
+      );
+      var next = boundary.end;
+      if (next <= cursor) {
+        next = _nextGraphemeBoundary(cursor);
+      }
+      if (next >= _viewText.length || !_isSeparatorOrPunctuation(next - 1)) {
+        return next.clamp(0, _viewText.length);
+      }
+      cursor = next;
+    }
+    return _viewText.length;
+  }
+
+  int _nextBackwardWordBoundary(int view) {
+    var cursor = view;
+    while (cursor > 0) {
+      final boundary = _paragraph.getWordBoundary(
+        ui.TextPosition(offset: cursor - 1),
+      );
+      var next = boundary.start;
+      if (next >= cursor) {
+        next = _previousGraphemeBoundary(cursor);
+      }
+      if (next <= 0 || !_isSeparatorOrPunctuation(next)) {
+        return next.clamp(0, _viewText.length);
+      }
+      cursor = next;
+    }
+    return 0;
+  }
+
+  int _nextGraphemeBoundary(int offset) {
+    final range =
+        _paragraph.getGlyphInfoAt(offset)?.graphemeClusterCodeUnitRange;
+    final next = range?.end ?? offset + 1;
+    return next > offset ? next : offset + 1;
+  }
+
+  int _previousGraphemeBoundary(int offset) {
+    final range =
+        _paragraph.getGlyphInfoAt(offset - 1)?.graphemeClusterCodeUnitRange;
+    final previous = range?.start ?? offset - 1;
+    return previous < offset ? previous : offset - 1;
+  }
+
+  static final RegExp _separatorOrPunctuation = RegExp(
+    r'[\p{Space_Separator}\p{Punctuation}]',
+    unicode: true,
+  );
+
+  bool _isSeparatorOrPunctuation(int codeUnitOffset) {
+    final codePoint = _codePointAt(codeUnitOffset);
+    return codePoint != null &&
+        _separatorOrPunctuation.hasMatch(String.fromCharCode(codePoint));
+  }
+
+  int? _codePointAt(int index) {
+    if (index < 0 || index >= _viewText.length) return null;
+    final unit = _viewText.codeUnitAt(index);
+    if ((unit & 0xFC00) == 0xD800 && index + 1 < _viewText.length) {
+      final low = _viewText.codeUnitAt(index + 1);
+      if ((low & 0xFC00) == 0xDC00) {
+        return (unit - 0xD800) * 0x400 + low - 0xDC00 + 0x10000;
+      }
+    }
+    if ((unit & 0xFC00) == 0xDC00 && index > 0) {
+      final high = _viewText.codeUnitAt(index - 1);
+      if ((high & 0xFC00) == 0xD800) {
+        return (high - 0xD800) * 0x400 + unit - 0xDC00 + 0x10000;
+      }
+    }
+    return unit;
   }
 
   /// The document range of the line at document offset [doc].

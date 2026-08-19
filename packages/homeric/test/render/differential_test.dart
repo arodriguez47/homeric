@@ -268,6 +268,57 @@ bool navigationMatches(
   return true;
 }
 
+/// Checks logical word movement after translating both starts and results
+/// through the decorated paragraph's document-to-view map.
+bool wordMovementsMatch(
+  RenderHomericParagraph decorated,
+  RenderHomericParagraph baseline,
+  ViewMap viewMap,
+) {
+  final decoratedGeometry = ParagraphGeometry(decorated);
+  final baselineGeometry = ParagraphGeometry(baseline);
+  for (var doc = 0; doc <= decoratedGeometry.docLength; doc++) {
+    for (final affinity in HomericCaretAffinity.values) {
+      final startAssoc = affinity == HomericCaretAffinity.upstream ? -1 : 1;
+      final view = viewMap.docToView(doc, assoc: startAssoc);
+      for (final direction in WordMovementDirection.values) {
+        try {
+          final decoratedTarget = decoratedGeometry
+              .moveByWord(
+                DocOffset(doc),
+                direction: direction,
+                affinity: affinity,
+              )
+              .value;
+          final baselineTarget = baselineGeometry
+              .moveByWord(
+                DocOffset(view),
+                direction: direction,
+                affinity: affinity,
+              )
+              .value;
+          final targetAssoc =
+              decoratedTarget.affinity == HomericCaretAffinity.upstream
+                  ? -1
+                  : 1;
+          if (viewMap.docToView(
+                decoratedTarget.position.value,
+                assoc: targetAssoc,
+              ) !=
+              baselineTarget.position.value) {
+            return false;
+          }
+        } on DocOffsetOutOfRangeError {
+          return false;
+        } on Error {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 CaretMovementResult _movePastCoincidentStops(
   ParagraphGeometry geometry,
   DocOffset position,
@@ -365,6 +416,7 @@ void main() {
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
       expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
+      expect(wordMovementsMatch(decorated, baseline, source.viewMap), isTrue);
     });
 
     testWidgets('#2 aside replacement content (%%An aside%%)', (tester) async {
@@ -402,6 +454,7 @@ void main() {
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
       expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
+      expect(wordMovementsMatch(decorated, baseline, source.viewMap), isTrue);
     });
 
     testWidgets('#4 trailing footnote-marker-like slot at block end',
@@ -419,6 +472,7 @@ void main() {
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
       expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
+      expect(wordMovementsMatch(decorated, baseline, source.viewMap), isTrue);
     });
   });
 

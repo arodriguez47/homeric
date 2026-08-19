@@ -79,6 +79,26 @@ final class Transaction {
 
   static String _defaultBlockIdSupplier() => 'block-${const Uuid().v4()}';
 
+  /// Builds the transaction that undoes [source].
+  ///
+  /// Steps are inverted and applied in reverse order. Mirror pairs are also
+  /// reversed so positions deleted by one half of a move recover through the
+  /// matching insertion while mapping through this transaction.
+  Transaction.inverting(Transaction source)
+      : before = source.doc,
+        _doc = source.doc {
+    final stepCount = source.steps.length;
+    for (var i = stepCount - 1; i >= 0; i--) {
+      step(source.steps[i].invert(source.docs[i]));
+    }
+    for (var i = 0; i < stepCount; i++) {
+      final mirror = source.mapping.getMirror(i);
+      if (mirror != null && mirror > i) {
+        mapping.setMirror(stepCount - 1 - i, stepCount - 1 - mirror);
+      }
+    }
+  }
+
   /// The document the transaction started from.
   final Document before;
 

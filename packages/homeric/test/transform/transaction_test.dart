@@ -211,6 +211,58 @@ void main() {
     });
   });
 
+  group('Transaction.inverting', () {
+    test('restores moved-block anchors through reversed mirror pairs', () {
+      final before = threeBlocks();
+      final decoration = Decoration.inline(
+        'b',
+        1,
+        4,
+        spec: Object(),
+      );
+      final decorations = DecorationSet.of([decoration]);
+      final source = Transaction(before)
+        ..step(ReplaceStep(2, 2, inlineSlice('!')))
+        ..moveBlock('b', 0)
+        ..setBlockType('c', 'quote');
+
+      final movedCaret = source.mapping.map(before.positionAt(1, 2));
+      final movedDecorations = decorations.map(source.mapping, source.changes);
+      final inverse = Transaction.inverting(source);
+
+      expectSameDoc(inverse.doc, before);
+      expect(inverse.steps, hasLength(source.steps.length));
+      expect(inverse.mapping.map(movedCaret), before.positionAt(1, 2));
+      expect(
+        movedDecorations
+            .map(inverse.mapping, inverse.changes)
+            .decorations
+            .toList(),
+        [decoration],
+      );
+      expect(inverse.mapping.getMirror(1), 2);
+      expect(inverse.mapping.getMirror(2), 1);
+    });
+
+    test('ordinary transactions invert without registering mirror pairs', () {
+      final before = threeBlocks();
+      final source = Transaction(before)
+        ..step(ReplaceStep(3, 3, inlineSlice('XY')))
+        ..setBlockType('c', 'quote');
+
+      final inverse = Transaction.inverting(source);
+
+      expectSameDoc(inverse.doc, before);
+      expect(
+        [
+          for (var i = 0; i < inverse.steps.length; i++)
+            inverse.mapping.getMirror(i)
+        ],
+        everyElement(isNull),
+      );
+    });
+  });
+
   group('ChangeList', () {
     test('reports only touched blocks with old/new global ranges', () {
       final doc = threeBlocks();

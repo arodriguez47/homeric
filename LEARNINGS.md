@@ -2,6 +2,26 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-18 — Undo must invert mapping metadata, not only steps
+
+**What:** Reversing `Step.invert(docBefore)` calls restored the document but
+discarded the source transaction's mirror pairs. For a block move, those pairs
+are what route positions through the delete into the matching insertion. The
+new `Transaction.inverting` constructor applies inverse steps in reverse and
+re-registers every pair at reversed indices.
+
+**Why it mattered:** Document equality made the old undo look correct while a
+caret or decoration inside the moved block mapped as `deletedAcross` and could
+silently disappear. Content restoration and anchor restoration are separate
+contracts; testing only the first leaves the editor's durable identity layer
+unprotected.
+
+**Rule going forward:** Build undo mappings through `Transaction.inverting`,
+never by folding inverse steps alone. Any transform metadata that changes map
+routing must define and test its inverse representation. For moves, pin both a
+global caret position and a block-sharded decoration through the forward and
+inverse transactions, in addition to asserting document equality.
+
 ## editor-architect — 2026-08-19 — A demo consumer must not become a second editor core
 
 **What:** The playground used to own its own document, decorations, caret, transaction application, and undo stack. Adding the real editable paragraph on top would have left keyboard input in `HomericEditorController` while debug buttons and decoration controls mutated a parallel view-model. The migration instead made the view-model a thin adapter around one public controller and one shared epoch-bound input session. A narrow undoable `replaceDecorations` controller intent closed the only missing public seam, so decoration-only controls did not need to reconstruct the controller or retain shadow state.
@@ -47,7 +67,6 @@ Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS
 **What:** HOM-11's scope sentence said delete four workarounds when the journal flag flips. Measured: typing `# ` on an anchored paragraph carries both halves of the aside onto a heading, which still renders through AppFlowy. `journalAsideAnchorRunRangesIn` is a pure delta query Homeric's projection depends on. Notes and longform still mount AppFlowy paragraphs via `tightBlockComponentBuilders()`'s default-off flag.
 **Why it mattered:** Deleting the composite would make a writer's note vanish with no error after a heading conversion. Gating the journal overlay/composite to non-paragraph blocks, and leaving the shared decorator intact for other surfaces, is the actual retirement. Deletion waits for Phase 5 (HOM-7), when AppFlowy goes.
 **Rule going forward:** A workaround that is "only needed because of renderer X" is not dead when one surface leaves X. Check every block type and every surface that still mounts X before deleting. The journal flag is journal-scoped; do not thread it into `writing_surface_config.dart`.
-
 ## editor-architect — 2026-08-08 — StepMap semantics that anchor survival depends on
 
 ProseMirror's position mapping is small but exact: `[start, oldSize, newSize]` triples in old-doc coordinates, an `assoc` bias for boundary positions, four deletion flags, and `recover`/mirror machinery. Two traps: (1) `deleted` fires too eagerly for anchor-removal policies — `deletedAcross` (content removed on both sides) is the real "this anchor's content is gone" signal; (2) a block **move** expressed as delete+insert marks everything inside as `deletedAcross` — moves must register their delete/insert StepMaps as a mirror pair so positions recover into the destination, or every anchor and decoration in a moved block dies.

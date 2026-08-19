@@ -345,6 +345,236 @@ void main() {
     });
   });
 
+  group('visual caret navigation', () {
+    testWidgets('horizontal movement uses adjacent grapheme stops',
+        (tester) async {
+      final source = sourceOf('a👨‍👩‍👧‍👦b');
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      final afterA = geometry
+          .moveCaret(
+            DocOffset.zero,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect(afterA.position, const DocOffset(1));
+      expect(afterA.caretRect.left, 14);
+      expect(afterA.preferredX, isNull,
+          reason: 'horizontal movement resets preferred x');
+
+      final afterFamily = geometry
+          .moveCaret(
+            afterA.position,
+            affinity: afterA.affinity,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect(afterFamily.position, const DocOffset(12),
+          reason: 'the family emoji is one visual grapheme stop');
+      expect(afterFamily.caretRect.left, 70,
+          reason: 'FlutterTest lays the family cluster out as four em boxes');
+
+      final backBeforeFamily = geometry
+          .moveCaret(
+            afterFamily.position,
+            affinity: afterFamily.affinity,
+            direction: CaretMovementDirection.left,
+          )
+          .value;
+      expect(backBeforeFamily.position, const DocOffset(1));
+      expect(backBeforeFamily.caretRect.left, 14);
+    });
+
+    testWidgets('hidden runs and slots expose edges, never interior stops',
+        (tester) async {
+      final source = sourceOf(
+        'a**b',
+        decorations: [
+          Decoration.replace('b', 1, 3, replacementLength: 0),
+          Decoration.widget('b', 3, spec: 'chip'),
+        ],
+      );
+      await tester.pumpWidget(harness(HomericParagraph(
+        source: source,
+        slotBuilder: (_) => emChip(),
+      )));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      var stop = geometry
+          .moveCaret(
+            DocOffset.zero,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect((stop.position.value, stop.caretRect.left), (1, 14));
+
+      stop = geometry
+          .moveCaret(
+            stop.position,
+            affinity: stop.affinity,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect((stop.position.value, stop.caretRect.left), (3, 14),
+          reason: 'the hidden run is crossed edge-to-edge in one move');
+
+      stop = geometry
+          .moveCaret(
+            stop.position,
+            affinity: stop.affinity,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect((stop.position.value, stop.caretRect.left), (3, 28),
+          reason: 'the slot has distinct before/after stops at one doc offset');
+      expect(stop.affinity, HomericCaretAffinity.downstream);
+    });
+
+    testWidgets('mixed bidi movement follows physical visual order',
+        (tester) async {
+      final source = sourceOf('aאבb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 200));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      var stop = geometry
+          .moveCaret(
+            DocOffset.zero,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      final visited = <(int, HomericCaretAffinity, double)>[
+        (stop.position.value, stop.affinity, stop.caretRect.left)
+      ];
+      for (var i = 0; i < 10; i++) {
+        final next = geometry
+            .moveCaret(
+              stop.position,
+              affinity: stop.affinity,
+              direction: CaretMovementDirection.right,
+            )
+            .value;
+        if (next.position == stop.position &&
+            next.affinity == stop.affinity &&
+            next.caretRect == stop.caretRect) {
+          break;
+        }
+        stop = next;
+        visited.add((stop.position.value, stop.affinity, stop.caretRect.left));
+      }
+      expect(
+        visited,
+        const [
+          (1, HomericCaretAffinity.upstream, 14.0),
+          (3, HomericCaretAffinity.upstream, 14.0),
+          (2, HomericCaretAffinity.downstream, 28.0),
+          (1, HomericCaretAffinity.downstream, 42.0),
+          (3, HomericCaretAffinity.downstream, 42.0),
+          (4, HomericCaretAffinity.downstream, 56.0),
+        ],
+        reason: 'the two bidi boundaries retain both visual homes while '
+            'Right advances monotonically through physical x order',
+      );
+    });
+
+    testWidgets('vertical movement preserves preferred x and clamps',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb cc');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final geometry = ParagraphGeometry(renderOf(tester));
+      expect(renderOf(tester).layoutParagraph.numberOfLines, 3);
+
+      final down = geometry
+          .moveCaret(
+            const DocOffset(4),
+            affinity: HomericCaretAffinity.upstream,
+            direction: CaretMovementDirection.down,
+          )
+          .value;
+      expect(down.preferredX, 56);
+      expect(down.caretRect.top, 14);
+      expect(down.caretRect.left, 56);
+
+      final downAgain = geometry
+          .moveCaret(
+            down.position,
+            affinity: down.affinity,
+            direction: CaretMovementDirection.down,
+            preferredX: down.preferredX,
+          )
+          .value;
+      expect(downAgain.preferredX, 56);
+      expect(downAgain.caretRect.top, 28);
+      expect(downAgain.caretRect.left, 28,
+          reason: 'the short final line clamps to its closest edge');
+
+      final clamped = geometry
+          .moveCaret(
+            downAgain.position,
+            affinity: downAgain.affinity,
+            direction: CaretMovementDirection.down,
+            preferredX: downAgain.preferredX,
+          )
+          .value;
+      expect(clamped.position, downAgain.position);
+      expect(clamped.caretRect, downAgain.caretRect);
+      expect(clamped.preferredX, 56);
+
+      final up = geometry
+          .moveCaret(
+            downAgain.position,
+            affinity: downAgain.affinity,
+            direction: CaretMovementDirection.up,
+            preferredX: downAgain.preferredX,
+          )
+          .value;
+      expect(up.caretRect.top, 14);
+      expect(up.caretRect.left, 56);
+      expect(up.preferredX, 56);
+    });
+
+    testWidgets('width relayout requires fresh movement geometry',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 140));
+      final render = renderOf(tester);
+      final wide = ParagraphGeometry(render);
+      expect(
+        wide
+            .moveCaret(
+              const DocOffset(4),
+              direction: CaretMovementDirection.down,
+            )
+            .value
+            .position,
+        const DocOffset(4),
+        reason: 'the wide control has one line and clamps',
+      );
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      expect(
+        () => wide.moveCaret(
+          const DocOffset(4),
+          direction: CaretMovementDirection.down,
+        ),
+        throwsAssertionError,
+      );
+
+      final narrow = ParagraphGeometry(render);
+      final moved = narrow
+          .moveCaret(
+            const DocOffset(4),
+            direction: CaretMovementDirection.down,
+          )
+          .value;
+      expect(moved.caretRect.top, 14);
+    });
+  });
+
   group('word boundary: view-space semantics', () {
     testWidgets(
         'a hidden delimiter inside a view word is included in the '

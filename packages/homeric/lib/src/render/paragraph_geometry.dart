@@ -67,6 +67,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart'
     show Offset, Rect, TextAlign, TextDirection;
 
+import '../model/selection.dart' show HomericCaretAffinity;
 import '../view/view_map.dart';
 import 'homeric_paragraph.dart';
 import 'paragraph_source.dart' show ParagraphDirection;
@@ -231,6 +232,45 @@ final class GeometryResult<T> {
   String toString() =>
       'GeometryResult<$T>(gen $generation${isStale ? ', STALE' : ''}, '
       '$_value)';
+}
+
+/// A physical direction in which to move a visual caret.
+///
+/// These are deliberately visual directions rather than logical document
+/// directions. In particular, [left] and [right] follow the laid-out glyph
+/// order through bidi runs, while [up] and [down] target adjacent visual
+/// lines.
+enum CaretMovementDirection { left, right, up, down }
+
+/// The result of one visual caret movement in document coordinates.
+///
+/// [position] and [affinity] together identify a visible caret stop. The
+/// affinity is essential where one document position has two visual homes,
+/// such as a soft wrap, bidi boundary, or inline slot. [caretRect] is the
+/// exact rect from the same geometry generation as the movement query.
+///
+/// [preferredX] is non-null only after vertical movement. Feed it into the
+/// next vertical query to retain the original column across short lines;
+/// horizontal movement returns null so the controller can reset that state.
+final class CaretMovementResult {
+  const CaretMovementResult({
+    required this.position,
+    required this.affinity,
+    required this.caretRect,
+    required this.preferredX,
+  });
+
+  /// The resulting block-local document position.
+  final DocOffset position;
+
+  /// The visual side occupied at [position].
+  final HomericCaretAffinity affinity;
+
+  /// The resulting zero-width caret rect in paragraph-local coordinates.
+  final Rect caretRect;
+
+  /// The retained vertical target x, or null after horizontal movement.
+  final double? preferredX;
 }
 
 /// The document-coordinate geometry service over one [RenderHomericParagraph]
@@ -639,6 +679,222 @@ class ParagraphGeometry {
     return _stamp(DocOffset(_viewMap.viewToDoc(viewOffset, assoc: assoc)));
   }
 
+  // --- Visual caret navigation --------------------------------------------
+
+  /// Moves the caret at [position] to an adjacent visual stop.
+  ///
+  /// Horizontal movement follows laid-out grapheme edges, including distinct
+  /// sides of bidi boundaries, soft wraps, folds, and inline slots. Vertical
+  /// movement chooses the closest stop on the adjacent visual line to
+  /// [preferredX], or to the current caret x when no preferred x is supplied.
+  /// Movement clamps at paragraph edges.
+  ///
+  /// Every returned position is in block-local document space. View offsets
+  /// and glyph-cluster boundaries remain private implementation details; this
+  /// method does not provide deletion ranges or otherwise define canonical
+  /// mutation boundaries.
+  GeometryResult<CaretMovementResult> moveCaret(
+    DocOffset position, {
+    HomericCaretAffinity affinity = HomericCaretAffinity.downstream,
+    required CaretMovementDirection direction,
+    double? preferredX,
+  }) {
+    _checkOffset(position);
+    final current = _stopFor(position, affinity);
+    final target = switch (direction) {
+      CaretMovementDirection.left => _horizontalStop(current, -1),
+      CaretMovementDirection.right => _horizontalStop(current, 1),
+      CaretMovementDirection.up =>
+        _verticalStop(current, -1, preferredX ?? current.rect.left),
+      CaretMovementDirection.down =>
+        _verticalStop(current, 1, preferredX ?? current.rect.left),
+    };
+    final retainedX = switch (direction) {
+      CaretMovementDirection.left || CaretMovementDirection.right => null,
+      CaretMovementDirection.up ||
+      CaretMovementDirection.down =>
+        preferredX ?? current.rect.left,
+    };
+    return _stamp(CaretMovementResult(
+      position: target.position,
+      affinity: target.affinity,
+      caretRect: target.rect,
+      preferredX: retainedX,
+    ));
+  }
+
+  _VisualCaretStop _horizontalStop(_VisualCaretStop current, int delta) {
+    final stops = _visualCaretStops;
+    final index = stops.indexOf(current);
+    final target = (index + delta).clamp(0, stops.length - 1);
+    return stops[target];
+  }
+
+  _VisualCaretStop _verticalStop(
+      _VisualCaretStop current, int lineDelta, double preferredX) {
+    final lines = _visualCaretLines;
+    final currentLine = lines
+        .indexWhere((line) => line.any((stop) => identical(stop, current)));
+    final targetLine = (currentLine + lineDelta).clamp(0, lines.length - 1);
+    return lines[targetLine].reduce((best, candidate) {
+      final bestDistance = (best.rect.left - preferredX).abs();
+      final candidateDistance = (candidate.rect.left - preferredX).abs();
+      return candidateDistance < bestDistance ? candidate : best;
+    });
+  }
+
+  _VisualCaretStop _stopFor(DocOffset position, HomericCaretAffinity affinity) {
+    final assoc = _assocFor(affinity);
+    for (final stop in _visualCaretStops) {
+      if (stop.position == position && stop.affinity == affinity) return stop;
+    }
+    final view = _viewMap.docToView(position.value, assoc: assoc);
+    final rect = _caretRectForView(view, assoc);
+    final stopsAtRect = _visualCaretStops
+        .where((stop) => stop.rect == rect)
+        .toList(growable: false);
+    for (final stop in stopsAtRect) {
+      if (stop.position == position && stop.affinity == affinity) return stop;
+    }
+    for (final stop in stopsAtRect) {
+      if (stop.position == position) return stop;
+    }
+    if (stopsAtRect.isNotEmpty) {
+      // A position inside folded content has no visual identity of its own.
+      // Normalize to the visible document edge selected by affinity.
+      return affinity == HomericCaretAffinity.upstream
+          ? stopsAtRect
+              .reduce((a, b) => a.position.value <= b.position.value ? a : b)
+          : stopsAtRect
+              .reduce((a, b) => a.position.value >= b.position.value ? a : b);
+    }
+    // Defensive fallback for engine geometry that does not report a glyph
+    // edge exactly: choose the closest known stop to the computed caret.
+    return _visualCaretStops.reduce((best, candidate) {
+      final bestDistance = _rectDistanceSquared(best.rect, rect);
+      final candidateDistance = _rectDistanceSquared(candidate.rect, rect);
+      return candidateDistance < bestDistance ? candidate : best;
+    });
+  }
+
+  late final List<List<_VisualCaretStop>> _visualCaretLines = () {
+    final lines = <List<_VisualCaretStop>>[];
+    for (final stop in _visualCaretStops) {
+      if (lines.isEmpty || lines.last.first.rect.top != stop.rect.top) {
+        lines.add([stop]);
+      } else {
+        lines.last.add(stop);
+      }
+    }
+    return lines;
+  }();
+
+  late final List<_VisualCaretStop> _visualCaretStops = () {
+    if (_paragraph.numberOfLines == 0) {
+      return <_VisualCaretStop>[
+        _VisualCaretStop(
+          position: DocOffset.zero,
+          affinity: HomericCaretAffinity.downstream,
+          rect: _emptyBlockCaretRect(),
+        ),
+      ];
+    }
+
+    final boundaries = <int>{0, _viewText.length};
+    var offset = 0;
+    while (offset < _viewText.length) {
+      if (_viewText.codeUnitAt(offset) == 0xFFFC) {
+        // SkParagraph can report a collapsed (0, 0) glyph range for a
+        // placeholder. Its U+FFFC view unit still has two real visual edges.
+        boundaries
+          ..add(offset)
+          ..add(offset + 1);
+      }
+      final info = _paragraph.getGlyphInfoAt(offset);
+      if (info == null) {
+        offset++;
+        continue;
+      }
+      final range = info.graphemeClusterCodeUnitRange;
+      boundaries
+        ..add(range.start)
+        ..add(range.end);
+      offset = range.end > offset ? range.end : offset + 1;
+    }
+
+    final stops = <_VisualCaretStop>[];
+    final stopIndexByVisualKey = <(int, Rect), int>{};
+    for (final view in boundaries.toList()..sort()) {
+      for (final assoc in const [-1, 1]) {
+        final doc = _viewMap.viewToDoc(view, assoc: assoc);
+        if (doc < 0 || doc > docLength) continue;
+        if (_viewMap.docToView(doc, assoc: assoc) != view) continue;
+        final candidate = _VisualCaretStop(
+          position: DocOffset(doc),
+          affinity: _affinityFor(assoc),
+          rect: _caretRectForView(view, assoc),
+        );
+        final key = (candidate.position.value, candidate.rect);
+        final duplicate = stopIndexByVisualKey[key];
+        if (duplicate == null) {
+          stopIndexByVisualKey[key] = stops.length;
+          stops.add(candidate);
+        } else if (candidate.affinity == HomericCaretAffinity.downstream) {
+          // At an unambiguous stop either affinity paints identically.
+          // Prefer downstream, Flutter's conventional collapsed-caret value.
+          stops[duplicate] = candidate;
+        }
+      }
+    }
+    // A slot can share its canonical anchor with a folded span. The composed
+    // ViewMap then cannot represent all three visible edges on its one assoc
+    // bit, but ParagraphSource still has the authoritative measured slot
+    // position. Expose the aggregate before/after slot stops explicitly.
+    final slotAnchors =
+        _render.source.slots.map((slot) => slot.decoration.start).toSet();
+    stops.removeWhere((stop) => slotAnchors.contains(stop.position.value));
+    for (final doc in slotAnchors) {
+      final slots = _render.source.slots
+          .where((slot) => slot.decoration.start == doc)
+          .toList(growable: false);
+      final first = slots.first;
+      final last = slots.last;
+      stops.add(_VisualCaretStop(
+        position: DocOffset(doc),
+        affinity: HomericCaretAffinity.upstream,
+        rect: _caretRectForView(first.viewStart, -1),
+      ));
+      stops.add(_VisualCaretStop(
+        position: DocOffset(doc),
+        affinity: HomericCaretAffinity.downstream,
+        rect: _caretRectForView(last.viewEnd, 1),
+      ));
+    }
+    stops.sort((a, b) {
+      final byTop = a.rect.top.compareTo(b.rect.top);
+      if (byTop != 0) return byTop;
+      final byX = a.rect.left.compareTo(b.rect.left);
+      if (byX != 0) return byX;
+      final byDoc = a.position.value.compareTo(b.position.value);
+      if (byDoc != 0) return byDoc;
+      return a.affinity.index.compareTo(b.affinity.index);
+    });
+    return stops;
+  }();
+
+  static int _assocFor(HomericCaretAffinity affinity) =>
+      affinity == HomericCaretAffinity.upstream ? -1 : 1;
+
+  static HomericCaretAffinity _affinityFor(int assoc) => assoc < 0
+      ? HomericCaretAffinity.upstream
+      : HomericCaretAffinity.downstream;
+
+  static double _rectDistanceSquared(Rect a, Rect b) {
+    final dx = a.left - b.left;
+    final dy = a.top - b.top;
+    return dx * dx + dy * dy;
+  }
+
   // --- Word / line boundary -------------------------------------------------
 
   /// The document range of the word at document offset [doc] (UAX#29 word
@@ -697,4 +953,16 @@ final class _CaretMetrics {
   final double x;
   final double top;
   final double bottom;
+}
+
+final class _VisualCaretStop {
+  const _VisualCaretStop({
+    required this.position,
+    required this.affinity,
+    required this.rect,
+  });
+
+  final DocOffset position;
+  final HomericCaretAffinity affinity;
+  final Rect rect;
 }

@@ -7,11 +7,13 @@ library homeric;
 
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';
+export 'src/editing/editor_controller.dart';
 export 'src/model/attributes.dart';
 export 'src/model/block.dart';
 export 'src/model/document.dart';
 export 'src/model/inline_run.dart';
 export 'src/model/position.dart';
+export 'src/model/selection.dart';
 export 'src/render/homeric_paragraph.dart';
 export 'src/render/paint_layers.dart';
 export 'src/render/paragraph_geometry.dart';

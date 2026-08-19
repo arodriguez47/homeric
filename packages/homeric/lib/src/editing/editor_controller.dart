@@ -1,0 +1,687 @@
+/// Experimental canonical editing state and transaction ownership.
+library;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
+import '../decoration/decoration.dart';
+import '../decoration/decoration_set.dart';
+import '../model/attributes.dart';
+import '../model/block.dart';
+import '../model/document.dart';
+import '../model/inline_run.dart';
+import '../model/position.dart';
+import '../model/selection.dart';
+import '../transform/replace_step.dart';
+import '../transform/transaction.dart';
+
+/// A normalized UTF-16 range inside one block's canonical text.
+final class BlockTextRange {
+  /// Creates `[start, end)`.
+  const BlockTextRange(this.start, this.end)
+      : assert(start >= 0),
+        assert(end >= start);
+
+  /// Creates an empty range at [offset].
+  const BlockTextRange.collapsed(int offset)
+      : start = offset,
+        end = offset,
+        assert(offset >= 0);
+
+  /// The inclusive block-local start.
+  final int start;
+
+  /// The exclusive block-local end.
+  final int end;
+
+  /// Whether the range is empty.
+  bool get isCollapsed => start == end;
+
+  @override
+  bool operator ==(Object other) =>
+      other is BlockTextRange && start == other.start && end == other.end;
+
+  @override
+  int get hashCode => Object.hash(start, end);
+}
+
+/// A directional selection in one block's canonical UTF-16 text.
+final class BlockTextSelection {
+  /// Creates a block-local selection with a fixed [anchor] and active [head].
+  const BlockTextSelection({
+    required this.anchor,
+    required this.head,
+    this.affinity = HomericCaretAffinity.downstream,
+  })  : assert(anchor >= 0),
+        assert(head >= 0);
+
+  /// Creates a collapsed block-local selection at [offset].
+  const BlockTextSelection.collapsed(
+    int offset, {
+    this.affinity = HomericCaretAffinity.downstream,
+  })  : anchor = offset,
+        head = offset,
+        assert(offset >= 0);
+
+  /// The fixed block-local endpoint.
+  final int anchor;
+
+  /// The active block-local endpoint.
+  final int head;
+
+  /// The active head's visual affinity.
+  final HomericCaretAffinity affinity;
+
+  /// The normalized start.
+  int get start => anchor < head ? anchor : head;
+
+  /// The normalized end.
+  int get end => anchor > head ? anchor : head;
+
+  /// Whether no canonical content is selected.
+  bool get isCollapsed => anchor == head;
+
+  /// Whether the head is at or after the anchor.
+  bool get isForward => head >= anchor;
+
+  @override
+  bool operator ==(Object other) =>
+      other is BlockTextSelection &&
+      anchor == other.anchor &&
+      head == other.head &&
+      affinity == other.affinity;
+
+  @override
+  int get hashCode => Object.hash(anchor, head, affinity);
+}
+
+/// One sequential replacement in a canonical block-local editing batch.
+final class CanonicalTextEdit {
+  /// Replaces `[start, end)` with [text].
+  const CanonicalTextEdit(this.start, this.end, this.text, {this.attributes})
+      : assert(start >= 0),
+        assert(end >= start);
+
+  /// The inclusive start in the batch's current shadow text.
+  final int start;
+
+  /// The exclusive end in the batch's current shadow text.
+  final int end;
+
+  /// Canonical replacement text. Newlines are rejected by this phase.
+  final String text;
+
+  /// Explicit inserted attributes, or `null` for deterministic inheritance.
+  final Attributes? attributes;
+}
+
+/// A canonical range that must be revealed before a hidden-text mutation.
+final class CanonicalEditTarget {
+  /// Creates a block-local reveal target.
+  const CanonicalEditTarget(this.blockId, this.start, this.end);
+
+  /// Stable host block id.
+  final String blockId;
+
+  /// Inclusive canonical block-local start.
+  final int start;
+
+  /// Exclusive canonical block-local end.
+  final int end;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CanonicalEditTarget &&
+      blockId == other.blockId &&
+      start == other.start &&
+      end == other.end;
+
+  @override
+  int get hashCode => Object.hash(blockId, start, end);
+}
+
+/// Events that interrupt an open platform composition.
+enum CompositionInterruption {
+  blur,
+  platformClose,
+  pointerRelocation,
+  activeBlockSwitch,
+  externalBlockReplacement,
+  disposal,
+  staleEpoch,
+}
+
+final class _EditorSnapshot {
+  const _EditorSnapshot(
+    this.document,
+    this.decorations,
+    this.selection,
+    this.composing,
+    this.preferredX,
+  );
+
+  final Document document;
+  final DecorationSet decorations;
+  final HomericSelection? selection;
+  final HomericTextRange? composing;
+  final double? preferredX;
+}
+
+/// Owns Homeric's canonical document editing state.
+///
+/// This surface is experimental until a real Nexus consumer validates it.
+/// Render objects remain read-only; input sessions and gestures translate
+/// their events into this controller's canonical intents.
+class HomericEditorController extends ChangeNotifier {
+  /// Creates a controller over [document].
+  HomericEditorController({
+    required Document document,
+    DecorationSet decorations = DecorationSet.empty,
+    HomericSelection? selection,
+    HomericTextRange? composing,
+    double? preferredX,
+    this.onBeforeCanonicalMutation,
+  })  : _document = document,
+        _decorations = decorations,
+        _selection = selection,
+        _composing = composing,
+        _preferredX = preferredX {
+    if (!_isValidSelection(document, selection)) {
+      throw ArgumentError.value(selection, 'selection',
+          'endpoints must resolve inside the same block');
+    }
+    if (!_isValidComposing(document, selection, composing)) {
+      throw ArgumentError.value(composing, 'composing',
+          'range must resolve inside the active selection block');
+    }
+  }
+
+  Document _document;
+  DecorationSet _decorations;
+  HomericSelection? _selection;
+  HomericTextRange? _composing;
+  double? _preferredX;
+
+  final List<_EditorSnapshot> _undoStack = <_EditorSnapshot>[];
+  _EditorSnapshot? _compositionStart;
+  bool _compositionDidEdit = false;
+
+  /// Called synchronously before a mutation touching hidden canonical text.
+  ///
+  /// The target is the full replace-decoration range, not merely the
+  /// grapheme being removed. A host can therefore reveal the projection
+  /// before accepting the canonical mutation.
+  final ValueChanged<CanonicalEditTarget>? onBeforeCanonicalMutation;
+
+  /// Current canonical document.
+  Document get document => _document;
+
+  /// Current mapped decorations.
+  DecorationSet get decorations => _decorations;
+
+  /// Current directional global selection, or `null` when inactive.
+  HomericSelection? get selection => _selection;
+
+  /// Current global composing range, or `null` outside composition.
+  HomericTextRange? get composing => _composing;
+
+  /// Retained horizontal coordinate for repeated vertical navigation.
+  double? get preferredX => _preferredX;
+
+  /// Whether a committed document edit can be undone.
+  bool get canUndo => _undoStack.isNotEmpty;
+
+  /// Stable id of the selection's active block, or `null` without selection.
+  String? get activeBlockId {
+    final current = _selection;
+    if (current == null) return null;
+    final resolved = _document.resolve(current.head);
+    return resolved is InlinePosition ? resolved.block.id : null;
+  }
+
+  /// Converts [offset] in [blockId] to a global canonical position.
+  int globalPositionForBlockOffset(String blockId, int offset) {
+    final index = _document.indexOfBlockId(blockId);
+    if (index == null) {
+      throw ArgumentError.value(blockId, 'blockId', 'unknown block');
+    }
+    if (offset < 0 || offset > _document.blocks[index].contentLength) {
+      throw RangeError.range(
+        offset,
+        0,
+        _document.blocks[index].contentLength,
+        'offset',
+      );
+    }
+    return _document.positionAt(index, offset);
+  }
+
+  /// Converts a global [position] to an offset inside [blockId].
+  int blockOffsetForGlobalPosition(String blockId, int position) {
+    final resolved = _document.resolve(position);
+    if (resolved is! InlinePosition || resolved.block.id != blockId) {
+      throw ArgumentError.value(
+        position,
+        'position',
+        'does not resolve inside block "$blockId"',
+      );
+    }
+    return resolved.offset;
+  }
+
+  /// Replaces the logical selection without changing the document.
+  bool setSelection(
+    HomericSelection? value, {
+    double? preferredX,
+    bool resetPreferredX = false,
+  }) {
+    final nextPreferredX = resetPreferredX ? null : preferredX ?? _preferredX;
+    if (_compositionStart != null ||
+        _composing != null ||
+        !_isValidSelection(_document, value) ||
+        (value == _selection && nextPreferredX == _preferredX)) {
+      return false;
+    }
+    _selection = value;
+    _preferredX = nextPreferredX;
+    notifyListeners();
+    return true;
+  }
+
+  /// Commits composition, then applies a pointer-derived selection.
+  bool relocateSelection(HomericSelection value) {
+    if (!_isValidSelection(_document, value)) return false;
+    final compositionChanged = _finishComposition(notify: false);
+    if (value == _selection) {
+      if (compositionChanged) notifyListeners();
+      return compositionChanged;
+    }
+    _selection = value;
+    _preferredX = null;
+    notifyListeners();
+    return true;
+  }
+
+  /// Retains [value] for subsequent vertical movement.
+  bool setPreferredX(double value) {
+    if (!value.isFinite || value == _preferredX) return false;
+    _preferredX = value;
+    notifyListeners();
+    return true;
+  }
+
+  /// Clears vertical navigation's retained x coordinate.
+  bool resetPreferredX() {
+    if (_preferredX == null) return false;
+    _preferredX = null;
+    notifyListeners();
+    return true;
+  }
+
+  /// Replaces the current canonical selection and collapses after [text].
+  bool replaceSelection(
+    String text, {
+    Attributes? attributes,
+  }) {
+    if (_compositionStart != null ||
+        _composing != null ||
+        text.contains('\n') ||
+        text.contains('\r')) {
+      return false;
+    }
+    final current = _selection;
+    final host = _selectionHost(_document, current);
+    if (current == null || host == null) return false;
+    final localStart = current.start - host.blockStart - 1;
+    final localEnd = current.end - host.blockStart - 1;
+    return applyBlockEditBatch(
+      blockId: host.block.id,
+      edits: [
+        CanonicalTextEdit(localStart, localEnd, text, attributes: attributes)
+      ],
+      selection: BlockTextSelection.collapsed(localStart + text.length),
+    );
+  }
+
+  /// Deletes the selection or the preceding canonical grapheme.
+  bool deleteBackward() => _deleteCanonical(backward: true);
+
+  /// Deletes the selection or the following canonical grapheme.
+  bool deleteForward() => _deleteCanonical(backward: false);
+
+  bool _deleteCanonical({required bool backward}) {
+    if (_compositionStart != null || _composing != null) return false;
+    final current = _selection;
+    final host = _selectionHost(_document, current);
+    if (current == null || host == null) return false;
+    var start = current.start - host.blockStart - 1;
+    var end = current.end - host.blockStart - 1;
+    if (current.isCollapsed) {
+      final offset = start;
+      final boundary = CharacterBoundary(host.block.text);
+      if (backward) {
+        if (offset == 0) return false;
+        start = boundary.getLeadingTextBoundaryAt(offset - 1) ?? 0;
+      } else {
+        if (offset == host.block.contentLength) return false;
+        end = boundary.getTrailingTextBoundaryAt(offset) ??
+            host.block.contentLength;
+      }
+    }
+    return applyBlockEditBatch(
+      blockId: host.block.id,
+      edits: [CanonicalTextEdit(start, end, '')],
+      selection: BlockTextSelection.collapsed(start),
+    );
+  }
+
+  /// Applies sequential canonical edits as one observable transition.
+  ///
+  /// Every edit's offsets address the text produced by the preceding edit.
+  /// A non-null [composing] range opens or extends one composition undo group;
+  /// the first subsequent call with `composing: null` closes that group.
+  bool applyBlockEditBatch({
+    required String blockId,
+    List<CanonicalTextEdit> edits = const <CanonicalTextEdit>[],
+    required BlockTextSelection selection,
+    BlockTextRange? composing,
+  }) {
+    final index = _document.indexOfBlockId(blockId);
+    if (index == null) return false;
+    if (!_validBlockSelection(
+          selection,
+          _document.blocks[index].contentLength,
+        ) &&
+        edits.isEmpty) {
+      return false;
+    }
+    if (edits
+        .any((edit) => edit.text.contains('\n') || edit.text.contains('\r'))) {
+      return false;
+    }
+
+    final tx = Transaction(_document);
+    final revealTargets = <CanonicalEditTarget>[];
+    try {
+      for (final edit in edits) {
+        final currentIndex = tx.doc.indexOfBlockId(blockId);
+        if (currentIndex == null) return false;
+        final block = tx.doc.blocks[currentIndex];
+        if (!_validEdit(edit, block.contentLength)) return false;
+        revealTargets.addAll(_hiddenTargets(blockId, edit.start, edit.end));
+        if (edit.start == edit.end && edit.text.isEmpty) continue;
+        _replaceBlockText(tx, currentIndex, edit);
+      }
+    } on ArgumentError {
+      return false;
+    } on PositionOutOfRangeError {
+      return false;
+    } on StepFailedError {
+      return false;
+    }
+
+    final result = tx.finish();
+    final finalIndex = result.doc.indexOfBlockId(blockId);
+    if (finalIndex == null) return false;
+    final finalLength = result.doc.blocks[finalIndex].contentLength;
+    if (!_validBlockSelection(selection, finalLength) ||
+        (composing != null && !_validBlockRange(composing, finalLength))) {
+      return false;
+    }
+
+    final switchingComposition = _compositionStart != null &&
+        activeBlockId != null &&
+        activeBlockId != blockId;
+    if (switchingComposition) _finishComposition(notify: false);
+    final before = _snapshot();
+    if (composing != null && _compositionStart == null) {
+      _compositionStart = before;
+      _compositionDidEdit = false;
+    }
+    final callback = onBeforeCanonicalMutation;
+    if (callback != null) {
+      for (final target in revealTargets.toSet()) {
+        callback(target);
+      }
+    }
+
+    final nextSelection = HomericSelection(
+      anchor: result.doc.positionAt(finalIndex, selection.anchor),
+      head: result.doc.positionAt(finalIndex, selection.head),
+      affinity: selection.affinity,
+    );
+    final nextComposing = composing == null
+        ? null
+        : HomericTextRange(
+            result.doc.positionAt(finalIndex, composing.start),
+            result.doc.positionAt(finalIndex, composing.end),
+          );
+    final changed = tx.docChanged ||
+        nextSelection != _selection ||
+        nextComposing != _composing;
+    if (!changed) return false;
+
+    if (tx.docChanged) {
+      _document = result.doc;
+      _decorations = _decorations.map(result.mapping, result.changes);
+      _preferredX = null;
+    }
+    _selection = nextSelection;
+    _composing = nextComposing;
+
+    if (_compositionStart != null) {
+      _compositionDidEdit = _compositionDidEdit || tx.docChanged;
+      if (composing == null) _finishComposition(notify: false);
+    } else if (tx.docChanged) {
+      _undoStack.add(before);
+    }
+    notifyListeners();
+    return true;
+  }
+
+  /// Applies a prebuilt external transaction and maps editor state through it.
+  bool applyTransaction(Transaction transaction) {
+    if (!identical(transaction.before, _document)) return false;
+    final compositionChanged = _finishComposition(notify: false);
+    if (!transaction.docChanged) {
+      if (compositionChanged) notifyListeners();
+      return compositionChanged;
+    }
+    final before = _snapshot();
+    final result = transaction.finish();
+    final mappedSelection = _selection?.map(result.mapping);
+    final mappedComposing = _composing?.map(result.mapping);
+    _document = result.doc;
+    _decorations = _decorations.map(result.mapping, result.changes);
+    _selection =
+        _isValidSelection(_document, mappedSelection) ? mappedSelection : null;
+    _composing = _isValidComposing(
+      _document,
+      _selection,
+      mappedComposing,
+    )
+        ? mappedComposing
+        : null;
+    _undoStack.add(before);
+    notifyListeners();
+    return true;
+  }
+
+  /// Applies the composition policy for [event].
+  bool interruptComposition(CompositionInterruption event) {
+    if (event == CompositionInterruption.staleEpoch) return false;
+    return _finishComposition(notify: true);
+  }
+
+  /// Restores the exact state before the latest committed edit group.
+  bool undo() {
+    if (_compositionStart != null) _finishComposition(notify: false);
+    if (_undoStack.isEmpty) return false;
+    final snapshot = _undoStack.removeLast();
+    _restore(snapshot);
+    notifyListeners();
+    return true;
+  }
+
+  bool _finishComposition({required bool notify}) {
+    final start = _compositionStart;
+    if (start == null && _composing == null) return false;
+    if (start != null && _compositionDidEdit) _undoStack.add(start);
+    _compositionStart = null;
+    _compositionDidEdit = false;
+    _composing = null;
+    if (notify) notifyListeners();
+    return true;
+  }
+
+  _EditorSnapshot _snapshot() => _EditorSnapshot(
+        _document,
+        _decorations,
+        _selection,
+        _composing,
+        _preferredX,
+      );
+
+  void _restore(_EditorSnapshot snapshot) {
+    _document = snapshot.document;
+    _decorations = snapshot.decorations;
+    _selection = snapshot.selection;
+    _composing = snapshot.composing;
+    _preferredX = snapshot.preferredX;
+  }
+
+  void _replaceBlockText(
+    Transaction tx,
+    int blockIndex,
+    CanonicalTextEdit edit,
+  ) {
+    final block = tx.doc.blocks[blockIndex];
+    final from = tx.doc.positionAt(blockIndex, edit.start);
+    final to = tx.doc.positionAt(blockIndex, edit.end);
+    if (edit.text.isEmpty) {
+      tx.step(ReplaceStep(from, to, Slice.empty));
+      return;
+    }
+    final attributes =
+        edit.attributes ?? _typingAttributes(block, edit.start, edit.end);
+    tx.step(ReplaceStep(
+      from,
+      to,
+      Slice(
+        [
+          Block(
+            id: block.id,
+            type: block.type,
+            runs: [InlineRun(edit.text, attributes: attributes)],
+          ),
+        ],
+        openStart: true,
+        openEnd: true,
+      ),
+    ));
+  }
+
+  Attributes _typingAttributes(Block block, int start, int end) {
+    if (block.runs.isEmpty) return emptyAttributes;
+    final probe = start > 0 ? start - 1 : (end < block.contentLength ? end : 0);
+    var offset = 0;
+    for (final run in block.runs) {
+      final next = offset + run.length;
+      if (!run.isEmpty && probe >= offset && probe < next) {
+        return run.attributes;
+      }
+      offset = next;
+    }
+    return block.runs.last.attributes;
+  }
+
+  Iterable<CanonicalEditTarget> _hiddenTargets(
+    String blockId,
+    int start,
+    int end,
+  ) sync* {
+    if (start == end) return;
+    for (final decoration in _decorations.forBlock(blockId)) {
+      if (decoration.kind != DecorationKind.replace ||
+          decoration.end <= start ||
+          decoration.start >= end) {
+        continue;
+      }
+      yield CanonicalEditTarget(
+        blockId,
+        decoration.start,
+        decoration.end,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _finishComposition(notify: false);
+    super.dispose();
+  }
+
+  static bool _validEdit(CanonicalTextEdit edit, int length) =>
+      edit.start >= 0 && edit.end >= edit.start && edit.end <= length;
+
+  static bool _validBlockRange(BlockTextRange range, int length) =>
+      range.start >= 0 && range.end >= range.start && range.end <= length;
+
+  static bool _validBlockSelection(
+    BlockTextSelection selection,
+    int length,
+  ) =>
+      selection.anchor >= 0 &&
+      selection.anchor <= length &&
+      selection.head >= 0 &&
+      selection.head <= length;
+
+  static InlinePosition? _selectionHost(
+    Document document,
+    HomericSelection? selection,
+  ) {
+    if (selection == null) return null;
+    if (selection.anchor < 0 ||
+        selection.anchor > document.size ||
+        selection.head < 0 ||
+        selection.head > document.size) {
+      return null;
+    }
+    final anchor = document.resolve(selection.anchor);
+    final head = document.resolve(selection.head);
+    if (anchor is! InlinePosition ||
+        head is! InlinePosition ||
+        anchor.blockIndex != head.blockIndex) {
+      return null;
+    }
+    return head;
+  }
+
+  static bool _isValidSelection(
+    Document document,
+    HomericSelection? selection,
+  ) =>
+      selection == null || _selectionHost(document, selection) != null;
+
+  static bool _isValidComposing(
+    Document document,
+    HomericSelection? selection,
+    HomericTextRange? composing,
+  ) {
+    if (composing == null) return true;
+    final host = _selectionHost(document, selection);
+    if (host == null) return false;
+    if (composing.start < 0 ||
+        composing.start > document.size ||
+        composing.end < composing.start ||
+        composing.end > document.size) {
+      return false;
+    }
+    final start = document.resolve(composing.start);
+    final end = document.resolve(composing.end);
+    return start is InlinePosition &&
+        end is InlinePosition &&
+        start.blockIndex == host.blockIndex &&
+        end.blockIndex == host.blockIndex;
+  }
+}

@@ -67,48 +67,6 @@ class DocumentViewModel extends ChangeNotifier {
           (d.spec! as PlaygroundSpec).kind ==
               PlaygroundDecorationKind.hideMarker);
 
-  // --- Selection compatibility for the debug panel ------------------------
-
-  /// Places the caret at document [position]. No-ops on an out-of-range
-  /// position instead of throwing (positions come from tap geometry, which
-  /// is always in range for the block it queried, but a stale/foreign
-  /// value should never crash the view-model).
-  void placeCaretAt(int position) {
-    if (position < 0 || position > document.size) return;
-    final resolved = document.resolve(position);
-    if (resolved is! InlinePosition) return;
-    editorController.relocateSelection(HomericSelection.collapsed(position));
-  }
-
-  /// Clears the caret (nothing tapped / focus lost).
-  void clearCaret() {
-    inputSession.blur();
-    editorController.setSelection(null, resetPreferredX: true);
-  }
-
-  /// The [RevealState] for [blockId]'s derivation this frame (R10): reveals
-  /// every `replace` decoration in [blockId] whose range contains the
-  /// caret, when the caret currently resolves inside that block — the
-  /// mechanism `MarkerRevealController` becomes. Every other block gets
-  /// [RevealState.none].
-  RevealState revealStateForBlock(String blockId) {
-    final caret = this.caret;
-    if (caret == null) return RevealState.none;
-    final resolved = document.resolve(caret);
-    if (resolved is! InlinePosition || resolved.block.id != blockId) {
-      return RevealState.none;
-    }
-    final local = resolved.offset;
-    final revealed = <Decoration>[
-      for (final d in decorations.forBlock(blockId))
-        if (d.kind == DecorationKind.replace &&
-            d.start <= local &&
-            local <= d.end)
-          d,
-    ];
-    return revealed.isEmpty ? RevealState.none : RevealState.of(revealed);
-  }
-
   // --- Transaction plumbing ------------------------------------------------
 
   /// Runs [build] against a fresh [Transaction] over the current document.

@@ -1,6 +1,7 @@
 /// Directional canonical document selections.
 library;
 
+import '../transform/mapping.dart';
 import '../transform/step_map.dart';
 
 /// Which visual side of an ambiguous caret stop the active head occupies.
@@ -76,11 +77,10 @@ final class HomericSelection {
         affinity: affinity,
       );
     }
-    final anchorAssoc = anchor == start ? 1 : -1;
-    final headAssoc = head == start ? 1 : -1;
+    final mapped = mapSpan(mapping, start, end);
     return HomericSelection(
-      anchor: mapping.map(anchor, assoc: anchorAssoc),
-      head: mapping.map(head, assoc: headAssoc),
+      anchor: isForward ? mapped.from.pos : mapped.to.pos,
+      head: isForward ? mapped.to.pos : mapped.from.pos,
       affinity: affinity,
     );
   }
@@ -124,12 +124,8 @@ final class HomericTextRange {
       final position = mapping.map(start, assoc: 1);
       return HomericTextRange(position, position);
     }
-    final mappedStart = mapping.map(start, assoc: 1);
-    final mappedEnd = mapping.map(end, assoc: -1);
-    return HomericTextRange(
-      mappedStart < mappedEnd ? mappedStart : mappedEnd,
-      mappedStart < mappedEnd ? mappedEnd : mappedStart,
-    );
+    final mapped = mapSpan(mapping, start, end);
+    return HomericTextRange(mapped.start, mapped.end);
   }
 
   @override

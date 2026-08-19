@@ -263,11 +263,14 @@ final class HomericTextInputSession {
   }
 
   void _legacyUpdate(int epoch, TextEditingValue value) {
-    if (epoch != _currentEpoch || _disposed) return;
-    _syncCanonical(force: true);
+    _resyncIfCurrent(epoch);
   }
 
   void _performAction(int epoch, TextInputAction action) {
+    _resyncIfCurrent(epoch);
+  }
+
+  void _resyncIfCurrent(int epoch) {
     if (epoch != _currentEpoch || _disposed) return;
     _syncCanonical(force: true);
   }
@@ -317,14 +320,11 @@ final class HomericTextInputSession {
 
   static bool _validValue(TextEditingValue value) {
     final selection = value.selection;
-    if (!selection.isValid ||
-        selection.start < 0 ||
-        selection.end > value.text.length) {
+    if (!selection.isValid || selection.end > value.text.length) {
       return false;
     }
     final composing = value.composing;
-    return !composing.isValid ||
-        (composing.start >= 0 && composing.end <= value.text.length);
+    return !composing.isValid || composing.end <= value.text.length;
   }
 
   static CanonicalTextEdit? _singleEdit(String before, String after) {
@@ -394,7 +394,8 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   @override
   void showAutocorrectionPromptRect(int start, int end) {}
 
-  @override
+  // Flutter added this optional hook after Homeric's 3.24 minimum.
+  // ignore: annotate_overrides
   bool onFocusReceived() => false;
 
   @override

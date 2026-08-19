@@ -34,6 +34,13 @@ bool _blocksEqual(Block a, Block b) {
   return true;
 }
 
+void _placeCaret(DocumentViewModel vm, int position) {
+  expect(
+    vm.editorController.relocateSelection(HomericSelection.collapsed(position)),
+    isTrue,
+  );
+}
+
 void main() {
   group('builder commands mutate and notify exactly once per transaction', () {
     late Document document;
@@ -45,7 +52,7 @@ void main() {
     });
 
     test('insertTextAtCaret', () {
-      vm.placeCaretAt(document.positionAt(0, 0)); // first inline position
+      _placeCaret(vm, document.positionAt(0, 0));
       var notifications = 0;
       vm.addListener(() => notifications++);
       final before = vm.document;
@@ -66,7 +73,7 @@ void main() {
     });
 
     test('splitAtCaret', () {
-      vm.placeCaretAt(document.positionAt(0, 3));
+      _placeCaret(vm, document.positionAt(0, 3));
       var notifications = 0;
       vm.addListener(() => notifications++);
       final blocksBefore = vm.document.blockCount;
@@ -116,7 +123,7 @@ void main() {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(document: document);
       final before = vm.document;
-      vm.placeCaretAt(document.positionAt(0, 0));
+      _placeCaret(vm, document.positionAt(0, 0));
       expect(vm.insertTextAtCaret('XYZ'), isTrue);
       expect(documentsEqual(vm.document, before), isFalse);
 
@@ -137,7 +144,7 @@ void main() {
       // bold/italic ranges) instead of returning `this` unchanged, the
       // way it would for an edit in an undecorated block.
       final caretBefore = document.positionAt(introIndex, 0);
-      vm.placeCaretAt(caretBefore);
+      _placeCaret(vm, caretBefore);
       expect(vm.insertTextAtCaret('Z'), isTrue);
       expect(vm.decorations, isNot(same(decorationsBefore)));
 
@@ -150,7 +157,7 @@ void main() {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(document: document);
       final before = vm.document;
-      vm.placeCaretAt(document.positionAt(1, 5));
+      _placeCaret(vm, document.positionAt(1, 5));
       expect(vm.splitAtCaret(), isTrue);
       expect(vm.document.blockCount, before.blockCount + 1);
 
@@ -169,7 +176,11 @@ void main() {
     test('a builder validation failure is caught at the view-model boundary',
         () {
       final vm = DocumentViewModel(document: buildFixtureDocument());
-      vm.placeCaretAt(0); // a block-boundary position, not inline
+      expect(
+        vm.editorController
+            .relocateSelection(const HomericSelection.collapsed(0)),
+        isFalse,
+      );
       var notifications = 0;
       vm.addListener(() => notifications++);
       expect(() => vm.insertTextAtCaret('x'), returnsNormally);
@@ -198,7 +209,6 @@ void main() {
     test('every command no-ops instead of throwing on an empty document', () {
       final vm = DocumentViewModel(document: Document());
       expect(() {
-        vm.placeCaretAt(0);
         expect(vm.insertTextAtCaret('x'), isFalse);
         expect(vm.toggleMark(0, 0, 'bold', true), isFalse);
         expect(vm.moveBlockUp('missing'), isFalse);
@@ -207,16 +217,6 @@ void main() {
         expect(vm.joinBlockWithNext('missing'), isFalse);
         expect(vm.splitAtCaret(), isFalse);
       }, returnsNormally);
-    });
-
-    test('out-of-range caret placement no-ops without notifying', () {
-      final vm = DocumentViewModel(document: buildFixtureDocument());
-      var notifications = 0;
-      vm.addListener(() => notifications++);
-      vm.placeCaretAt(-1);
-      vm.placeCaretAt(vm.document.size + 100);
-      expect(vm.caret, isNull);
-      expect(notifications, 0);
     });
   });
 
@@ -246,38 +246,20 @@ void main() {
       // An unrelated document-mutating transaction, so there is something
       // on the undo stack whose pre-transaction decoration snapshot
       // predates the toggle below.
-      vm.placeCaretAt(document.positionAt(2, 0));
+      _placeCaret(vm, document.positionAt(2, 0));
       expect(vm.insertTextAtCaret('X'), isTrue);
 
       vm.toggleHideDelimiters('intro');
       expect(vm.isHidingDelimiters('intro'), isTrue);
 
-      // Undoing the insert restores the decoration snapshot taken before
-      // the toggle ever ran — the toggle itself was never pushed onto the
-      // undo stack (it does not go through a Transaction), so this is the
-      // only decorations mutation `undoLast` reverses here.
+      // Decoration-only changes share the controller's undo pipeline, so the
+      // first undo restores the exact decoration snapshot before the toggle.
       expect(vm.undoLast(), isTrue);
       expect(vm.decorations.forBlock('intro'), isEmpty,
-          reason: 'the decoration set was restored to its pre-toggle, '
-              'pre-transaction snapshot');
+          reason: 'the decoration set was restored to its pre-toggle state');
       expect(vm.isHidingDelimiters('intro'), isFalse,
           reason: 'isHidingDelimiters must reflect the restored decoration '
               'set, not a stale flag left over from the toggle');
-    });
-
-    test('reveal-on-selection: caret inside a hidden marker reveals it (R10)',
-        () {
-      final document = buildFixtureDocument();
-      final vm = DocumentViewModel(document: document);
-      vm.toggleHideDelimiters('intro');
-      final introIndex = document.indexOfBlockId('intro')!;
-      final markerStart = document.blockById('intro')!.text.indexOf('**');
-
-      vm.placeCaretAt(document.positionAt(introIndex, 0));
-      expect(vm.revealStateForBlock('intro').revealsNothing, isTrue);
-
-      vm.placeCaretAt(document.positionAt(introIndex, markerStart + 1));
-      expect(vm.revealStateForBlock('intro').revealsNothing, isFalse);
     });
 
     test('insertWidgetChip is purely additive to the decoration set', () {
@@ -378,7 +360,7 @@ void main() {
       final vm = DocumentViewModel(document: document);
       final editor = vm.editorController;
 
-      vm.placeCaretAt(document.positionAt(0, 1));
+      _placeCaret(vm, document.positionAt(0, 1));
       expect(editor.replaceSelection('X'), isTrue);
       expect(editor.document.blocks.single.text, 'aXbc');
 
@@ -451,7 +433,7 @@ void main() {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(document: document);
       final editor = vm.editorController;
-      vm.placeCaretAt(document.positionAt(0, 1));
+      _placeCaret(vm, document.positionAt(0, 1));
       vm.inputSession.attach(blockId: document.blocks.first.id);
       expect(
         editor.applyBlockEditBatch(
@@ -484,7 +466,7 @@ void main() {
         Block(id: 'a', type: 'paragraph', runs: [InlineRun('abc')]),
       ]);
       final vm = DocumentViewModel(document: document);
-      vm.placeCaretAt(document.positionAt(0, 1));
+      _placeCaret(vm, document.positionAt(0, 1));
 
       expect(vm.insertTextAtCaret('D'), isTrue);
       expect(vm.editorController.replaceSelection('K'), isTrue);

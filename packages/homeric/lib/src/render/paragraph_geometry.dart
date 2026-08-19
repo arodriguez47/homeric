@@ -754,9 +754,6 @@ class ParagraphGeometry {
         .where((stop) => stop.rect == rect)
         .toList(growable: false);
     for (final stop in stopsAtRect) {
-      if (stop.position == position && stop.affinity == affinity) return stop;
-    }
-    for (final stop in stopsAtRect) {
       if (stop.position == position) return stop;
     }
     if (stopsAtRect.isNotEmpty) {
@@ -771,8 +768,9 @@ class ParagraphGeometry {
     // Defensive fallback for engine geometry that does not report a glyph
     // edge exactly: choose the closest known stop to the computed caret.
     return _visualCaretStops.reduce((best, candidate) {
-      final bestDistance = _rectDistanceSquared(best.rect, rect);
-      final candidateDistance = _rectDistanceSquared(candidate.rect, rect);
+      final bestDistance = (best.rect.topLeft - rect.topLeft).distanceSquared;
+      final candidateDistance =
+          (candidate.rect.topLeft - rect.topLeft).distanceSquared;
       return candidateDistance < bestDistance ? candidate : best;
     });
   }
@@ -888,12 +886,6 @@ class ParagraphGeometry {
   static HomericCaretAffinity _affinityFor(int assoc) => assoc < 0
       ? HomericCaretAffinity.upstream
       : HomericCaretAffinity.downstream;
-
-  static double _rectDistanceSquared(Rect a, Rect b) {
-    final dx = a.left - b.left;
-    final dy = a.top - b.top;
-    return dx * dx + dy * dy;
-  }
 
   // --- Word / line boundary -------------------------------------------------
 

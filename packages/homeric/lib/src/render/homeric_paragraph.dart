@@ -104,6 +104,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
+// Flutter 3.24 does not re-export `internal` from foundation.
+// ignore: unnecessary_import
+import 'package:meta/meta.dart';
 
 import '../view/view_map.dart';
 import 'paint_layers.dart';
@@ -1167,7 +1170,11 @@ class RenderHomericParagraph extends RenderBox
     if (childOffset == null) {
       transform.setZero();
     } else {
-      transform.translateByDouble(childOffset.dx, childOffset.dy, 0, 1);
+      // Matrix4.translate is the public equivalent available at the package's
+      // Flutter 3.24 minimum. Newer vector_math versions deprecate it in favor
+      // of translateByDouble, which is not available at that minimum.
+      // ignore: deprecated_member_use
+      transform.translate(childOffset.dx, childOffset.dy);
     }
   }
 

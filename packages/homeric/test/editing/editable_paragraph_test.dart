@@ -225,8 +225,11 @@ void main() {
         .getSemantics(find.byType(HomericEditableParagraph))
         .getSemanticsData();
     expect(data.value, '**bold**');
-    expect(data.flagsCollection.isTextField, isTrue);
-    expect(data.flagsCollection.isReadOnly, isFalse);
+    // `flagsCollection` was added after Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(data.hasFlag(ui.SemanticsFlag.isTextField), isTrue);
+    // ignore: deprecated_member_use
+    expect(data.hasFlag(ui.SemanticsFlag.isReadOnly), isFalse);
     expect(data.textSelection,
         const TextSelection(baseOffset: 2, extentOffset: 6));
     expect(data.hasAction(ui.SemanticsAction.setText), isTrue);

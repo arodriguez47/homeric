@@ -125,6 +125,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   int? _dragAnchor;
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
+  ParagraphGeometry? _paragraphGeometry;
 
   HomericEditorController get _controller => widget.controller;
 
@@ -499,20 +500,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final position = geometry.positionForPoint(point).value.value;
     final upstream = geometry.caretRect(DocOffset(position), assoc: -1).value;
     final downstream = geometry.caretRect(DocOffset(position), assoc: 1).value;
-    final upstreamDistance = _distanceSquared(point, upstream.centerLeft);
-    final downstreamDistance = _distanceSquared(point, downstream.centerLeft);
+    final upstreamDistance = (point - upstream.centerLeft).distanceSquared;
+    final downstreamDistance = (point - downstream.centerLeft).distanceSquared;
     return (
       position: position,
       affinity: upstreamDistance < downstreamDistance
           ? HomericCaretAffinity.upstream
           : HomericCaretAffinity.downstream,
     );
-  }
-
-  static double _distanceSquared(Offset a, Offset b) {
-    final dx = a.dx - b.dx;
-    final dy = a.dy - b.dy;
-    return dx * dx + dy * dy;
   }
 
   void _relocate(int anchor, int head,
@@ -576,7 +571,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         render.layoutGeneration != _renderGeneration) {
       return null;
     }
-    return ParagraphGeometry(render);
+    final geometry = _paragraphGeometry;
+    if (geometry != null && geometry.generation == _renderGeneration) {
+      return geometry;
+    }
+    return _paragraphGeometry = ParagraphGeometry(render);
   }
 
   bool _isCurrentGeometry(ParagraphGeometry geometry) {
@@ -589,6 +588,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   void _geometryChanged(RenderHomericParagraph render, int generation) {
+    if (!identical(_renderParagraph, render) ||
+        _renderGeneration != generation) {
+      _paragraphGeometry = null;
+    }
     _renderParagraph = render;
     _renderGeneration = generation;
   }

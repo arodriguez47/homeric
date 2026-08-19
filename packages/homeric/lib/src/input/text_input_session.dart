@@ -1,8 +1,8 @@
 /// Experimental epoch-bound platform text input for one canonical block.
 library;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 import '../editing/editor_controller.dart';
 import '../model/document.dart';
@@ -416,5 +416,10 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   void removeTextPlaceholder() {}
 
   @override
-  void performSelector(String selectorName) {}
+  void performSelector(String selectorName) {
+    if (epoch != session._currentEpoch || session._disposed) return;
+    final intent = intentForMacOSSelector(selectorName);
+    final context = primaryFocus?.context;
+    if (intent != null && context != null) Actions.invoke(context, intent);
+  }
 }

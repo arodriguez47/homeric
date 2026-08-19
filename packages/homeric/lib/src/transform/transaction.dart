@@ -74,7 +74,8 @@ final class Transaction {
 
   static const int _blockIdAllocationAttempts = 32;
   static const String _blockIdAllocationFailure =
-      'Unable to allocate a unique block ID after 32 attempts.';
+      'Unable to allocate a unique block ID after '
+      '$_blockIdAllocationAttempts attempts.';
 
   static String _defaultBlockIdSupplier() => 'block-${const Uuid().v4()}';
 
@@ -124,10 +125,9 @@ final class Transaction {
       final candidate = _blockIdSupplier();
       if (candidate.isEmpty ||
           _doc.indexOfBlockId(candidate) != null ||
-          _reservedBlockIds.contains(candidate)) {
+          !_reservedBlockIds.add(candidate)) {
         continue;
       }
-      _reservedBlockIds.add(candidate);
       return candidate;
     }
     throw StateError(_blockIdAllocationFailure);

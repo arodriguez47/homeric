@@ -73,21 +73,21 @@ extension TransactionBuilders on Transaction {
           position, 'position', 'splitBlock requires an inline position');
     }
     final host = resolved.block;
-    final newId = trailingBlockId ?? allocateBlockId();
+    final trailingId = trailingBlockId ?? allocateBlockId();
     step(ReplaceStep(
       position,
       position,
       Slice(
         [
           Block(id: host.id, type: host.type),
-          Block(id: newId, type: host.type, attributes: host.attributes),
+          Block(id: trailingId, type: host.type, attributes: host.attributes),
         ],
         openStart: true,
         openEnd: true,
       ),
       structure: true,
     ));
-    return newId;
+    return trailingId;
   }
 
   /// Joins the two blocks around [boundary] (a position between blocks).

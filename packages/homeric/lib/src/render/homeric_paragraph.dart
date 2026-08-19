@@ -110,6 +110,8 @@ import 'paint_layers.dart';
 import 'paragraph_geometry.dart';
 import 'paragraph_source.dart';
 
+part 'paragraph_overlay.dart';
+
 /// A paint-only per-run style adjustment — U5's repaint band.
 ///
 /// Applied to every text run when the `ui.Paragraph` is (re)built; returns
@@ -1325,33 +1327,26 @@ class RenderHomericParagraph extends RenderBox
 /// Anything positioned *from* the paragraph rather than *inside* it —
 /// footnote markers, hover and tap targets, a caret — cannot be placed on
 /// the first build, because geometry does not exist until after layout.
-/// Wrap the paragraph in a [Stack], take [onGeometryChanged], and rebuild
-/// the overlay children from `ParagraphGeometry(paragraph)`:
+/// Prefer `ParagraphOverlay`, which owns this subscription and structurally
+/// keeps overlay content out of paragraph layout. Take [onGeometryChanged]
+/// directly only when integrating with an existing overlay host.
 ///
 /// ```dart
-/// Stack(children: [
-///   HomericParagraph(
-///     source: source,
-///     onGeometryChanged: (paragraph, generation) {
-///       if (!mounted) return;
-///       setState(() { _paragraph = paragraph; _generation = generation; });
-///     },
-///   ),
-///   if (_paragraph != null)
+/// ParagraphOverlay(
+///   paragraph: HomericParagraph(source: source),
+///   slotLayoutRevision: null,
+///   overlayBuilder: (context, geometry) => [
 ///     Positioned.fromRect(
-///       rect: ParagraphGeometry(_paragraph!).caretRect(anchor).value,
+///       rect: geometry.caretRect(anchor).value,
 ///       child: const _Marker(),
 ///     ),
-/// ])
+///   ],
+/// )
 /// ```
 ///
-/// Overlay children must be **layout-neutral** ([Positioned],
-/// [IgnorePointer], and the like). A child that participates in the
-/// surrounding layout can change this paragraph's own constraints, and a
-/// callback that rebuilds it is then a genuine relayout → notify →
-/// rebuild loop. There is no runtime detector for this: one would have to
-/// run on every layout, which would cost exactly the "free when nobody
-/// listens" guarantee the signal is built around.
+/// A hand-rolled listener must keep overlay children layout-neutral. A child
+/// that participates in the surrounding layout can change this paragraph's
+/// own constraints and create a genuine relayout → notify → rebuild loop.
 class HomericParagraph extends MultiChildRenderObjectWidget {
   /// Creates a paragraph view over [source].
   ///
@@ -1439,6 +1434,22 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   /// [GeometryChangedCallback] and
   /// [RenderHomericParagraph.onGeometryChanged].
   final GeometryChangedCallback? onGeometryChanged;
+
+  HomericParagraph _observedBy(GeometryChangedCallback observer) =>
+      HomericParagraph(
+        key: key,
+        source: source,
+        baseStyle: baseStyle,
+        textAlign: textAlign,
+        textScaler: textScaler,
+        slotBuilder: slotBuilder,
+        slotAlignment: slotAlignment,
+        slotBaseline: slotBaseline,
+        paintStyler: paintStyler,
+        paintLayers: paintLayers,
+        semanticsSource: semanticsSource,
+        onGeometryChanged: observer,
+      );
 
   TextScaler _resolveTextScaler(BuildContext context) {
     final specScaler = source.spec.textScaler;

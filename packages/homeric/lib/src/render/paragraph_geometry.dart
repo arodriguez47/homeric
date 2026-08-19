@@ -247,12 +247,9 @@ final class GeometryResult<T> {
 /// [_checkNotStale]), not a supported cache-reuse pattern.
 ///
 /// "Discard before the next relayout" needs a way to know a relayout
-/// happened: that is [HomericParagraph.onGeometryChanged], which fires
-/// once after every layout and hands back the render object to build a
-/// fresh instance from. A consumer placing overlays — anything positioned
-/// *from* the paragraph rather than *inside* it — needs it not only to
-/// re-place on relayout but to mount at all, since geometry does not exist
-/// on the first build.
+/// happened. `ParagraphOverlay` packages that lifecycle for positioned
+/// consumer UI; the lower-level [HomericParagraph.onGeometryChanged] signal
+/// remains available for other integrations.
 class ParagraphGeometry {
   /// Wraps [render] — construct fresh per query burst; cheap. Captures
   /// [RenderHomericParagraph.layoutGeneration] at this exact moment (see

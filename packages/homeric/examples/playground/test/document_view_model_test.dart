@@ -165,6 +165,18 @@ void main() {
       expect(documentsEqual(vm.document, before), isTrue);
     });
 
+    test('undoing a mirrored block move round-trips', () {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      final before = vm.document;
+
+      expect(vm.moveBlock('intro', 0), isTrue);
+      expect(documentsEqual(vm.document, before), isFalse);
+
+      expect(vm.undoLast(), isTrue);
+      expect(documentsEqual(vm.document, before), isTrue);
+    });
+
     test('undo with nothing to undo no-ops', () {
       final vm = DocumentViewModel(document: buildFixtureDocument());
       expect(vm.canUndo, isFalse);

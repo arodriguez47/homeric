@@ -8,6 +8,89 @@ import 'package:homeric/homeric.dart';
 import 'transform_test_utils.dart';
 
 void main() {
+  group('Transaction block ID allocation', () {
+    test('retries empty, current-document, and reserved candidates', () {
+      final candidates = <String>['', 'b', 'fresh', 'fresh', 'next'].iterator;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          candidates.moveNext();
+          return candidates.current;
+        },
+      );
+
+      expect(tr.allocateBlockId(), 'fresh');
+      expect(tr.allocateBlockId(), 'next');
+    });
+
+    test('reserves allocations before either ID is inserted', () {
+      var calls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () => calls++ < 2 ? 'reserved' : 'available',
+      );
+
+      expect(tr.allocateBlockId(), 'reserved');
+      expect(tr.allocateBlockId(), 'available');
+      expect(calls, 3);
+    });
+
+    test('fails after exactly 32 rejected candidates', () {
+      var calls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          calls++;
+          return '';
+        },
+      );
+
+      expect(
+        tr.allocateBlockId,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'Unable to allocate a unique block ID after 32 attempts.',
+          ),
+        ),
+      );
+      expect(calls, 32);
+    });
+
+    test('propagates supplier exceptions unchanged', () {
+      final failure = StateError('supplier failed');
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () => throw failure,
+      );
+
+      expect(tr.allocateBlockId, throwsA(same(failure)));
+    });
+
+    test('reservations are isolated between transactions', () {
+      Transaction transaction() =>
+          Transaction(threeBlocks(), blockIdSupplier: () => 'shared');
+
+      expect(transaction().allocateBlockId(), 'shared');
+      expect(transaction().allocateBlockId(), 'shared');
+    });
+
+    test('default supplier produces a canonical lowercase UUID-v4 ID', () {
+      final id = Transaction(threeBlocks()).allocateBlockId();
+
+      expect(
+        id,
+        matches(
+          RegExp(
+            r'^block-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-'
+            r'[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          ),
+        ),
+      );
+    });
+  });
+
   group('Transaction accumulation', () {
     test('collects steps, pre-step docs, and maps in order', () {
       final doc = threeBlocks();

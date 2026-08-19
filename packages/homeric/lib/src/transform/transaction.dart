@@ -6,10 +6,22 @@
 
 import 'dart:collection';
 
+import 'package:meta/meta.dart';
+import 'package:uuid/uuid.dart';
+
 import '../model/document.dart';
 import 'change_list.dart';
 import 'mapping.dart';
 import 'step.dart';
+
+/// Supplies one candidate block ID to a [Transaction].
+///
+/// The caller owns an injected supplier's state and lifecycle. In particular,
+/// do not reset a deterministic supplier while undo history can restore IDs it
+/// previously generated. A transaction validates each candidate against only
+/// its current document and its own reservations; it does not maintain a
+/// history-wide ID registry.
+typedef BlockIdSupplier = String Function();
 
 /// Thrown by [Transaction.step] when a step fails to apply.
 ///
@@ -53,12 +65,25 @@ final class TransactionResult {
 /// keeping [docs] costs O(steps × total block count) in array slots.
 final class Transaction {
   /// Starts a transaction over [before].
-  Transaction(this.before) : _doc = before;
+  ///
+  /// [blockIdSupplier] may be injected for deterministic allocation. Its state
+  /// and lifecycle remain caller-owned; see [BlockIdSupplier].
+  Transaction(this.before, {BlockIdSupplier? blockIdSupplier})
+      : _doc = before,
+        _blockIdSupplier = blockIdSupplier ?? _defaultBlockIdSupplier;
+
+  static const int _blockIdAllocationAttempts = 32;
+  static const String _blockIdAllocationFailure =
+      'Unable to allocate a unique block ID after 32 attempts.';
+
+  static String _defaultBlockIdSupplier() => 'block-${const Uuid().v4()}';
 
   /// The document the transaction started from.
   final Document before;
 
   Document _doc;
+  final BlockIdSupplier _blockIdSupplier;
+  final Set<String> _reservedBlockIds = <String>{};
   final List<Step> _steps = <Step>[];
   final List<Document> _docs = <Document>[];
   final List<StructuralChange> _structural = <StructuralChange>[];
@@ -85,6 +110,28 @@ final class Transaction {
 
   /// Whether any step has been applied.
   bool get docChanged => _steps.isNotEmpty;
+
+  /// Returns and reserves a block ID unique to this transaction's current
+  /// document and earlier allocations.
+  ///
+  /// Empty or colliding candidates are retried up to 32 times. Supplier
+  /// exceptions propagate unchanged. This method is public so transform
+  /// builders in another library can use the centralized allocation contract;
+  /// it is not a supported consumer API.
+  @internal
+  String allocateBlockId() {
+    for (var attempt = 0; attempt < _blockIdAllocationAttempts; attempt++) {
+      final candidate = _blockIdSupplier();
+      if (candidate.isEmpty ||
+          _doc.indexOfBlockId(candidate) != null ||
+          _reservedBlockIds.contains(candidate)) {
+        continue;
+      }
+      _reservedBlockIds.add(candidate);
+      return candidate;
+    }
+    throw StateError(_blockIdAllocationFailure);
+  }
 
   /// Tries to apply [step] to the current document. On success the step is
   /// recorded and the current document advances; on failure nothing

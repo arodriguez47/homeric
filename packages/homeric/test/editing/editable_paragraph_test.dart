@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,8 @@ void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(TextInputConnection.debugResetId);
+
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
 
   testWidgets(
       'mounted smoke: focus, canonical input, click, replacement, Backspace',
@@ -170,6 +174,169 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
     expect(controller.document.blocks.single.text, 'ac');
+  });
+
+  testWidgets('shortcut and selector each dispatch one standard action',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final controller = HomericEditorController(document: _document('abc'));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    controller.setSelection(const HomericSelection.collapsed(4));
+    await tester.pump();
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+    expect(notifications, 1);
+
+    await _sendSelectors(binding, 1, const <String>['deleteBackward:']);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'a');
+    expect(notifications, 2);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('keyboard clipboard commands mutate once through host actions',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(
+      document: _document('abcd'),
+      selection: const HomericSelection(anchor: 2, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    final clipboard = _FakeClipboard(readValue: 'XY');
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      clipboard: clipboard,
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(clipboard.writes, <String>['bc']);
+    expect(controller.document.blocks.single.text, 'ad');
+    expect(notifications, 1);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'aXYd');
+    expect(notifications, 2);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('clipboard semantics dispatch the same standard host actions',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    final controller = HomericEditorController(
+      document: _document('abcd'),
+      selection: const HomericSelection(anchor: 2, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    final clipboard = _FakeClipboard(readValue: 'Q');
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      clipboard: clipboard,
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    final node = tester.getSemantics(find.byType(HomericEditableParagraph));
+    final data = node.getSemanticsData();
+    expect(data.hasAction(ui.SemanticsAction.copy), isTrue);
+    expect(data.hasAction(ui.SemanticsAction.cut), isTrue);
+    expect(data.hasAction(ui.SemanticsAction.paste), isTrue);
+    expect(data.customSemanticsActionIds, isNotEmpty);
+
+    // `rootPipelineOwner` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    tester.binding.pipelineOwner.semanticsOwner!
+        .performAction(node.id, ui.SemanticsAction.copy);
+    await tester.pump();
+    expect(clipboard.writes, <String>['bc']);
+
+    // ignore: deprecated_member_use
+    tester.binding.pipelineOwner.semanticsOwner!
+        .performAction(node.id, ui.SemanticsAction.cut);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ad');
+    handle.dispose();
+  });
+
+  testWidgets('paste started before blur stays stale after refocus',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(
+      document: _document('ab'),
+      selection: const HomericSelection.collapsed(2),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    final pendingRead = Completer<String?>();
+    final clipboard = _FakeClipboard(pendingRead: pendingRead);
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      clipboard: clipboard,
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    focusNode.unfocus();
+    await tester.pump();
+    focusNode.requestFocus();
+    await tester.pump();
+
+    pendingRead.complete('stale');
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+    expect(controller.canUndo, isFalse);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('macOS word selectors preserve direction and reversal semantics',
@@ -811,4 +978,18 @@ Future<void> _sendSelectors(
     message,
     (_) {},
   );
+}
+
+final class _FakeClipboard implements HomericClipboardAdapter {
+  _FakeClipboard({this.readValue, this.pendingRead});
+
+  String? readValue;
+  Completer<String?>? pendingRead;
+  final List<String> writes = <String>[];
+
+  @override
+  Future<String?> readText() async => pendingRead?.future ?? readValue;
+
+  @override
+  Future<void> writeText(String text) async => writes.add(text);
 }

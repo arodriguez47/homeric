@@ -8,6 +8,15 @@ import '../editing/editor_controller.dart';
 import '../model/document.dart';
 import '../model/selection.dart';
 
+/// Host-owned command boundary captured by one platform input epoch.
+abstract interface class HomericTextInputCommandDelegate {
+  /// Dispatches one standard Flutter editing [intent].
+  Object? invoke(Intent intent);
+
+  /// Requests the current host's editing toolbar.
+  void showToolbar();
+}
+
 /// Connects one focused canonical block to Flutter's delta text-input model.
 ///
 /// This surface is experimental until a real Nexus consumer validates it. The
@@ -44,6 +53,7 @@ final class HomericTextInputSession {
   int _nextEpoch = 0;
   int? _currentEpoch;
   int? _geometryGeneration;
+  HomericTextInputCommandDelegate? _commandDelegate;
   bool _applyingRemote = false;
   bool _disposed = false;
 
@@ -63,17 +73,32 @@ final class HomericTextInputSession {
     return client?.updateEditingValueWithDeltas;
   }
 
+  /// Captures the current adapter's epoch-bound selector callback for tests.
+  @visibleForTesting
+  ValueChanged<String>? get debugSelectorCallback => _client?.performSelector;
+
+  /// Captures the current adapter's epoch-bound toolbar callback for tests.
+  @visibleForTesting
+  VoidCallback? get debugToolbarCallback => _client?.showToolbar;
+
   /// Opens platform input for [blockId], or reuses its live connection.
   ///
   /// A valid canonical selection is sufficient; layout geometry may arrive
   /// later through [publishGeometry].
-  bool attach({required String blockId}) {
+  bool attach({
+    required String blockId,
+    HomericTextInputCommandDelegate? commandDelegate,
+  }) {
     if (_disposed ||
         controller.activeBlockId != blockId ||
         controller.document.indexOfBlockId(blockId) == null) {
       return false;
     }
-    if (isAttached && _blockId == blockId) return true;
+    if (isAttached &&
+        _blockId == blockId &&
+        identical(_commandDelegate, commandDelegate)) {
+      return true;
+    }
 
     _close(CompositionInterruption.activeBlockSwitch);
     final value = _canonicalValue(blockId);
@@ -86,6 +111,7 @@ final class HomericTextInputSession {
     _client = client;
     _connection = connection;
     _blockId = blockId;
+    _commandDelegate = commandDelegate;
     _shadowValue = value;
     _geometryGeneration = null;
     connection.setEditingState(value);
@@ -284,6 +310,7 @@ final class HomericTextInputSession {
     _blockId = null;
     _shadowValue = null;
     _geometryGeneration = null;
+    _commandDelegate = null;
     controller.interruptComposition(CompositionInterruption.platformClose);
   }
 
@@ -295,6 +322,7 @@ final class HomericTextInputSession {
     _blockId = null;
     _shadowValue = null;
     _geometryGeneration = null;
+    _commandDelegate = null;
     controller.interruptComposition(interruption);
     connection?.close();
   }
@@ -408,7 +436,10 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   ) {}
 
   @override
-  void showToolbar() {}
+  void showToolbar() {
+    if (epoch != session._currentEpoch || session._disposed) return;
+    session._commandDelegate?.showToolbar();
+  }
 
   @override
   void insertTextPlaceholder(Size size) {}
@@ -420,7 +451,6 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   void performSelector(String selectorName) {
     if (epoch != session._currentEpoch || session._disposed) return;
     final intent = intentForMacOSSelector(selectorName);
-    final context = primaryFocus?.context;
-    if (intent != null && context != null) Actions.maybeInvoke(context, intent);
+    if (intent != null) session._commandDelegate?.invoke(intent);
   }
 }

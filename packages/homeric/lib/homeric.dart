@@ -8,6 +8,14 @@ library homeric;
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';
 export 'src/editing/editor_controller.dart';
+export 'src/editing/editor_clipboard.dart'
+    show
+        HomericClipboardAdapter,
+        HomericClipboardFailure,
+        HomericClipboardOperation,
+        HomericHostEvent,
+        HomericPasteRejected,
+        SystemHomericClipboard;
 export 'src/editing/editable_paragraph.dart';
 export 'src/input/text_input_session.dart';
 export 'src/model/attributes.dart';

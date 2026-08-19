@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
@@ -23,6 +24,41 @@ void main() {
       SystemChannels.textInput,
       null,
     );
+  });
+
+  test('ordered selectors and toolbar stay bound to their attachment epoch',
+      () {
+    final controller = HomericEditorController(
+      document: _document('ab'),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final oldDelegate = _FakeCommandDelegate();
+    final currentDelegate = _FakeCommandDelegate();
+
+    session.attach(blockId: 'a', commandDelegate: oldDelegate);
+    final oldSelector = session.debugSelectorCallback!;
+    final oldToolbar = session.debugToolbarCallback!;
+    session.attach(blockId: 'a', commandDelegate: currentDelegate);
+
+    oldSelector('copy:');
+    oldToolbar();
+    expect(oldDelegate.intents, isEmpty);
+    expect(oldDelegate.toolbarCount, 0);
+
+    final currentSelector = session.debugSelectorCallback!;
+    currentSelector('moveRight:');
+    currentSelector('moveRight:');
+    currentSelector('deleteBackward:');
+    session.debugToolbarCallback!();
+    expect(currentDelegate.intents, hasLength(3));
+    expect(currentDelegate.intents[0].runtimeType,
+        currentDelegate.intents[1].runtimeType,
+        reason: 'identical ordered selectors are never time-deduplicated');
+    expect(currentDelegate.toolbarCount, 1);
+
+    session.dispose();
+    controller.dispose();
   });
 
   test('attaches a delta client over canonical block text before geometry', () {
@@ -653,3 +689,17 @@ Future<void> _sendConnectionClosed(
 
 List<MethodCall> _editingStateCalls(List<MethodCall> calls) =>
     calls.where((call) => call.method == 'TextInput.setEditingState').toList();
+
+final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
+  final List<Intent> intents = <Intent>[];
+  int toolbarCount = 0;
+
+  @override
+  Object? invoke(Intent intent) {
+    intents.add(intent);
+    return null;
+  }
+
+  @override
+  void showToolbar() => toolbarCount++;
+}

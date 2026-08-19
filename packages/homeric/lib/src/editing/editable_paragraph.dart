@@ -16,6 +16,7 @@ import '../render/homeric_paragraph.dart';
 import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/paragraph_source.dart';
+import 'editor_clipboard.dart';
 import 'editor_controller.dart';
 
 /// A directly editable Homeric paragraph backed by canonical editor state.
@@ -53,6 +54,9 @@ class HomericEditableParagraph extends StatefulWidget {
     this.selectionColor,
     this.composingColor,
     this.caretWidth = 1.5,
+    this.clipboard = const SystemHomericClipboard(),
+    this.onHostEvent,
+    this.onShowToolbar,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -114,6 +118,15 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Width of the static focused caret.
   final double caretWidth;
 
+  /// Injectable plain-text clipboard boundary.
+  final HomericClipboardAdapter clipboard;
+
+  /// Receives typed clipboard rejection and failure feedback.
+  final ValueChanged<HomericHostEvent>? onHostEvent;
+
+  /// Optional toolbar request used by the desktop menu layer.
+  final VoidCallback? onShowToolbar;
+
   @override
   State<HomericEditableParagraph> createState() =>
       _HomericEditableParagraphState();
@@ -126,6 +139,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
   ParagraphGeometry? _paragraphGeometry;
+  int _hostEpoch = 0;
+  late _EditableHostCommandDelegate _commandDelegate;
+  late HomericEditorClipboard _clipboard;
+  late final VoidCallback _semanticsCopy;
+  late final VoidCallback _semanticsCut;
+  late final VoidCallback _semanticsPaste;
+  late final VoidCallback _semanticsSelectAll;
+  BuildContext? _commandContext;
 
   HomericEditorController get _controller => widget.controller;
 
@@ -134,6 +155,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     super.initState();
     _validateSession();
     _focusNode = widget.focusNode ?? FocusNode();
+    _semanticsCopy = () => _dispatchIntent(CopySelectionTextIntent.copy);
+    _semanticsCut = () => _dispatchIntent(const CopySelectionTextIntent.cut(
+          SelectionChangedCause.toolbar,
+        ));
+    _semanticsPaste = () => _dispatchIntent(
+          const PasteTextIntent(SelectionChangedCause.toolbar),
+        );
+    _semanticsSelectAll = () => _dispatchIntent(
+          const SelectAllTextIntent(SelectionChangedCause.toolbar),
+        );
+    _renewHostBindings();
     _controller.addListener(_controllerChanged);
   }
 
@@ -148,6 +180,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         !identical(oldWidget.inputSession, widget.inputSession);
     final blockChanged = oldWidget.blockId != widget.blockId;
     final focusNodeChanged = !identical(oldWidget.focusNode, widget.focusNode);
+    final hostDependenciesChanged = controllerChanged ||
+        sessionChanged ||
+        blockChanged ||
+        focusNodeChanged ||
+        !identical(oldWidget.clipboard, widget.clipboard);
     if (hadFocus &&
         (controllerChanged ||
             sessionChanged ||
@@ -164,17 +201,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _focusNode = widget.focusNode ?? FocusNode();
       if (hadFocus) _focusNode.requestFocus();
     }
-    if (hadFocus &&
-        _focusNode.hasFocus &&
-        (controllerChanged ||
-            sessionChanged ||
-            blockChanged ||
-            focusNodeChanged)) {
+    if (hostDependenciesChanged) _renewHostBindings();
+    if (hadFocus && _focusNode.hasFocus && hostDependenciesChanged) {
       if (_controller.document.indexOfBlockId(widget.blockId) != null) {
         if (_controller.activeBlockId != widget.blockId) {
           _relocate(0, 0);
         } else {
-          widget.inputSession.attach(blockId: widget.blockId);
+          _attachInput();
         }
       }
     }
@@ -182,6 +215,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
 
   @override
   void dispose() {
+    _hostEpoch++;
+    _clipboard.dispose();
     _controller.removeListener(_controllerChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
       widget.inputSession.blur();
@@ -189,6 +224,31 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     if (widget.focusNode == null) _focusNode.dispose();
     super.dispose();
   }
+
+  void _renewHostBindings() {
+    if (_hostEpoch != 0) _clipboard.dispose();
+    final epoch = ++_hostEpoch;
+    _commandDelegate = _EditableHostCommandDelegate(this, epoch);
+    _clipboard = HomericEditorClipboard(
+      controller: widget.controller,
+      blockId: widget.blockId,
+      adapter: widget.clipboard,
+      isHostCurrent: () => _isHostEpochCurrent(epoch),
+      onEvent: (event) => widget.onHostEvent?.call(event),
+    );
+  }
+
+  bool _isHostEpochCurrent(int epoch) =>
+      mounted &&
+      epoch == _hostEpoch &&
+      _focusNode.hasFocus &&
+      _controller.activeBlockId == widget.blockId &&
+      widget.inputSession.activeBlockId == widget.blockId;
+
+  bool _attachInput() => widget.inputSession.attach(
+        blockId: widget.blockId,
+        commandDelegate: _commandDelegate,
+      );
 
   void _validateSession() {
     if (!identical(widget.controller, widget.inputSession.controller)) {
@@ -320,41 +380,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
-      const SingleActivator(LogicalKeyboardKey.arrowLeft):
-          const _MoveCaretIntent(CaretMovementDirection.left, false),
-      const SingleActivator(LogicalKeyboardKey.arrowRight):
-          const _MoveCaretIntent(CaretMovementDirection.right, false),
-      const SingleActivator(LogicalKeyboardKey.arrowUp):
-          const _MoveCaretIntent(CaretMovementDirection.up, false),
-      const SingleActivator(LogicalKeyboardKey.arrowDown):
-          const _MoveCaretIntent(CaretMovementDirection.down, false),
-      const SingleActivator(LogicalKeyboardKey.arrowLeft, shift: true):
-          const _MoveCaretIntent(CaretMovementDirection.left, true),
-      const SingleActivator(LogicalKeyboardKey.arrowRight, shift: true):
-          const _MoveCaretIntent(CaretMovementDirection.right, true),
-      const SingleActivator(LogicalKeyboardKey.arrowUp, shift: true):
-          const _MoveCaretIntent(CaretMovementDirection.up, true),
-      const SingleActivator(LogicalKeyboardKey.arrowDown, shift: true):
-          const _MoveCaretIntent(CaretMovementDirection.down, true),
-      const SingleActivator(LogicalKeyboardKey.backspace):
-          const _DeleteIntent(true),
-      const SingleActivator(LogicalKeyboardKey.delete):
-          const _DeleteIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab):
           const _TraverseIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true):
           const _TraverseIntent(true),
     };
     final actions = <Type, Action<Intent>>{
+      DoNothingAndStopPropagationTextIntent:
+          DoNothingAction(consumesKey: false),
       _MoveCaretIntent: _HostAction<_MoveCaretIntent>(
         enabled: (_) => _canUseActions,
         invoke: _moveCaret,
-      ),
-      _DeleteIntent: _HostAction<_DeleteIntent>(
-        enabled: (_) => _canUseActions,
-        invoke: (intent) => intent.backward
-            ? _controller.deleteBackward()
-            : _controller.deleteForward(),
       ),
       _TraverseIntent: _HostAction<_TraverseIntent>(
         invoke: (intent) => intent.backward
@@ -409,6 +445,27 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         enabled: (_) => _canUseActions,
         invoke: (intent) => _deleteByWord(forward: intent.forward),
       ),
+      CopySelectionTextIntent: _HostAction<CopySelectionTextIntent>(
+        enabled: (_) => _canCopyOrCut,
+        invoke: (intent) =>
+            intent.collapseSelection ? _clipboard.cut() : _clipboard.copy(),
+      ),
+      PasteTextIntent: _HostAction<PasteTextIntent>(
+        enabled: (_) => _canUseActions,
+        invoke: (_) => _clipboard.paste(),
+      ),
+      SelectAllTextIntent: _HostAction<SelectAllTextIntent>(
+        enabled: (_) => _canUseActions && block.contentLength > 0,
+        invoke: (_) => _selectAll(),
+      ),
+      UndoTextIntent: _HostAction<UndoTextIntent>(
+        enabled: (_) => _canUseActions && _controller.canUndo,
+        invoke: (_) => _controller.undo(),
+      ),
+      RedoTextIntent: _HostAction<RedoTextIntent>(
+        enabled: (_) => _canUseActions && _controller.canRedo,
+        invoke: (_) => _controller.redo(),
+      ),
     };
 
     final semanticsSelection = localSelection == null
@@ -431,15 +488,28 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       onTap: _focusNode.requestFocus,
       onSetText: _setSemanticsText,
       onSetSelection: _setSemanticsSelection,
+      onCopy: _canCopyOrCut ? _semanticsCopy : null,
+      onCut: _canCopyOrCut ? _semanticsCut : null,
+      onPaste: _canUseActions ? _semanticsPaste : null,
+      onSelectAll: _canUseActions && block.contentLength > 0
+          ? _semanticsSelectAll
+          : null,
       child: ExcludeSemantics(
         child: Shortcuts(
           shortcuts: shortcuts,
-          child: Actions(
-            actions: actions,
-            child: Focus(
-              focusNode: _focusNode,
-              onFocusChange: _focusChanged,
-              child: body,
+          child: DefaultTextEditingShortcuts(
+            child: Actions(
+              actions: actions,
+              child: Builder(
+                builder: (commandContext) {
+                  _commandContext = commandContext;
+                  return Focus(
+                    focusNode: _focusNode,
+                    onFocusChange: _focusChanged,
+                    child: body,
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -451,6 +521,30 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _focusNode.hasFocus &&
       _controller.activeBlockId == widget.blockId &&
       _controller.composing == null;
+
+  bool get _canCopyOrCut {
+    final selection = _localSelection();
+    return _canUseActions && selection != null && !selection.isCollapsed;
+  }
+
+  Object? _dispatchIntent(Intent intent) {
+    final commandContext = _commandContext;
+    return commandContext == null
+        ? null
+        : Actions.maybeInvoke(commandContext, intent);
+  }
+
+  Object? _selectAll() {
+    final block = _block;
+    if (block == null) return null;
+    _setLocalSelection(
+      0,
+      block.contentLength,
+      affinity: HomericCaretAffinity.downstream,
+      resetPreferredX: true,
+    );
+    return null;
+  }
 
   BlockTextSelection? _localSelection() {
     final selection = _controller.selection;
@@ -565,7 +659,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     );
     _controller.relocateSelection(selection);
     _focusNode.requestFocus();
-    widget.inputSession.attach(blockId: widget.blockId);
+    _attachInput();
   }
 
   Object? _moveCaret(_MoveCaretIntent intent) {
@@ -726,10 +820,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       if (_controller.activeBlockId != widget.blockId) {
         _relocate(0, 0);
       } else {
-        widget.inputSession.attach(blockId: widget.blockId);
+        _attachInput();
       }
     } else {
       _dragAnchor = null;
+      _renewHostBindings();
       widget.inputSession.blur();
     }
     if (mounted) setState(() {});
@@ -822,12 +917,6 @@ final class _MoveCaretIntent extends Intent {
   final bool extend;
 }
 
-final class _DeleteIntent extends Intent {
-  const _DeleteIntent(this.backward);
-
-  final bool backward;
-}
-
 final class _TraverseIntent extends Intent {
   const _TraverseIntent(this.backward);
 
@@ -851,6 +940,28 @@ final class _HostAction<T extends Intent> extends Action<T> {
   Object? invoke(T intent) => _invoke(intent);
 }
 
+final class _EditableHostCommandDelegate
+    implements HomericTextInputCommandDelegate {
+  const _EditableHostCommandDelegate(this.state, this.epoch);
+
+  final _HomericEditableParagraphState state;
+  final int epoch;
+
+  @override
+  Object? invoke(Intent intent) {
+    if (!state._isHostEpochCurrent(epoch)) return null;
+    return state._dispatchIntent(intent);
+  }
+
+  @override
+  void showToolbar() {
+    if (!state._isHostEpochCurrent(epoch)) return;
+    state.widget.onShowToolbar?.call();
+  }
+}
+
+const _selectAllSemanticsAction = CustomSemanticsAction(label: 'Select all');
+
 final class _EditableSemantics extends SingleChildRenderObjectWidget {
   const _EditableSemantics({
     required this.value,
@@ -861,6 +972,10 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
     required this.onTap,
     required this.onSetText,
     required this.onSetSelection,
+    required this.onCopy,
+    required this.onCut,
+    required this.onPaste,
+    required this.onSelectAll,
     required super.child,
   });
 
@@ -872,6 +987,10 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
   final VoidCallback onTap;
   final ValueChanged<String> onSetText;
   final ValueChanged<TextSelection> onSetSelection;
+  final VoidCallback? onCopy;
+  final VoidCallback? onCut;
+  final VoidCallback? onPaste;
+  final VoidCallback? onSelectAll;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
@@ -884,6 +1003,10 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
         onTap: onTap,
         onSetText: onSetText,
         onSetSelection: onSetSelection,
+        onCopy: onCopy,
+        onCut: onCut,
+        onPaste: onPaste,
+        onSelectAll: onSelectAll,
       );
 
   @override
@@ -897,7 +1020,11 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
       ..onFocus = onFocus
       ..onTap = onTap
       ..onSetText = onSetText
-      ..onSetSelection = onSetSelection;
+      ..onSetSelection = onSetSelection
+      ..onCopy = onCopy
+      ..onCut = onCut
+      ..onPaste = onPaste
+      ..onSelectAll = onSelectAll;
   }
 }
 
@@ -911,6 +1038,10 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     required VoidCallback onTap,
     required ValueChanged<String> onSetText,
     required ValueChanged<TextSelection> onSetSelection,
+    required VoidCallback? onCopy,
+    required VoidCallback? onCut,
+    required VoidCallback? onPaste,
+    required VoidCallback? onSelectAll,
   })  : _value = value,
         _selection = selection,
         _focused = focused,
@@ -918,7 +1049,11 @@ final class _RenderEditableSemantics extends RenderProxyBox {
         _onFocus = onFocus,
         _onTap = onTap,
         _onSetText = onSetText,
-        _onSetSelection = onSetSelection;
+        _onSetSelection = onSetSelection,
+        _onCopy = onCopy,
+        _onCut = onCut,
+        _onPaste = onPaste,
+        _onSelectAll = onSelectAll;
 
   String _value;
   TextSelection? _selection;
@@ -928,6 +1063,10 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   VoidCallback _onTap;
   ValueChanged<String> _onSetText;
   ValueChanged<TextSelection> _onSetSelection;
+  VoidCallback? _onCopy;
+  VoidCallback? _onCut;
+  VoidCallback? _onPaste;
+  VoidCallback? _onSelectAll;
 
   set value(String value) {
     if (_value == value) return;
@@ -977,6 +1116,30 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     markNeedsSemanticsUpdate();
   }
 
+  set onCopy(VoidCallback? value) {
+    if (identical(_onCopy, value)) return;
+    _onCopy = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  set onCut(VoidCallback? value) {
+    if (identical(_onCut, value)) return;
+    _onCut = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  set onPaste(VoidCallback? value) {
+    if (identical(_onPaste, value)) return;
+    _onPaste = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  set onSelectAll(VoidCallback? value) {
+    if (identical(_onSelectAll, value)) return;
+    _onSelectAll = value;
+    markNeedsSemanticsUpdate();
+  }
+
   @override
   void describeSemanticsConfiguration(SemanticsConfiguration config) {
     super.describeSemanticsConfiguration(config);
@@ -992,6 +1155,14 @@ final class _RenderEditableSemantics extends RenderProxyBox {
       ..onTap = _onTap
       ..onSetText = _onSetText
       ..onSetSelection = _onSetSelection;
+    if (_onCopy case final callback?) config.onCopy = callback;
+    if (_onCut case final callback?) config.onCut = callback;
+    if (_onPaste case final callback?) config.onPaste = callback;
+    if (_onSelectAll case final callback?) {
+      config.customSemanticsActions = <CustomSemanticsAction, VoidCallback>{
+        _selectAllSemanticsAction: callback,
+      };
+    }
     final selection = _selection;
     if (selection != null) config.textSelection = selection;
   }

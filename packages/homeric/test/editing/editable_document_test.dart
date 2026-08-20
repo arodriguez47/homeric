@@ -1428,6 +1428,43 @@ void main() {
     expect(controller.activeBlockId, 'block-1');
   });
 
+  testWidgets('macOS document-boundary selectors move the focused block',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    final focusedNode = FocusManager.instance.primaryFocus;
+    expect(focusedNode, isNotNull);
+
+    session.debugSelectorCallback!(
+      'moveToBeginningOfDocumentAndModifySelection:',
+    );
+    await tester.pump();
+    expect(controller.document.blocks.map((block) => block.id),
+        <String>['block-1', 'block-0', 'block-2']);
+    expect(controller.activeBlockId, 'block-1');
+    expect(FocusManager.instance.primaryFocus, same(focusedNode));
+    expect(session.activeBlockId, 'block-1');
+
+    session.debugSelectorCallback!('moveToEndOfDocumentAndModifySelection:');
+    await tester.pump();
+    expect(controller.document.blocks.map((block) => block.id),
+        <String>['block-0', 'block-1', 'block-2']);
+    expect(controller.activeBlockId, 'block-1');
+    expect(FocusManager.instance.primaryFocus, same(focusedNode));
+    expect(session.activeBlockId, 'block-1');
+  });
+
   testWidgets(
       'ordered document shortcuts use one current host and fall through to built-ins',
       (tester) async {
@@ -1647,7 +1684,7 @@ void main() {
     await _sendSelectors(
       tester.binding,
       1,
-      const <String>['moveUpAndModifySelection:'],
+      const <String>['moveToBeginningOfDocumentAndModifySelection:'],
     );
     await tester.pump();
 
@@ -1700,7 +1737,7 @@ void main() {
     await _sendSelectors(
       tester.binding,
       1,
-      const <String>['moveDownAndModifySelection:'],
+      const <String>['moveToEndOfDocumentAndModifySelection:'],
     );
     await tester.pump();
 
@@ -1790,7 +1827,9 @@ void main() {
     session.debugSelectorCallback!('moveRight:');
     await tester.pump();
     final selectionAfterUnrelatedSelector = controller.selection;
-    session.debugSelectorCallback!('moveUpAndModifySelection:');
+    session.debugSelectorCallback!(
+      'moveToBeginningOfDocumentAndModifySelection:',
+    );
     await tester.pump();
 
     expect(controller.document.blocks.map((block) => block.id),

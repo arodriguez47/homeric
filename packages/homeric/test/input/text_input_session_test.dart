@@ -410,6 +410,11 @@ void main() {
       _editingStateCalls(calls).last.arguments,
       containsPair('text', 'c'),
     );
+    expect(
+      calls.where((call) => call.method == 'TextInput.show'),
+      hasLength(1),
+      reason: 'retargeting must reassert the native first responder',
+    );
 
     session.dispose();
     controller.dispose();

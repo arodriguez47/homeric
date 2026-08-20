@@ -936,8 +936,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         enabled: (_) => _canMutateActions && _documentHost != null,
         invoke: (intent) {
           widget.inputSession.suppressNextSelector(intent.delta < 0
-              ? 'moveUpAndModifySelection:'
-              : 'moveDownAndModifySelection:');
+              ? 'moveToBeginningOfDocumentAndModifySelection:'
+              : 'moveToEndOfDocumentAndModifySelection:');
           return _documentHost?.moveActiveBlock(intent.delta);
         },
       ),
@@ -1002,11 +1002,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExpandSelectionToDocumentBoundaryIntent:
           _HostAction<ExpandSelectionToDocumentBoundaryIntent>(
-        enabled: (_) => _canUseSelectionActions && _documentHost != null,
-        invoke: (intent) => _documentHost?.moveToDocumentBoundary(
-          forward: intent.forward,
-          extend: true,
-        ),
+        enabled: (_) => _canMutateActions && _documentHost != null,
+        // AppKit delivers Cmd+Shift+Up/Down through these document-boundary
+        // selectors instead of the raw key path. Keep the native selector
+        // route converged with the document block-move shortcut.
+        invoke: (intent) =>
+            _documentHost?.moveActiveBlock(intent.forward ? 1 : -1),
       ),
       ExtendSelectionToNextWordBoundaryIntent:
           _HostAction<ExtendSelectionToNextWordBoundaryIntent>(
@@ -2260,7 +2261,7 @@ String? _appKitSelectorForShortcut(ShortcutActivator shortcut) {
         meta: true,
         shift: true,
       )) {
-    return 'moveUpAndModifySelection:';
+    return 'moveToBeginningOfDocumentAndModifySelection:';
   }
   if (shortcut ==
       const SingleActivator(
@@ -2268,7 +2269,7 @@ String? _appKitSelectorForShortcut(ShortcutActivator shortcut) {
         meta: true,
         shift: true,
       )) {
-    return 'moveDownAndModifySelection:';
+    return 'moveToEndOfDocumentAndModifySelection:';
   }
   return null;
 }

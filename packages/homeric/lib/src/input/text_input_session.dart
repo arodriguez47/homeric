@@ -169,6 +169,10 @@ final class HomericTextInputSession {
     _shadowValue = value;
     _geometryGeneration = null;
     _connection!.setEditingState(value);
+    // Reassert the platform first responder as well as the canonical value.
+    // AppKit may release it while a selector-triggered structural edit moves
+    // the active row even though Flutter retains the same FocusNode.
+    _connection!.show();
     return true;
   }
 

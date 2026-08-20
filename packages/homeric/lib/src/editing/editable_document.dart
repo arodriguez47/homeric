@@ -1276,6 +1276,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     }
     if (!moved) return false;
     _restoreViewportAnchor(anchor);
+    // AppKit can deliver a block-move chord through the text-input selector
+    // callback. Moving the active row during that callback may temporarily
+    // release the native first responder even though the Flutter FocusNode is
+    // retained. Settle the same stable block again after its new row position
+    // mounts so subsequent platform input remains attached.
+    _scheduleActiveHostSettlement(witness.blockId);
     final nextIndex =
         widget.controller.document.indexOfBlockId(witness.blockId);
     if (nextIndex != null) {

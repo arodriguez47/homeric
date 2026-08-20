@@ -1,0 +1,30 @@
+{
+  "generator": "homeric-corpus-v1-lcg32",
+  "fixtures": {
+    "tiny.md": {
+      "words": 1000,
+      "seed": "0x00100001",
+      "fnv1a32": "746ca979"
+    },
+    "small.md": {
+      "words": 10000,
+      "seed": "0x00100002",
+      "fnv1a32": "b51c5ba8"
+    },
+    "medium.md": {
+      "words": 50000,
+      "seed": "0x00100003",
+      "fnv1a32": "1cd79634"
+    },
+    "large.md": {
+      "words": 100000,
+      "seed": "0x00100004",
+      "fnv1a32": "7a87f8d5"
+    },
+    "xl.md": {
+      "words": 500000,
+      "seed": "0x00100005",
+      "fnv1a32": "711a96fb"
+    }
+  }
+}

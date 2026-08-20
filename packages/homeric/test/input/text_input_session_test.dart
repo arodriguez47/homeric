@@ -278,6 +278,170 @@ void main() {
     controller.dispose();
   });
 
+  test('cross-block selection exposes one collapsed head-block shadow', () {
+    final document = _documents(<String>['first', 'second']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 2),
+        head: document.positionAt(1, 3),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+
+    expect(session.attach(blockId: 'b'), isTrue);
+    expect(calls[1].arguments, containsPair('text', 'second'));
+    expect(calls[1].arguments, containsPair('selectionBase', 3));
+    expect(calls[1].arguments, containsPair('selectionExtent', 3));
+
+    session.dispose();
+    controller.dispose();
+  });
+
+  test('first composing delta replaces a cross-block selection once', () async {
+    final document = _documents(<String>['abc', 'def']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 1),
+        head: document.positionAt(1, 2),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    session.attach(blockId: 'b');
+    calls.clear();
+
+    await _sendDeltas(binding, 1, <Map<String, Object?>>[
+      _delta(
+        oldText: 'def',
+        deltaText: 'X',
+        start: 2,
+        end: 2,
+        selectionBase: 3,
+        selectionExtent: 3,
+        composingBase: 2,
+        composingExtent: 3,
+      ),
+    ]);
+
+    expect(
+        controller.document.blocks.map((block) => block.text), <String>['aXf']);
+    expect(controller.selection,
+        HomericSelection.collapsed(controller.document.positionAt(0, 2)));
+    expect(
+      controller.composing,
+      HomericTextRange(
+        controller.document.positionAt(0, 1),
+        controller.document.positionAt(0, 2),
+      ),
+    );
+    expect(notifications, 1);
+    expect(_editingStateCalls(calls), hasLength(1));
+    expect(_editingStateCalls(calls).single.arguments,
+        containsPair('text', 'aXf'));
+    expect(controller.canUndo, isFalse);
+
+    calls.clear();
+    await _sendDeltas(binding, 1, <Map<String, Object?>>[
+      _delta(
+        oldText: 'aXf',
+        deltaText: '',
+        start: -1,
+        end: -1,
+        selectionBase: 2,
+        selectionExtent: 2,
+      ),
+    ]);
+    expect(controller.composing, isNull);
+    expect(controller.canUndo, isTrue);
+    expect(controller.undo(), isTrue);
+    expect(controller.document, same(document));
+    expect(
+      controller.selection,
+      HomericSelection(
+        anchor: document.positionAt(0, 1),
+        head: document.positionAt(1, 2),
+      ),
+    );
+
+    session.dispose();
+    controller.dispose();
+  });
+
+  test('suspended deltas are inert and retarget reuses the connection',
+      () async {
+    final document = _documents(<String>['a', 'b', 'c']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    session.attach(blockId: 'a');
+    final setClientCount =
+        calls.where((call) => call.method == 'TextInput.setClient').length;
+    calls.clear();
+
+    session.suspendDeltas();
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 1),
+      head: document.positionAt(2, 1),
+    ));
+    await _sendDeltas(binding, 1, <Map<String, Object?>>[
+      _delta(
+        oldText: 'a',
+        deltaText: 'X',
+        start: 1,
+        end: 1,
+        selectionBase: 2,
+        selectionExtent: 2,
+      ),
+    ]);
+    expect(controller.document, same(document));
+
+    expect(session.retarget(blockId: 'c'), isTrue);
+    session.resumeDeltas();
+    expect(session.activeBlockId, 'c');
+    expect(
+        calls.where((call) => call.method == 'TextInput.setClient'), isEmpty);
+    expect(setClientCount, 1);
+    expect(
+      _editingStateCalls(calls).last.arguments,
+      containsPair('text', 'c'),
+    );
+
+    session.dispose();
+    controller.dispose();
+  });
+
+  test('uncoordinated active-block switch closes on the next microtask',
+      () async {
+    final document = _documents(<String>['a', 'b']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    session.attach(blockId: 'a');
+    calls.clear();
+
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(1, 1)),
+    );
+    expect(session.isAttached, isTrue,
+        reason: 'a document coordinator may retarget synchronously');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(session.isAttached, isFalse);
+    expect(
+      calls.where((call) => call.method == 'TextInput.clearClient'),
+      hasLength(1),
+    );
+    session.dispose();
+    controller.dispose();
+  });
+
   test('stale old value and newline are corrected exactly once', () async {
     final document = _document('ab');
     final controller = HomericEditorController(

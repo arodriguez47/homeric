@@ -328,6 +328,33 @@ void main() {
     expect(controller.documentRevision, 0);
     expect(notifications, 0);
   });
+
+  test('cross-block selection disables reorder without state change', () {
+    final document = _document(['a', 'b', 'c']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(1, 1),
+      ),
+    );
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    expect(
+      controller.moveBlock(BlockMoveRequest(
+        blockId: 'a',
+        targetIndex: 2,
+        documentRevision: controller.documentRevision,
+        previousBlockId: null,
+        nextBlockId: 'b',
+      )),
+      isFalse,
+    );
+    expect(controller.document, same(document));
+    expect(controller.canUndo, isFalse);
+    expect(notifications, 0);
+  });
 }
 
 Document _document(List<String> texts) => Document([

@@ -95,34 +95,63 @@ void main() {
     expect(controller.canUndo, isFalse);
   });
 
-  test('paste rejects multiline atomically and reports a typed event',
+  test('multiline paste reaches one structural controller transaction',
       () async {
-    for (final value in <String>['a\nb', 'a\rb', 'a\r\nb']) {
-      final events = <HomericHostEvent>[];
-      final controller = HomericEditorController(
-        document: _document('abcd'),
-        selection: const HomericSelection(anchor: 2, head: 4),
-      );
-      var notifications = 0;
-      controller.addListener(() => notifications++);
-      final clipboard = HomericEditorClipboard(
-        controller: controller,
-        blockId: 'b',
-        adapter: _FakeClipboard(readValue: value),
-        isHostCurrent: () => true,
-        onEvent: events.add,
-      );
+    final controller = HomericEditorController(
+      document: _document('abcd'),
+      selection: const HomericSelection(anchor: 2, head: 4),
+    );
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    final clipboard = HomericEditorClipboard(
+      controller: controller,
+      blockId: 'b',
+      adapter: _FakeClipboard(readValue: 'X\r\n\rY'),
+      isHostCurrent: () => true,
+    );
 
-      await clipboard.paste();
+    await clipboard.paste();
 
-      expect(controller.document.blocks.single.text, 'abcd');
-      expect(controller.selection, const HomericSelection(anchor: 2, head: 4));
-      expect(controller.canUndo, isFalse);
-      expect(notifications, 0);
-      expect(events.single, isA<HomericPasteRejected>());
-      clipboard.dispose();
-      controller.dispose();
-    }
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['aX', '', 'Yd']);
+    expect(notifications, 1);
+    expect(controller.canUndo, isTrue);
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.single.text, 'abcd');
+    clipboard.dispose();
+    controller.dispose();
+  });
+
+  test('cross-block copy projects visible slices and empty separators',
+      () async {
+    final document = _documents(<String>['**one**', '', '__three__']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(2, 9),
+        head: document.positionAt(0, 0),
+      ),
+      decorations: DecorationSet.of(<Decoration>[
+        Decoration.replace('a', 0, 2, replacementLength: 0),
+        Decoration.replace('a', 5, 7, replacementLength: 0),
+        Decoration.replace('c', 0, 2, replacementLength: 0),
+        Decoration.replace('c', 7, 9, replacementLength: 0),
+      ]),
+    );
+    final adapter = _FakeClipboard();
+    final clipboard = HomericEditorClipboard(
+      controller: controller,
+      blockId: 'a',
+      adapter: adapter,
+      isHostCurrent: () => true,
+    );
+
+    await clipboard.copy();
+
+    expect(adapter.writes, <String>['one\n\nthree']);
+    expect(controller.document, same(document));
+    clipboard.dispose();
+    controller.dispose();
   });
 
   test('null and empty paste are no-ops while adapter failure is typed',
@@ -254,6 +283,17 @@ Document _document(String text) => Document(<Block>[
         type: 'paragraph',
         runs: <InlineRun>[if (text.isNotEmpty) InlineRun(text)],
       ),
+    ]);
+
+Document _documents(List<String> texts) => Document(<Block>[
+      for (var index = 0; index < texts.length; index++)
+        Block(
+          id: String.fromCharCode('a'.codeUnitAt(0) + index),
+          type: 'paragraph',
+          runs: <InlineRun>[
+            if (texts[index].isNotEmpty) InlineRun(texts[index]),
+          ],
+        ),
     ]);
 
 final class _FakeClipboard implements HomericClipboardAdapter {

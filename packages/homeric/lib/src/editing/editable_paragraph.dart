@@ -19,6 +19,7 @@ import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/paragraph_source.dart';
 import '../view/view_map.dart';
+import 'editable_document.dart';
 import 'editor_clipboard.dart';
 import 'editor_controller.dart';
 import 'spell_check.dart';
@@ -165,6 +166,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   int _hostEpoch = 0;
   late _EditableHostCommandDelegate _commandDelegate;
   late HomericEditorClipboard _clipboard;
+  HomericEditableDocumentState? _documentHost;
   late final VoidCallback _semanticsCopy;
   late final VoidCallback _semanticsCut;
   late final VoidCallback _semanticsPaste;
@@ -211,6 +213,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final documentHost = HomericEditableDocument.maybeOf(context);
+    if (!identical(documentHost, _documentHost)) {
+      _documentHost?.unregisterCommandHost(widget.blockId, _commandDelegate);
+      _documentHost = documentHost;
+      documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
+    }
     // `valuesOf` postdates Homeric's Flutter 3.24 minimum.
     // ignore: deprecated_member_use
     final tickerEnabled = TickerMode.of(context);
@@ -245,6 +253,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         blockChanged ||
         focusNodeChanged ||
         !identical(oldWidget.clipboard, widget.clipboard);
+    final oldDelegate = _commandDelegate;
     if (hadFocus &&
         (controllerChanged ||
             sessionChanged ||
@@ -265,7 +274,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _clearTransientState();
     }
     if (hostDependenciesChanged) {
+      _documentHost?.unregisterCommandHost(oldWidget.blockId, oldDelegate);
       _renewHostBindings();
+      _documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
     }
     if (hadFocus && _focusNode.hasFocus && hostDependenciesChanged) {
       if (_controller.document.indexOfBlockId(widget.blockId) != null) {
@@ -290,6 +301,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _stopCaretBlink();
     _caretVisibility.dispose();
     _clipboard.dispose();
+    _documentHost?.unregisterCommandHost(widget.blockId, _commandDelegate);
     _controller.removeListener(_controllerChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
       widget.inputSession.blur();
@@ -321,7 +333,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   bool get _ownsEditingFocus =>
       _focusNode.hasFocus || (_contextMenuController?.isShown ?? false);
 
-  bool _attachInput() => widget.inputSession.attach(
+  bool _attachInput() =>
+      _documentHost?.attachCommandHost(
+        widget.blockId,
+        _commandDelegate,
+      ) ??
+      widget.inputSession.attach(
         blockId: widget.blockId,
         commandDelegate: _commandDelegate,
       );
@@ -684,7 +701,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _controller.composing == null;
 
   bool get _canCopyOrCut {
-    final selection = _localSelection();
+    final selection = _controller.selection;
     return _canUseActions && selection != null && !selection.isCollapsed;
   }
 

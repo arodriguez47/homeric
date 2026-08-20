@@ -1,8 +1,10 @@
-/// Epoch-safe clipboard operations for one canonical editor block.
+/// Epoch-safe clipboard operations for one canonical editor document.
 library;
 
 import 'package:flutter/services.dart';
 
+import '../model/position.dart';
+import '../model/selection.dart';
 import '../render/paragraph_source.dart';
 import 'editor_controller.dart';
 
@@ -44,7 +46,7 @@ final class HomericClipboardFailure extends HomericHostEvent {
   final Object error;
 }
 
-/// A paste was rejected because this phase only accepts one paragraph.
+/// A paste was rejected by the host's structural editing policy.
 final class HomericPasteRejected extends HomericHostEvent {
   const HomericPasteRejected();
 }
@@ -53,7 +55,9 @@ final class HomericPasteRejected extends HomericHostEvent {
 ///
 /// Every operation captures the controller state and a monotonically newer
 /// request generation. Async completions fail closed when the host, block,
-/// selection, composition, revision, or request generation has changed.
+/// selection, composition, revision, or request generation has changed. Text
+/// projection spans the canonical selection without laying out off-screen
+/// paragraphs; hidden replacement decorations remain absent from the payload.
 final class HomericEditorClipboard {
   HomericEditorClipboard({
     required this.controller,
@@ -94,7 +98,7 @@ final class HomericEditorClipboard {
       return;
     }
     if (!_isCurrent(witness)) return;
-    controller.replaceSelection('');
+    controller.replaceSelectionStructurally('');
   }
 
   Future<void> paste() async {
@@ -108,11 +112,7 @@ final class HomericEditorClipboard {
       return;
     }
     if (!_isCurrent(witness) || text == null || text.isEmpty) return;
-    if (text.contains('\n') || text.contains('\r')) {
-      onEvent?.call(const HomericPasteRejected());
-      return;
-    }
-    controller.replaceSelection(text);
+    controller.replaceSelectionStructurally(text);
   }
 
   _ClipboardWitness? _capture({required bool requireExpandedSelection}) {
@@ -124,38 +124,37 @@ final class HomericEditorClipboard {
         selection == null) {
       return null;
     }
-    late final BlockTextSelection local;
-    try {
-      local = BlockTextSelection(
-        anchor: controller.blockOffsetForGlobalPosition(
-          blockId,
-          selection.anchor,
-        ),
-        head: controller.blockOffsetForGlobalPosition(blockId, selection.head),
-        affinity: selection.affinity,
-      );
-    } on ArgumentError {
-      return null;
-    }
-    if (requireExpandedSelection && local.isCollapsed) return null;
+    if (requireExpandedSelection && selection.isCollapsed) return null;
     return _ClipboardWitness(
       ++_generation,
       controller.stateRevision,
-      local,
+      selection,
     );
   }
 
   String _visibleSelection(_ClipboardWitness witness) {
-    final block = controller.document.blockById(blockId);
-    if (block == null) return '';
-    final source = ParagraphSource<Object?>.build(
-      block: block,
-      decorations: controller.decorations.forBlock(blockId),
-      resolveStyle: (_) => null,
-    );
-    final start = source.viewMap.docToView(witness.selection.start, assoc: 1);
-    final end = source.viewMap.docToView(witness.selection.end, assoc: -1);
-    return start < end ? source.viewText.substring(start, end) : '';
+    final document = controller.document;
+    final start = document.resolve(witness.selection.start);
+    final end = document.resolve(witness.selection.end);
+    if (start is! InlinePosition || end is! InlinePosition) return '';
+    final slices = <String>[];
+    for (var index = start.blockIndex; index <= end.blockIndex; index++) {
+      final block = document.blocks[index];
+      final source = ParagraphSource<Object?>.build(
+        block: block,
+        decorations: controller.decorations.forBlock(block.id),
+        resolveStyle: (_) => null,
+      );
+      final localStart = index == start.blockIndex ? start.offset : 0;
+      final localEnd =
+          index == end.blockIndex ? end.offset : block.contentLength;
+      final viewStart = source.viewMap.docToView(localStart, assoc: 1);
+      final viewEnd = source.viewMap.docToView(localEnd, assoc: -1);
+      slices.add(viewStart < viewEnd
+          ? source.viewText.substring(viewStart, viewEnd)
+          : '');
+    }
+    return slices.join('\n');
   }
 
   bool _isCurrent(_ClipboardWitness witness) {
@@ -191,5 +190,5 @@ final class _ClipboardWitness {
 
   final int generation;
   final int stateRevision;
-  final BlockTextSelection selection;
+  final HomericSelection selection;
 }

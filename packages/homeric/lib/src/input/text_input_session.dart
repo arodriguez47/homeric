@@ -1,11 +1,14 @@
 /// Experimental epoch-bound platform text input for one canonical block.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../editing/editor_controller.dart';
 import '../model/document.dart';
+import '../model/position.dart';
 import '../model/selection.dart';
 
 /// Host-owned command boundary captured by one platform input epoch.
@@ -55,6 +58,7 @@ final class HomericTextInputSession {
   int? _geometryGeneration;
   HomericTextInputCommandDelegate? _commandDelegate;
   bool _applyingRemote = false;
+  bool _deltasSuspended = false;
   bool _disposed = false;
 
   /// Whether this session currently owns Flutter's active input connection.
@@ -119,6 +123,42 @@ final class HomericTextInputSession {
     return true;
   }
 
+  /// Temporarily ignores platform deltas while a document gesture moves the
+  /// logical head across blocks.
+  void suspendDeltas() {
+    if (_disposed) return;
+    _deltasSuspended = true;
+  }
+
+  /// Resumes platform delta acceptance after the document host retargets.
+  void resumeDeltas() {
+    if (_disposed) return;
+    _deltasSuspended = false;
+  }
+
+  /// Retargets the live platform capability without closing its connection.
+  ///
+  /// The platform receives a fresh block-local canonical value while the
+  /// connection/client epoch remains intact. Host command callbacks are
+  /// replaced atomically with [commandDelegate].
+  bool retarget({
+    required String blockId,
+    HomericTextInputCommandDelegate? commandDelegate,
+  }) {
+    if (_disposed || controller.activeBlockId != blockId) return false;
+    if (!isAttached) {
+      return attach(blockId: blockId, commandDelegate: commandDelegate);
+    }
+    final value = _canonicalValue(blockId);
+    if (value == null) return false;
+    _blockId = blockId;
+    _commandDelegate = commandDelegate;
+    _shadowValue = value;
+    _geometryGeneration = null;
+    _connection!.setEditingState(value);
+    return true;
+  }
+
   /// Ends focus ownership while preserving the controller's logical selection.
   void blur() => _close(CompositionInterruption.blur);
 
@@ -152,7 +192,21 @@ final class HomericTextInputSession {
   }
 
   void _controllerChanged() {
-    if (_disposed || _applyingRemote || !isAttached) return;
+    if (_disposed || _applyingRemote || _deltasSuspended || !isAttached) {
+      return;
+    }
+    if (controller.activeBlockId != _blockId) {
+      final epoch = _currentEpoch;
+      scheduleMicrotask(() {
+        if (!_disposed &&
+            epoch == _currentEpoch &&
+            isAttached &&
+            controller.activeBlockId != _blockId) {
+          _close(CompositionInterruption.activeBlockSwitch);
+        }
+      });
+      return;
+    }
     _syncCanonical(force: false);
   }
 
@@ -169,7 +223,13 @@ final class HomericTextInputSession {
       );
       head = controller.blockOffsetForGlobalPosition(blockId, selection.head);
     } on ArgumentError {
-      return null;
+      if (controller.activeBlockId != blockId) return null;
+      final resolvedHead = controller.document.resolve(selection.head);
+      if (resolvedHead is! InlinePosition || resolvedHead.block.id != blockId) {
+        return null;
+      }
+      anchor = resolvedHead.offset;
+      head = resolvedHead.offset;
     }
     final composing = controller.composing;
     var composingRange = TextRange.empty;
@@ -226,6 +286,7 @@ final class HomericTextInputSession {
       _syncCanonical(force: true);
       return;
     }
+    if (_deltasSuspended) return;
     final initial = _shadowValue;
     final blockId = _blockId;
     if (initial == null || blockId == null) return;
@@ -262,6 +323,13 @@ final class HomericTextInputSession {
     final composing = shadow.composing.isValid && !shadow.composing.isCollapsed
         ? BlockTextRange(shadow.composing.start, shadow.composing.end)
         : null;
+    if (_selectionSpansBlocks(blockId)) {
+      _applyDocumentSelectionDelta(
+        initial: initial,
+        shadow: shadow,
+      );
+      return;
+    }
     _applyingRemote = true;
     try {
       controller.applyBlockEditBatch(
@@ -286,6 +354,77 @@ final class HomericTextInputSession {
       return;
     }
     _syncCanonical(force: true);
+  }
+
+  bool _selectionSpansBlocks(String blockId) {
+    final selection = controller.selection;
+    if (selection == null) return false;
+    try {
+      controller.blockOffsetForGlobalPosition(blockId, selection.anchor);
+      controller.blockOffsetForGlobalPosition(blockId, selection.head);
+      return false;
+    } on ArgumentError {
+      return controller.activeBlockId == blockId;
+    }
+  }
+
+  void _applyDocumentSelectionDelta({
+    required TextEditingValue initial,
+    required TextEditingValue shadow,
+  }) {
+    final edit = _singleEdit(initial.text, shadow.text);
+    final insertionOffset = initial.selection.extentOffset;
+    if (edit == null ||
+        edit.start != insertionOffset ||
+        edit.end != insertionOffset) {
+      _syncCanonical(force: true);
+      return;
+    }
+    final localSelection = BlockTextSelection(
+      anchor: shadow.selection.baseOffset - insertionOffset,
+      head: shadow.selection.extentOffset - insertionOffset,
+      affinity: shadow.selection.affinity == TextAffinity.upstream
+          ? HomericCaretAffinity.upstream
+          : HomericCaretAffinity.downstream,
+    );
+    final localComposing =
+        shadow.composing.isValid && !shadow.composing.isCollapsed
+            ? BlockTextRange(
+                shadow.composing.start - insertionOffset,
+                shadow.composing.end - insertionOffset,
+              )
+            : null;
+    _applyingRemote = true;
+    late final bool changed;
+    try {
+      changed = controller.applyDocumentSelectionTextInput(
+        text: edit.text,
+        selection: localSelection,
+        composing: localComposing,
+      );
+    } finally {
+      _applyingRemote = false;
+    }
+    final survivorId = controller.activeBlockId;
+    if (!changed || survivorId == null) {
+      _syncCanonical(force: true);
+      return;
+    }
+    final canonical = _canonicalValue(survivorId);
+    if (canonical == null) {
+      _close(CompositionInterruption.activeBlockSwitch);
+      return;
+    }
+    if (_blockId == survivorId &&
+        _sameCanonicalValue(_shadowValue, canonical)) {
+      return;
+    }
+    final blockChanged = _blockId != survivorId;
+    _blockId = survivorId;
+    if (blockChanged) _commandDelegate = null;
+    _shadowValue = canonical;
+    _geometryGeneration = null;
+    _connection?.setEditingState(canonical);
   }
 
   void _legacyUpdate(int epoch, TextEditingValue value) {
@@ -323,6 +462,7 @@ final class HomericTextInputSession {
     _shadowValue = null;
     _geometryGeneration = null;
     _commandDelegate = null;
+    _deltasSuspended = false;
     controller.interruptComposition(interruption);
     connection?.close();
   }

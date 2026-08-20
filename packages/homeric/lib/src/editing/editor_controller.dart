@@ -419,6 +419,41 @@ class HomericEditorController extends ChangeNotifier {
   bool replaceSelectionStructurally(
     String text, {
     String? firstTrailingBlockId,
+  }) =>
+      _replaceSelectionStructurally(
+        text,
+        firstTrailingBlockId: firstTrailingBlockId,
+      );
+
+  /// Applies one block-local platform value over a document-global selection.
+  ///
+  /// [selection] and [composing] address [text], not the old active block. This
+  /// lets a block-local platform client replace a cross-block canonical range
+  /// in one observable controller transition without exposing whole-document
+  /// text to the platform.
+  bool applyDocumentSelectionTextInput({
+    required String text,
+    required BlockTextSelection selection,
+    BlockTextRange? composing,
+  }) {
+    if (text.contains('\n') ||
+        text.contains('\r') ||
+        !_validBlockSelection(selection, text.length) ||
+        (composing != null && !_validBlockRange(composing, text.length))) {
+      return false;
+    }
+    return _replaceSelectionStructurally(
+      text,
+      replacementSelection: selection,
+      replacementComposing: composing,
+    );
+  }
+
+  bool _replaceSelectionStructurally(
+    String text, {
+    String? firstTrailingBlockId,
+    BlockTextSelection? replacementSelection,
+    BlockTextRange? replacementComposing,
   }) {
     if (_compositionStart != null || _composing != null) return false;
     final current = _selection;
@@ -479,19 +514,48 @@ class HomericEditorController extends ChangeNotifier {
     }
 
     final result = tx.finish();
-    final targetId = segments.length == 1 ? start.block.id : lastInsertedId!;
+    final targetId = replacementSelection != null || segments.length == 1
+        ? start.block.id
+        : lastInsertedId!;
     final targetIndex = result.doc.indexOfBlockId(targetId);
     if (targetIndex == null) return false;
-    final targetOffset = segments.length == 1
-        ? start.offset + segments.single.length
-        : segments.last.length;
-    final nextSelection = HomericSelection.collapsed(
-      result.doc.positionAt(targetIndex, targetOffset),
-    );
+    final nextSelection = replacementSelection == null
+        ? HomericSelection.collapsed(
+            result.doc.positionAt(
+              targetIndex,
+              segments.length == 1
+                  ? start.offset + segments.single.length
+                  : segments.last.length,
+            ),
+          )
+        : HomericSelection(
+            anchor: result.doc.positionAt(
+              targetIndex,
+              start.offset + replacementSelection.anchor,
+            ),
+            head: result.doc.positionAt(
+              targetIndex,
+              start.offset + replacementSelection.head,
+            ),
+            affinity: replacementSelection.affinity,
+          );
+    final nextComposing = replacementComposing == null
+        ? null
+        : HomericTextRange(
+            result.doc.positionAt(
+              targetIndex,
+              start.offset + replacementComposing.start,
+            ),
+            result.doc.positionAt(
+              targetIndex,
+              start.offset + replacementComposing.end,
+            ),
+          );
     return _commitStructuralTransaction(
       tx,
       result,
       nextSelection,
+      nextComposing: nextComposing,
       revealTargets: _hiddenTargetsForSelection(current),
     );
   }
@@ -512,6 +576,7 @@ class HomericEditorController extends ChangeNotifier {
   bool moveBlock(BlockMoveRequest request) {
     if (_compositionStart != null ||
         _composing != null ||
+        _selectionHost(_document, _selection) == null ||
         request.documentRevision != _documentRevision) {
       return false;
     }
@@ -619,6 +684,7 @@ class HomericEditorController extends ChangeNotifier {
     Transaction transaction,
     TransactionResult result,
     HomericSelection? nextSelection, {
+    HomericTextRange? nextComposing,
     Iterable<CanonicalEditTarget> revealTargets = const <CanonicalEditTarget>[],
   }) {
     if (!identical(transaction.before, _document) ||
@@ -636,9 +702,14 @@ class HomericEditorController extends ChangeNotifier {
     _document = result.doc;
     _decorations = _decorations.map(result.mapping, result.changes);
     _selection = nextSelection;
-    _composing = null;
+    _composing = nextComposing;
     _preferredX = null;
-    _pushUndo(before);
+    if (nextComposing == null) {
+      _pushUndo(before);
+    } else {
+      _compositionStart = before;
+      _compositionDidEdit = true;
+    }
     _redoStack.clear();
     _notifyTransition(
       documentChanged: true,

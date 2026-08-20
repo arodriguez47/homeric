@@ -1305,21 +1305,49 @@ void main() {
     addTearDown(session.dispose);
     addTearDown(controller.dispose);
     var calls = 0;
-    await tester.pumpWidget(_harness(HomericEditableParagraph(
-      controller: controller,
-      inputSession: session,
-      blockId: 'b',
-      resolveStyle: (_) => _style,
-      onSingleTap: (geometry, localPosition, globalPosition) {
-        expect(geometry.isCurrent, isTrue);
-        expect(localPosition.dx, greaterThanOrEqualTo(0));
-        expect(globalPosition.dx, greaterThan(0));
-        calls++;
-      },
+    var hoverCalls = 0;
+    var hoverExits = 0;
+    var ancestorHoverCalls = 0;
+    await tester.pumpWidget(_harness(MouseRegion(
+      opaque: false,
+      onHover: (_) => ancestorHoverCalls++,
+      child: HomericEditableParagraph(
+        controller: controller,
+        inputSession: session,
+        blockId: 'b',
+        resolveStyle: (_) => _style,
+        onSingleTap: (geometry, localPosition, globalPosition) {
+          expect(geometry.isCurrent, isTrue);
+          expect(localPosition.dx, greaterThanOrEqualTo(0));
+          expect(globalPosition.dx, greaterThan(0));
+          calls++;
+        },
+        onHover: (geometry, localPosition, globalPosition) {
+          expect(geometry.isCurrent, isTrue);
+          hoverCalls++;
+        },
+        onHoverExit: (geometry) {
+          hoverExits++;
+        },
+      ),
     )));
     await tester.pump();
     final point = tester.getTopLeft(find.byType(HomericEditableParagraph)) +
         const Offset(12, 7);
+
+    final mouse = await tester.createGesture(kind: ui.PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(point);
+    await tester.pump();
+    expect(hoverCalls, greaterThan(0));
+    expect(ancestorHoverCalls, greaterThan(0),
+        reason: 'the additive hover plane must remain non-opaque');
+    expect(calls, 0,
+        reason: 'hover shares the pointer plane without becoming a tap');
+    await mouse.moveTo(const Offset(-10, -10));
+    await tester.pump();
+    expect(hoverExits, 1);
+    await mouse.removePointer();
 
     await tester.tapAt(point);
     expect(calls, 1);

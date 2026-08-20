@@ -38,6 +38,19 @@ typedef HomericEditableSingleTapCallback = void Function(
   Offset globalPosition,
 );
 
+/// Observes pointer hover from the same current paragraph plane that owns
+/// selection gestures, without installing a competing hit-test target.
+typedef HomericEditableHoverCallback = void Function(
+  HomericEditableBlockGeometry geometry,
+  Offset localPosition,
+  Offset globalPosition,
+);
+
+/// Observes a pointer leaving the current paragraph plane.
+typedef HomericEditableHoverExitCallback = void Function(
+  HomericEditableBlockGeometry geometry,
+);
+
 /// Projects transient consumer decorations from the current immutable block.
 ///
 /// The callback runs inside each paragraph rebuild, after the controller has
@@ -176,6 +189,8 @@ class HomericEditableParagraph extends StatefulWidget {
     this.spellingColor,
     this.overlayBuilder,
     this.onSingleTap,
+    this.onHover,
+    this.onHoverExit,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -282,6 +297,12 @@ class HomericEditableParagraph extends StatefulWidget {
   /// callback. Consumers may use current [HomericEditableBlockGeometry] for
   /// additive interactions without installing a competing gesture detector.
   final HomericEditableSingleTapCallback? onSingleTap;
+
+  /// Observes hover without competing with Homeric's selection recognizer.
+  final HomericEditableHoverCallback? onHover;
+
+  /// Observes the pointer leaving this paragraph's hover plane.
+  final HomericEditableHoverExitCallback? onHoverExit;
 
   @override
   State<HomericEditableParagraph> createState() =>
@@ -758,6 +779,46 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                 )
                 .value
             : null;
+        final selectionPlane = TextSelectionGestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapDown: (details) => _tapDown(geometry, details),
+          onSingleTapUp: (details) {
+            if (!consumerGeometry.isCurrent) return;
+            widget.onSingleTap?.call(
+              consumerGeometry,
+              details.localPosition,
+              details.globalPosition,
+            );
+          },
+          onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
+          onTripleTapDown: (details) => _tripleTapDown(geometry, details),
+          onDragSelectionStart: (details) =>
+              _startSelectionDrag(geometry, details),
+          onDragSelectionUpdate: (details) =>
+              _updateSelectionDrag(geometry, details.localPosition),
+          onDragSelectionEnd: (_) => _endSelectionPointer(),
+          onSingleTapCancel: _cancelSelectionPointer,
+          onTapTrackReset: _cancelSelectionPointer,
+          onSecondaryTapDown: (details) =>
+              _secondaryTapDown(geometry, details.localPosition),
+          onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
+          child: const SizedBox.expand(),
+        );
+        final hoverPlane = widget.onHover == null && widget.onHoverExit == null
+            ? selectionPlane
+            : MouseRegion(
+                opaque: false,
+                onHover: (event) {
+                  if (!consumerGeometry.isCurrent) return;
+                  widget.onHover?.call(
+                    consumerGeometry,
+                    event.localPosition,
+                    event.position,
+                  );
+                },
+                onExit: (_) => widget.onHoverExit?.call(consumerGeometry),
+                child: selectionPlane,
+              );
         return <Widget>[
           if (fullySelectedEmptyBlock)
             Positioned.fill(
@@ -771,31 +832,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
               ),
             ),
           Positioned.fill(
-            child: TextSelectionGestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTapDown: (details) => _tapDown(geometry, details),
-              onSingleTapUp: (details) {
-                if (!consumerGeometry.isCurrent) return;
-                widget.onSingleTap?.call(
-                  consumerGeometry,
-                  details.localPosition,
-                  details.globalPosition,
-                );
-              },
-              onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
-              onTripleTapDown: (details) => _tripleTapDown(geometry, details),
-              onDragSelectionStart: (details) =>
-                  _startSelectionDrag(geometry, details),
-              onDragSelectionUpdate: (details) =>
-                  _updateSelectionDrag(geometry, details.localPosition),
-              onDragSelectionEnd: (_) => _endSelectionPointer(),
-              onSingleTapCancel: _cancelSelectionPointer,
-              onTapTrackReset: _cancelSelectionPointer,
-              onSecondaryTapDown: (details) =>
-                  _secondaryTapDown(geometry, details.localPosition),
-              onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
-              child: const SizedBox.expand(),
-            ),
+            child: hoverPlane,
           ),
           ...?widget.overlayBuilder?.call(
             overlayContext,

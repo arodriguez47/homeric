@@ -24,6 +24,7 @@ import '../view/view_map.dart';
 import 'editable_document.dart';
 import 'editor_clipboard.dart';
 import 'editor_controller.dart';
+import 'selection_overlay.dart';
 import 'spell_check.dart';
 
 /// Builds layout-neutral consumer overlays from current paragraph geometry.
@@ -348,6 +349,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   ParagraphGeometry? _paragraphGeometry;
   final LayerLink _selectionStartLayerLink = LayerLink();
   final LayerLink _selectionEndLayerLink = LayerLink();
+  final LayerLink _localTouchToolbarLayerLink = LayerLink();
+  final HomericSelectionOverlayCoordinator _localTouchOverlayCoordinator =
+      HomericSelectionOverlayCoordinator();
+  bool _localTouchSelectionRequested = false;
+  bool _localTouchSelectionSyncScheduled = false;
   int _hostEpoch = 0;
   late _EditableHostCommandDelegate _commandDelegate;
   late HomericEditorClipboard _clipboard;
@@ -400,6 +406,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     super.didChangeDependencies();
     final documentHost = HomericEditableDocument.maybeOf(context);
     if (!identical(documentHost, _documentHost)) {
+      _hideLocalTouchSelectionChrome();
       _documentHost?.unregisterCommandHost(widget.blockId, _commandDelegate);
       _documentHost?.unregisterSelectionHost(widget.blockId, this);
       _documentHost = documentHost;
@@ -459,6 +466,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     if (hostDependenciesChanged || spellProviderChanged) {
       _clearTransientState();
     }
+    if (!identical(
+      oldWidget.touchSelectionConfiguration,
+      widget.touchSelectionConfiguration,
+    )) {
+      _hideLocalTouchSelectionChrome();
+    }
     if (hostDependenciesChanged) {
       _documentHost?.unregisterCommandHost(oldWidget.blockId, oldDelegate);
       _documentHost?.unregisterSelectionHost(oldWidget.blockId, this);
@@ -485,6 +498,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _disposing = true;
     _hostEpoch++;
     _clearTransientState();
+    _localTouchOverlayCoordinator.dispose();
     _stopCaretBlink();
     _caretVisibility.dispose();
     _clipboard.dispose();
@@ -557,6 +571,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     }
     final caretStateChanged = _captureCaretState();
     if (caretStateChanged) _syncCaretBlink(resetVisible: true);
+    if (_localTouchSelectionRequested) {
+      _scheduleLocalTouchSelectionSync();
+    }
     setState(() {});
   }
 
@@ -823,6 +840,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                   render.localToGlobal(localRect.topLeft) & localRect.size,
               layoutGeneration: geometry.generation,
               layerLink: _selectionLayerLink(endpoint),
+              textDirection:
+                  widget.paragraphSpec.direction == ParagraphDirection.rtl
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
             );
           },
         );
@@ -1128,20 +1149,27 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       onSelectAll: _canUseSelectionActions && block.contentLength > 0
           ? _semanticsSelectAll
           : null,
-      child: DefaultTextEditingShortcuts(
-        child: Shortcuts(
-          shortcuts: shortcuts,
-          child: Actions(
-            actions: actions,
-            child: Builder(
-              builder: (commandContext) {
-                _commandContext = commandContext;
-                return Focus(
-                  focusNode: _focusNode,
-                  onFocusChange: _focusChanged,
-                  child: body,
-                );
-              },
+      child: TextFieldTapRegion(
+        onTapOutside: (_) {
+          _documentHost?.hideTouchSelectionChrome();
+          _hideLocalTouchSelectionChrome();
+          _dismissContextMenu();
+        },
+        child: DefaultTextEditingShortcuts(
+          child: Shortcuts(
+            shortcuts: shortcuts,
+            child: Actions(
+              actions: actions,
+              child: Builder(
+                builder: (commandContext) {
+                  _commandContext = commandContext;
+                  return Focus(
+                    focusNode: _focusNode,
+                    onFocusChange: _focusChanged,
+                    child: body,
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -1401,6 +1429,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final hit = _caretForPoint(geometry, details.localPosition);
     _resetPointerState();
     _relocate(hit.position, hit.position, affinity: hit.affinity);
+    _syncTouchSelectionChrome(details.kind);
   }
 
   void _doubleTapDown(
@@ -1410,6 +1439,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     if (!_canUsePointer(geometry)) return;
     _dismissContextMenu();
     _startWordSelection(geometry, details.localPosition);
+    _syncTouchSelectionChrome(details.kind);
   }
 
   void _tripleTapDown(
@@ -1419,6 +1449,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     if (!_canUsePointer(geometry)) return;
     _dismissContextMenu();
     _startParagraphSelection();
+    _syncTouchSelectionChrome(details.kind);
   }
 
   void _startSelectionDrag(
@@ -1430,10 +1461,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final count = details.consecutiveTapCount;
     if (count >= 3) {
       _startParagraphSelection();
+      _syncTouchSelectionChrome(details.kind);
       return;
     }
     if (count == 2) {
       _startWordSelection(geometry, details.localPosition);
+      _syncTouchSelectionChrome(details.kind);
       return;
     }
     final hit = _caretForPoint(geometry, details.localPosition);
@@ -1441,6 +1474,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _dragAnchor = hit.position;
     _dragWordAnchor = null;
     _relocate(hit.position, hit.position, affinity: hit.affinity);
+    _syncTouchSelectionChrome(details.kind);
     final documentHost = _documentHost;
     if (documentHost != null) {
       documentHost.beginPointerSelectionDrag(
@@ -1451,6 +1485,125 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         owner: this,
       );
     }
+  }
+
+  void _syncTouchSelectionChrome(PointerDeviceKind? kind) {
+    final documentHost = _documentHost;
+    if (kind == null ||
+        kind == PointerDeviceKind.touch ||
+        kind == PointerDeviceKind.stylus) {
+      if (documentHost != null) {
+        documentHost.showTouchSelectionChrome();
+      } else {
+        _showLocalTouchSelectionChrome();
+      }
+    } else {
+      if (documentHost != null) {
+        documentHost.hideTouchSelectionChrome();
+      } else {
+        _hideLocalTouchSelectionChrome();
+      }
+    }
+  }
+
+  void _showLocalTouchSelectionChrome() {
+    if (_documentHost != null ||
+        _resolvedTouchSelectionConfiguration == null ||
+        _localSelection() == null) {
+      _hideLocalTouchSelectionChrome();
+      return;
+    }
+    _localTouchSelectionRequested = true;
+    _scheduleLocalTouchSelectionSync();
+  }
+
+  void _hideLocalTouchSelectionChrome() {
+    _localTouchSelectionRequested = false;
+    _localTouchSelectionSyncScheduled = false;
+    _disposeLocalTouchSelectionOverlay();
+  }
+
+  void _scheduleLocalTouchSelectionSync() {
+    if (_localTouchSelectionSyncScheduled) return;
+    _localTouchSelectionSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _localTouchSelectionSyncScheduled = false;
+      if (mounted && _localTouchSelectionRequested) {
+        _syncLocalTouchSelectionOverlay();
+      }
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  void _syncLocalTouchSelectionOverlay() {
+    final configuration = _resolvedTouchSelectionConfiguration;
+    final selection = _localSelection();
+    final geometry = _currentGeometry();
+    final overlayContext = _overlayContext;
+    final render = overlayContext?.findRenderObject();
+    if (_documentHost != null ||
+        configuration == null ||
+        selection == null ||
+        geometry == null ||
+        !_isCurrentGeometry(geometry) ||
+        render is! RenderBox ||
+        !render.attached ||
+        !render.hasSize ||
+        Overlay.maybeOf(context, rootOverlay: true) == null) {
+      _disposeLocalTouchSelectionOverlay();
+      return;
+    }
+    final start = _localTouchEndpoint(
+      HomericSelectionEndpoint.start,
+      geometry,
+      render,
+    );
+    final end = _localTouchEndpoint(
+      HomericSelectionEndpoint.end,
+      geometry,
+      render,
+    );
+    if (start == null || end == null) {
+      _disposeLocalTouchSelectionOverlay();
+      return;
+    }
+    _localTouchOverlayCoordinator.sync(
+      context: context,
+      debugRequiredFor: widget,
+      controls: configuration.selectionControls,
+      magnifierConfiguration: configuration.magnifierConfiguration,
+      toolbarLayerLink: _localTouchToolbarLayerLink,
+      collapsed: selection.isCollapsed,
+      start: start,
+      end: end,
+      onSelectionHandleTapped: _showContextMenu,
+    );
+  }
+
+  HomericSelectionOverlayEndpoint? _localTouchEndpoint(
+    HomericSelectionEndpoint endpoint,
+    ParagraphGeometry geometry,
+    RenderBox render,
+  ) {
+    final local = _localSelectionEndpoint(endpoint);
+    if (local == null) return null;
+    final rect = geometry
+        .caretRect(
+          DocOffset(local.offset),
+          assoc: _assoc(local.affinity),
+        )
+        .value;
+    return HomericSelectionOverlayEndpoint(
+      globalRect: render.localToGlobal(rect.topLeft) & rect.size,
+      layerLink: _selectionLayerLink(endpoint),
+      textDirection: widget.paragraphSpec.direction == ParagraphDirection.rtl
+          ? TextDirection.rtl
+          : TextDirection.ltr,
+    );
+  }
+
+  void _disposeLocalTouchSelectionOverlay() {
+    _localTouchOverlayCoordinator.hide();
   }
 
   void _updateSelectionDrag(ParagraphGeometry geometry, Offset point) {
@@ -1809,6 +1962,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
 
   void _clearTransientState() {
     _resetPointerState();
+    _hideLocalTouchSelectionChrome();
     _secondaryLocalPosition = null;
     _secondaryWordRange = null;
     _dismissContextMenu();

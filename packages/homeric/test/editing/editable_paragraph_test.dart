@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart'
-    show kDoubleTapTimeout, kSecondaryMouseButton;
+    show PointerDeviceKind, kDoubleTapTimeout, kSecondaryMouseButton;
 import 'package:flutter/material.dart'
     show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold;
 import 'package:flutter/services.dart';
@@ -75,6 +75,61 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
     await tester.pump();
     expect(controller.document.blocks.single.text, 'ac');
+  });
+
+  testWidgets('standalone touch selection uses paragraph-local chrome',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final document = _document('alpha beta');
+    final controller = HomericEditorController(
+      document: document,
+      selection: const HomericSelection.collapsed(1),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 200,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: 'b',
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    final paragraph = find.byType(HomericEditableParagraph);
+    final point = tester.getTopLeft(paragraph) + const Offset(15, 7);
+    final first = await tester.startGesture(
+      point,
+      kind: PointerDeviceKind.touch,
+    );
+    await first.up();
+    await tester.pump(const Duration(milliseconds: 20));
+    final second = await tester.startGesture(
+      point,
+      kind: PointerDeviceKind.touch,
+    );
+    await second.up();
+    await tester.pump();
+    await tester.pump();
+
+    expect(controller.selection!.isCollapsed, isFalse);
+    expect(find.byType(CompositedTransformFollower), findsNWidgets(2));
+    final logicalSelection = controller.selection;
+    await tester.tapAt(const Offset(300, 300));
+    await tester.pump();
+    expect(find.byType(CompositedTransformFollower), findsNothing);
+    expect(controller.selection, logicalSelection);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('arrows use current descendant geometry and preserve direction',

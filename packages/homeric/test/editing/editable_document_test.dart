@@ -1,5 +1,7 @@
 import 'package:flutter/cupertino.dart'
     show cupertinoTextSelectionHandleControls;
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart';
@@ -107,6 +109,116 @@ void main() {
           .selectionEndpointGeometry(HomericSelectionEndpoint.start),
       isNotNull,
     );
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump();
+    expect(key.currentState!.touchSelectionChromeVisible, isTrue);
+
+    rebuild(() {
+      configuration = const HomericTouchSelectionConfiguration.disabled();
+    });
+    await tester.pump();
+    expect(identical(key.currentState, state), isTrue);
+    expect(key.currentState!.touchSelectionChromeVisible, isFalse);
+  });
+
+  testWidgets('touch tap shows document chrome while mouse click does not',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final document = _document(const <String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    expect(key.currentState!.touchSelectionChromeVisible, isFalse);
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    final point = tester.getTopLeft(paragraph) + const Offset(20, 8);
+
+    final mouse = await tester.startGesture(
+      point,
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.up();
+    await tester.pump();
+    expect(key.currentState!.touchSelectionChromeVisible, isFalse);
+
+    final touch = await tester.startGesture(
+      point,
+      kind: PointerDeviceKind.touch,
+    );
+    await touch.up();
+    await tester.pump();
+    expect(key.currentState!.touchSelectionChromeVisible, isTrue);
+    await tester.pump();
+    expect(find.byType(CompositedTransformFollower), findsNWidgets(2));
+
+    key.currentState!.hideTouchSelectionChrome();
+    await tester.pump();
+    expect(key.currentState!.touchSelectionChromeVisible, isFalse);
+    expect(find.byType(CompositedTransformFollower), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('off-screen touch endpoints hide without pinning the span',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final document = _document(
+      List<String>.generate(100, (index) => 'row $index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 1),
+        head: document.positionAt(99, 2),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump();
+
+    expect(key.currentState!.touchSelectionChromeVisible, isTrue);
+    expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
+    expect(key.currentState!.debugTouchEndHandleVisible, isFalse);
+    expect(
+      find
+          .byType(HomericEditableParagraph, skipOffstage: false)
+          .evaluate()
+          .length,
+      lessThan(25),
+    );
+
+    final reached = key.currentState!.scrollToBlock('block-99');
+    for (var frame = 0; frame < 10; frame++) {
+      await tester.pump();
+    }
+    expect(await reached, HomericScrollToBlockResult.reached);
+    await tester.pump();
+
+    expect(key.currentState!.touchSelectionChromeVisible, isTrue);
+    expect(key.currentState!.debugTouchStartHandleVisible, isFalse);
+    expect(key.currentState!.debugTouchEndHandleVisible, isTrue);
+    expect(
+      find
+          .byType(HomericEditableParagraph, skipOffstage: false)
+          .evaluate()
+          .length,
+      lessThan(25),
+    );
+    debugDefaultTargetPlatformOverride = null;
   });
 
   for (final keyCase in <({String name, LogicalKeyboardKey key})>[

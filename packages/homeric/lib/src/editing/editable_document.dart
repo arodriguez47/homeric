@@ -20,6 +20,7 @@ import '../render/paragraph_geometry.dart';
 import '../render/homeric_paragraph.dart';
 import 'block_height_cache.dart';
 import 'editor_controller.dart';
+import 'selection_overlay.dart';
 
 typedef HomericEditableBlockBuilder = Widget Function(
   BuildContext context,
@@ -296,6 +297,7 @@ final class HomericSelectionEndpointGeometry {
     required this.affinity,
     required this.documentRevision,
     required this.layoutGeneration,
+    required this.textDirection,
     required Rect globalRect,
     required LayerLink layerLink,
     required bool Function() isCurrent,
@@ -310,6 +312,7 @@ final class HomericSelectionEndpointGeometry {
   final HomericCaretAffinity affinity;
   final int documentRevision;
   final int layoutGeneration;
+  final TextDirection textDirection;
 
   final Rect _globalRect;
   final LayerLink _layerLink;
@@ -461,6 +464,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   final Map<GlobalKey, String> _blockIdsByRowKey = <GlobalKey, String>{};
   final Map<String, _MountedSelectionHost> _selectionHosts =
       <String, _MountedSelectionHost>{};
+  final LayerLink _touchToolbarLayerLink = LayerLink();
+  final HomericSelectionOverlayCoordinator _touchOverlayCoordinator =
+      HomericSelectionOverlayCoordinator();
+  bool _touchSelectionRequested = false;
+  bool _touchSelectionSyncScheduled = false;
   late BlockHeightCache _heightCache;
   late final HomericParagraphLayoutCache _paragraphLayoutCache;
   late ScrollController _scrollController;
@@ -537,6 +545,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
         !identical(oldWidget.inputSession, widget.inputSession) ||
         !identical(oldWidget.scrollController, widget.scrollController)) {
       cancelPointerSelectionDrag();
+      hideTouchSelectionChrome();
+    } else if (!identical(
+      oldWidget.touchSelectionConfiguration,
+      widget.touchSelectionConfiguration,
+    )) {
+      hideTouchSelectionChrome();
     }
     if (!identical(oldWidget.controller, widget.controller)) {
       oldWidget.controller.removeListener(_controllerChanged);
@@ -676,6 +690,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       Rect globalRect,
       int layoutGeneration,
       LayerLink layerLink,
+      TextDirection textDirection,
     })?
         Function(
       HomericSelectionEndpoint endpoint,
@@ -691,12 +706,14 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       activeCaretGeometry: activeCaretGeometry,
       selectionEndpointGeometry: selectionEndpointGeometry,
     );
+    if (_touchSelectionRequested) _scheduleTouchSelectionSync();
   }
 
   /// Removes a selection host only when [owner] still owns it.
   void unregisterSelectionHost(String blockId, Object owner) {
     if (identical(_selectionHosts[blockId]?.owner, owner)) {
       _selectionHosts.remove(blockId);
+      if (_touchSelectionRequested) _scheduleTouchSelectionSync();
     }
   }
 
@@ -767,6 +784,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   /// Ends the current platform epoch and removes focus from every mounted row.
   void blurEditingFocus() {
     cancelPointerSelectionDrag();
+    hideTouchSelectionChrome();
     widget.inputSession.blur();
     for (final focusNode in _mountedFocusNodes.values) {
       focusNode.unfocus();
@@ -844,10 +862,119 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       affinity: affinity,
       documentRevision: documentRevision,
       layoutGeneration: raw.layoutGeneration,
+      textDirection: raw.textDirection,
       globalRect: raw.globalRect,
       layerLink: raw.layerLink,
       isCurrent: isCurrent,
     );
+  }
+
+  /// Whether document-owned touch handles are currently mounted.
+  bool get touchSelectionChromeVisible => _touchOverlayCoordinator.visible;
+
+  /// Whether the current start handle is visible in the document viewport.
+  @visibleForTesting
+  bool get debugTouchStartHandleVisible =>
+      _touchOverlayCoordinator.startHandleVisible;
+
+  /// Whether the current end handle is visible in the document viewport.
+  @visibleForTesting
+  bool get debugTouchEndHandleVisible =>
+      _touchOverlayCoordinator.endHandleVisible;
+
+  /// Shows touch handles for the current canonical selection after layout.
+  void showTouchSelectionChrome() {
+    if (resolvedTouchSelectionConfiguration == null ||
+        widget.controller.selection == null) {
+      hideTouchSelectionChrome();
+      return;
+    }
+    _touchSelectionRequested = true;
+    _scheduleTouchSelectionSync();
+  }
+
+  /// Hides every document-owned touch overlay without changing selection.
+  void hideTouchSelectionChrome() {
+    _touchSelectionRequested = false;
+    _touchSelectionSyncScheduled = false;
+    _disposeTouchSelectionOverlay();
+  }
+
+  void _scheduleTouchSelectionSync() {
+    if (_touchSelectionSyncScheduled) return;
+    _touchSelectionSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _touchSelectionSyncScheduled = false;
+      if (mounted && _touchSelectionRequested) _syncTouchSelectionOverlay();
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  void _syncTouchSelectionOverlay() {
+    final configuration = resolvedTouchSelectionConfiguration;
+    final selection = widget.controller.selection;
+    if (configuration == null || selection == null) {
+      hideTouchSelectionChrome();
+      return;
+    }
+    final rawStart = selectionEndpointGeometry(HomericSelectionEndpoint.start);
+    final rawEnd = selectionEndpointGeometry(HomericSelectionEndpoint.end);
+    final start =
+        rawStart != null && _touchEndpointIsVisible(rawStart) ? rawStart : null;
+    final end =
+        rawEnd != null && _touchEndpointIsVisible(rawEnd) ? rawEnd : null;
+    if (start == null && end == null) {
+      _disposeTouchSelectionOverlay();
+      return;
+    }
+    _touchOverlayCoordinator.sync(
+      context: context,
+      debugRequiredFor: widget,
+      controls: configuration.selectionControls,
+      magnifierConfiguration: configuration.magnifierConfiguration,
+      toolbarLayerLink: _touchToolbarLayerLink,
+      collapsed: selection.isCollapsed,
+      start: _touchOverlayEndpoint(start),
+      end: _touchOverlayEndpoint(end),
+      onSelectionHandleTapped: _showTouchToolbar,
+    );
+  }
+
+  HomericSelectionOverlayEndpoint? _touchOverlayEndpoint(
+    HomericSelectionEndpointGeometry? endpoint,
+  ) {
+    final rect = endpoint?.globalRect;
+    final link = endpoint?.layerLink;
+    if (endpoint == null || rect == null || link == null) return null;
+    return HomericSelectionOverlayEndpoint(
+      globalRect: rect,
+      layerLink: link,
+      textDirection: endpoint.textDirection,
+    );
+  }
+
+  bool _touchEndpointIsVisible(HomericSelectionEndpointGeometry endpoint) {
+    final endpointRect = endpoint.globalRect;
+    final render = context.findRenderObject();
+    if (endpointRect == null ||
+        render is! RenderBox ||
+        !render.attached ||
+        !render.hasSize) {
+      return false;
+    }
+    final viewportRect = render.localToGlobal(Offset.zero) & render.size;
+    return viewportRect.overlaps(endpointRect) ||
+        viewportRect.contains(endpointRect.center);
+  }
+
+  void _showTouchToolbar() {
+    final activeBlockId = widget.controller.activeBlockId;
+    if (activeBlockId == null) return;
+    _commandHosts[activeBlockId]?.showToolbar();
+  }
+
+  void _disposeTouchSelectionOverlay() {
+    _touchOverlayCoordinator.hide();
   }
 
   /// Current mounted selection rectangles in global coordinates.
@@ -1205,6 +1332,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _syncOrder();
     final semanticsChanged = _captureSemanticsState();
     if ((documentChanged || semanticsChanged) && mounted) setState(() {});
+    if (_touchSelectionRequested) _scheduleTouchSelectionSync();
     if (widget.controller.isReadOnly) {
       widget.inputSession.blur();
       return;
@@ -1649,6 +1777,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   @override
   void dispose() {
     _stopSelectionAutoscroll();
+    _touchOverlayCoordinator.dispose();
     FocusManager.instance.removeListener(_focusTreeChanged);
     widget.controller.removeListener(_controllerChanged);
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
@@ -1669,24 +1798,27 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     return _HomericEditableDocumentScope(
       state: this,
       touchSelectionConfiguration: widget.touchSelectionConfiguration,
-      child: child ??
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final listenable = widget.scrollPadding;
-              if (listenable == null) {
-                return _buildViewport(
-                  context,
-                  constraints,
-                  widget.padding,
+      child: CompositedTransformTarget(
+        link: _touchToolbarLayerLink,
+        child: child ??
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final listenable = widget.scrollPadding;
+                if (listenable == null) {
+                  return _buildViewport(
+                    context,
+                    constraints,
+                    widget.padding,
+                  );
+                }
+                return ValueListenableBuilder<EdgeInsetsGeometry>(
+                  valueListenable: listenable,
+                  builder: (context, padding, _) =>
+                      _buildViewport(context, constraints, padding),
                 );
-              }
-              return ValueListenableBuilder<EdgeInsetsGeometry>(
-                valueListenable: listenable,
-                builder: (context, padding, _) =>
-                    _buildViewport(context, constraints, padding),
-              );
-            },
-          ),
+              },
+            ),
+      ),
     );
   }
 
@@ -1873,6 +2005,7 @@ final class _MountedSelectionHost {
     Rect globalRect,
     int layoutGeneration,
     LayerLink layerLink,
+    TextDirection textDirection,
   })?
       Function(
     HomericSelectionEndpoint endpoint,

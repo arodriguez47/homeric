@@ -1,3 +1,7 @@
+import 'package:flutter/cupertino.dart'
+    show cupertinoTextSelectionHandleControls;
+import 'package:flutter/material.dart'
+    show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +12,103 @@ import 'package:homeric/homeric.dart';
 const _style = TextStyle(fontSize: 14);
 
 void main() {
+  test('touch configuration resolves mobile defaults and explicit policy', () {
+    const adaptive = HomericTouchSelectionConfiguration.adaptive();
+
+    final ios = adaptive.resolve(TargetPlatform.iOS);
+    final android = adaptive.resolve(TargetPlatform.android);
+    expect(ios, isNotNull);
+    expect(ios!.selectionControls, same(cupertinoTextSelectionHandleControls));
+    expect(android, isNotNull);
+    expect(
+        android!.selectionControls, same(materialTextSelectionHandleControls));
+    expect(
+      android.magnifierConfiguration,
+      same(TextMagnifier.adaptiveMagnifierConfiguration),
+    );
+    expect(adaptive.resolve(TargetPlatform.macOS), isNull);
+
+    const disabled = HomericTouchSelectionConfiguration.disabled();
+    expect(disabled.resolve(TargetPlatform.iOS), isNull);
+
+    final desktop = HomericTouchSelectionConfiguration.adaptive(
+      enableOnDesktop: true,
+      selectionControls: materialTextSelectionHandleControls,
+    );
+    expect(
+      desktop.resolve(TargetPlatform.macOS)!.selectionControls,
+      same(materialTextSelectionHandleControls),
+    );
+
+    const withoutMagnifier = HomericTouchSelectionConfiguration.adaptive(
+      magnifierConfiguration: TextMagnifierConfiguration.disabled,
+    );
+    expect(
+      withoutMagnifier.resolve(TargetPlatform.android)!.magnifierConfiguration,
+      same(TextMagnifierConfiguration.disabled),
+    );
+  });
+
+  testWidgets('touch policy updates without replacing canonical ownership',
+      (tester) async {
+    final document = _document(const <String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    var configuration = const HomericTouchSelectionConfiguration.disabled();
+    late StateSetter rebuild;
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (context, setState) {
+        rebuild = setState;
+        return SizedBox(
+          width: 500,
+          height: 300,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: controller,
+            inputSession: session,
+            touchSelectionConfiguration: configuration,
+            cacheExtent: 0,
+            blockBuilder: (context, block, focusNode) =>
+                HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        );
+      },
+    )));
+    await tester.pump();
+    final state = key.currentState;
+    expect(state!.resolvedTouchSelectionConfiguration, isNull);
+    expect(
+      state.selectionEndpointGeometry(HomericSelectionEndpoint.start),
+      isNull,
+    );
+
+    rebuild(() {
+      configuration = const HomericTouchSelectionConfiguration.adaptive();
+    });
+    await tester.pump();
+    expect(identical(key.currentState, state), isTrue);
+    expect(identical(session.controller, controller), isTrue);
+    expect(key.currentState!.resolvedTouchSelectionConfiguration, isNotNull);
+    expect(
+      key.currentState!
+          .selectionEndpointGeometry(HomericSelectionEndpoint.start),
+      isNotNull,
+    );
+  });
+
   for (final keyCase in <({String name, LogicalKeyboardKey key})>[
     (name: 'keyboard Enter', key: LogicalKeyboardKey.enter),
     (name: 'numpad Enter', key: LogicalKeyboardKey.numpadEnter),
@@ -2296,6 +2397,23 @@ void main() {
     await tester.pumpWidget(_editableDocument(controller, session, key: key));
     await tester.pump();
 
+    final start = key.currentState!
+        .selectionEndpointGeometry(HomericSelectionEndpoint.start);
+    final end = key.currentState!
+        .selectionEndpointGeometry(HomericSelectionEndpoint.end);
+    expect(start, isNotNull);
+    expect(start!.blockId, 'block-0');
+    expect(start.globalPosition, document.positionAt(0, 2));
+    expect(start.globalRect, isNotNull);
+    expect(start.lineHeight, greaterThan(0));
+    expect(start.layerLink, isNotNull);
+    expect(end, isNotNull);
+    expect(end!.blockId, 'block-1');
+    expect(end.globalPosition, document.positionAt(1, 5));
+    expect(end.globalRect, isNotNull);
+    expect(end.lineHeight, greaterThan(0));
+    expect(end.layerLink, isNotNull);
+
     final rects = key.currentState!.globalSelectionRects;
     expect(rects, hasLength(greaterThanOrEqualTo(2)));
     expect(rects.every((rect) => rect.width >= 0 && rect.height > 0), isTrue);
@@ -2313,8 +2431,47 @@ void main() {
       ),
       isTrue,
     );
+    expect(start.isCurrent, isFalse);
+    expect(start.globalRect, isNull);
+    expect(start.lineHeight, isNull);
+    expect(start.layerLink, isNull);
     expect(key.currentState!.globalSelectionRects, isEmpty,
         reason: 'stale layout generations must fail closed before relayout');
+  });
+
+  testWidgets('endpoint geometry preserves reverse head affinity',
+      (tester) async {
+    final document = _document(const <String>['alpha', 'beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(1, 3),
+        head: document.positionAt(0, 1),
+        affinity: HomericCaretAffinity.upstream,
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final start = key.currentState!
+        .selectionEndpointGeometry(HomericSelectionEndpoint.start);
+    final end = key.currentState!
+        .selectionEndpointGeometry(HomericSelectionEndpoint.end);
+    expect(start, isNotNull);
+    expect(start!.blockId, 'block-0');
+    expect(start.affinity, HomericCaretAffinity.upstream);
+    expect(end, isNotNull);
+    expect(end!.blockId, 'block-1');
+    expect(end.affinity, HomericCaretAffinity.upstream);
+
+    controller
+        .setSelection(HomericSelection.collapsed(document.positionAt(1, 1)));
+    expect(start.isCurrent, isFalse);
+    expect(end.isCurrent, isFalse);
   });
 
   testWidgets('public focus settlement reaches an off-screen stable block',

@@ -3,7 +3,11 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart'
+    show cupertinoTextSelectionHandleControls;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart'
+    show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
@@ -22,6 +26,72 @@ typedef HomericEditableBlockBuilder = Widget Function(
   Block block,
   FocusNode focusNode,
 );
+
+/// Platform-adaptive touch-selection policy for an editable host.
+final class HomericTouchSelectionConfiguration {
+  /// Uses Flutter's mobile controls and magnifier on iOS and Android.
+  const HomericTouchSelectionConfiguration.adaptive({
+    this.selectionControls,
+    this.magnifierConfiguration,
+    this.enableOnDesktop = false,
+  }) : enabled = true;
+
+  /// Disables touch handles, toolbar, magnifier, and long-press chrome.
+  const HomericTouchSelectionConfiguration.disabled()
+      : enabled = false,
+        selectionControls = null,
+        magnifierConfiguration = null,
+        enableOnDesktop = false;
+
+  /// Whether touch-selection chrome may be resolved.
+  final bool enabled;
+
+  /// Optional consumer controls replacing the platform mobile default.
+  final TextSelectionControls? selectionControls;
+
+  /// Optional consumer magnifier replacing Flutter's adaptive default.
+  final TextMagnifierConfiguration? magnifierConfiguration;
+
+  /// Opts desktop platforms into touch chrome.
+  ///
+  /// Desktop opt-in requires explicit [selectionControls] so Homeric never
+  /// guesses a consumer's hybrid mouse/touch policy.
+  final bool enableOnDesktop;
+
+  /// Resolves this policy for [platform], or returns `null` when disabled.
+  HomericResolvedTouchSelectionConfiguration? resolve(
+    TargetPlatform platform,
+  ) {
+    if (!enabled) return null;
+    final mobileControls = switch (platform) {
+      TargetPlatform.iOS => cupertinoTextSelectionHandleControls,
+      TargetPlatform.android => materialTextSelectionHandleControls,
+      _ => null,
+    };
+    final controls = selectionControls ?? mobileControls;
+    final isMobile =
+        platform == TargetPlatform.iOS || platform == TargetPlatform.android;
+    if (controls == null || (!isMobile && !enableOnDesktop)) return null;
+    return HomericResolvedTouchSelectionConfiguration(
+      selectionControls: controls,
+      magnifierConfiguration: magnifierConfiguration ??
+          (isMobile
+              ? TextMagnifier.adaptiveMagnifierConfiguration
+              : TextMagnifierConfiguration.disabled),
+    );
+  }
+}
+
+/// Resolved controls used by one current editable host.
+final class HomericResolvedTouchSelectionConfiguration {
+  const HomericResolvedTouchSelectionConfiguration({
+    required this.selectionControls,
+    required this.magnifierConfiguration,
+  });
+
+  final TextSelectionControls selectionControls;
+  final TextMagnifierConfiguration magnifierConfiguration;
+}
 
 /// Epoch-bound context supplied to a document-level command binding.
 final class HomericDocumentCommandContext {
@@ -213,6 +283,51 @@ typedef HomericDocumentSelectionHit = ({
 typedef HomericDocumentSelectionHitTest = HomericDocumentSelectionHit? Function(
     Offset globalPoint);
 
+/// Which normalized edge of the canonical selection is being queried.
+enum HomericSelectionEndpoint { start, end }
+
+/// Revocable geometry for one normalized canonical selection endpoint.
+final class HomericSelectionEndpointGeometry {
+  const HomericSelectionEndpointGeometry._({
+    required this.endpoint,
+    required this.blockId,
+    required this.blockOffset,
+    required this.globalPosition,
+    required this.affinity,
+    required this.documentRevision,
+    required this.layoutGeneration,
+    required Rect globalRect,
+    required LayerLink layerLink,
+    required bool Function() isCurrent,
+  })  : _globalRect = globalRect,
+        _layerLink = layerLink,
+        _isCurrent = isCurrent;
+
+  final HomericSelectionEndpoint endpoint;
+  final String blockId;
+  final int blockOffset;
+  final int globalPosition;
+  final HomericCaretAffinity affinity;
+  final int documentRevision;
+  final int layoutGeneration;
+
+  final Rect _globalRect;
+  final LayerLink _layerLink;
+  final bool Function() _isCurrent;
+
+  /// Whether this snapshot still addresses the mounted current generation.
+  bool get isCurrent => _isCurrent();
+
+  /// Current global caret rectangle, or `null` after invalidation.
+  Rect? get globalRect => isCurrent ? _globalRect : null;
+
+  /// Current caret line height, or `null` after invalidation.
+  double? get lineHeight => globalRect?.height;
+
+  /// Current composited handle target, or `null` after invalidation.
+  LayerLink? get layerLink => isCurrent ? _layerLink : null;
+}
+
 enum HomericScrollToBlockResult { reached, missing, stale, notReached }
 
 /// Outcome of settling keyboard focus on a stable block.
@@ -263,6 +378,8 @@ class HomericEditableDocument extends StatefulWidget {
     this.onMoveBlock,
     this.onMoveRejected,
     this.onCommandRejected,
+    this.touchSelectionConfiguration =
+        const HomericTouchSelectionConfiguration.adaptive(),
   })  : blockBuilder = null,
         scrollController = null,
         padding = EdgeInsets.zero,
@@ -286,6 +403,8 @@ class HomericEditableDocument extends StatefulWidget {
     this.onMoveBlock,
     this.onMoveRejected,
     this.onCommandRejected,
+    this.touchSelectionConfiguration =
+        const HomericTouchSelectionConfiguration.adaptive(),
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
         child = null;
@@ -319,6 +438,9 @@ class HomericEditableDocument extends StatefulWidget {
 
   /// Receives typed rejected-command feedback.
   final ValueChanged<HomericDocumentCommandRejection>? onCommandRejected;
+
+  /// Touch-selection policy shared by every mounted paragraph.
+  final HomericTouchSelectionConfiguration touchSelectionConfiguration;
 
   /// Returns the nearest document editing coordinator, if present.
   static HomericEditableDocumentState? maybeOf(BuildContext context) => context
@@ -550,6 +672,16 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     required HomericDocumentSelectionHitTest hitTest,
     required List<Rect>? Function(BlockTextRange range) globalRangeRects,
     required HomericActiveCaretGeometry? Function() activeCaretGeometry,
+    required ({
+      Rect globalRect,
+      int layoutGeneration,
+      LayerLink layerLink,
+    })?
+        Function(
+      HomericSelectionEndpoint endpoint,
+      int blockOffset,
+      HomericCaretAffinity affinity,
+    ) selectionEndpointGeometry,
   }) {
     _selectionHosts[blockId] = _MountedSelectionHost(
       owner: owner,
@@ -557,6 +689,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       hitTest: hitTest,
       globalRangeRects: globalRangeRects,
       activeCaretGeometry: activeCaretGeometry,
+      selectionEndpointGeometry: selectionEndpointGeometry,
     );
   }
 
@@ -654,6 +787,67 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     return blockId == null
         ? null
         : _selectionHosts[blockId]?.activeCaretGeometry();
+  }
+
+  /// Current platform touch-selection policy for this document.
+  HomericResolvedTouchSelectionConfiguration?
+      get resolvedTouchSelectionConfiguration =>
+          widget.touchSelectionConfiguration.resolve(defaultTargetPlatform);
+
+  /// Returns current geometry for one normalized selection endpoint.
+  HomericSelectionEndpointGeometry? selectionEndpointGeometry(
+    HomericSelectionEndpoint endpoint,
+  ) {
+    final selection = widget.controller.selection;
+    if (selection == null) return null;
+    final globalPosition = endpoint == HomericSelectionEndpoint.start
+        ? selection.start
+        : selection.end;
+    final resolved = widget.controller.document.resolve(globalPosition);
+    if (resolved is! InlinePosition) return null;
+    final host = _selectionHosts[resolved.block.id];
+    if (host == null) return null;
+    final affinity = globalPosition == selection.head
+        ? selection.affinity
+        : endpoint == HomericSelectionEndpoint.start
+            ? HomericCaretAffinity.downstream
+            : HomericCaretAffinity.upstream;
+    final raw = host.selectionEndpointGeometry(
+      endpoint,
+      resolved.offset,
+      affinity,
+    );
+    if (raw == null) return null;
+    final documentRevision = widget.controller.documentRevision;
+    final owner = host.owner;
+    bool isCurrent() {
+      if (widget.controller.documentRevision != documentRevision) return false;
+      final currentHost = _selectionHosts[resolved.block.id];
+      if (currentHost == null || !identical(currentHost.owner, owner)) {
+        return false;
+      }
+      final current = currentHost.selectionEndpointGeometry(
+        endpoint,
+        resolved.offset,
+        affinity,
+      );
+      return current != null &&
+          current.layoutGeneration == raw.layoutGeneration &&
+          identical(current.layerLink, raw.layerLink);
+    }
+
+    return HomericSelectionEndpointGeometry._(
+      endpoint: endpoint,
+      blockId: resolved.block.id,
+      blockOffset: resolved.offset,
+      globalPosition: globalPosition,
+      affinity: affinity,
+      documentRevision: documentRevision,
+      layoutGeneration: raw.layoutGeneration,
+      globalRect: raw.globalRect,
+      layerLink: raw.layerLink,
+      isCurrent: isCurrent,
+    );
   }
 
   /// Current mounted selection rectangles in global coordinates.
@@ -1474,6 +1668,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     final child = widget.child;
     return _HomericEditableDocumentScope(
       state: this,
+      touchSelectionConfiguration: widget.touchSelectionConfiguration,
       child: child ??
           LayoutBuilder(
             builder: (context, constraints) {
@@ -1629,14 +1824,20 @@ final class _PendingRowCommandDelegate
 class _HomericEditableDocumentScope extends InheritedWidget {
   const _HomericEditableDocumentScope({
     required this.state,
+    required this.touchSelectionConfiguration,
     required super.child,
   });
 
   final HomericEditableDocumentState state;
+  final HomericTouchSelectionConfiguration touchSelectionConfiguration;
 
   @override
   bool updateShouldNotify(_HomericEditableDocumentScope oldWidget) =>
-      !identical(state, oldWidget.state);
+      !identical(state, oldWidget.state) ||
+      !identical(
+        touchSelectionConfiguration,
+        oldWidget.touchSelectionConfiguration,
+      );
 }
 
 final class _BlockMoveWitness {
@@ -1660,6 +1861,7 @@ final class _MountedSelectionHost {
     required this.hitTest,
     required this.globalRangeRects,
     required this.activeCaretGeometry,
+    required this.selectionEndpointGeometry,
   });
 
   final Object owner;
@@ -1667,6 +1869,16 @@ final class _MountedSelectionHost {
   final HomericDocumentSelectionHitTest hitTest;
   final List<Rect>? Function(BlockTextRange range) globalRangeRects;
   final HomericActiveCaretGeometry? Function() activeCaretGeometry;
+  final ({
+    Rect globalRect,
+    int layoutGeneration,
+    LayerLink layerLink,
+  })?
+      Function(
+    HomericSelectionEndpoint endpoint,
+    int blockOffset,
+    HomericCaretAffinity affinity,
+  ) selectionEndpointGeometry;
 }
 
 final class _ViewportAnchor {

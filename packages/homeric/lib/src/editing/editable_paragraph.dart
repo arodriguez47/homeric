@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
 import 'package:flutter/rendering.dart' hide Decoration;
@@ -13,6 +14,7 @@ import 'package:flutter/widgets.dart' hide Decoration;
 import '../decoration/decoration.dart';
 import '../input/text_input_session.dart';
 import '../model/block.dart';
+import '../model/position.dart';
 import '../model/selection.dart';
 import '../render/homeric_paragraph.dart';
 import '../render/paint_layers.dart';
@@ -207,6 +209,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.onSingleTap,
     this.onHover,
     this.onHoverExit,
+    this.touchSelectionConfiguration,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -320,6 +323,13 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Observes the pointer leaving this paragraph's hover plane.
   final HomericEditableHoverExitCallback? onHoverExit;
 
+  /// Optional touch-selection override.
+  ///
+  /// This applies only to a standalone paragraph. A paragraph inside
+  /// [HomericEditableDocument] always uses the document-owned policy so one
+  /// cross-block overlay cannot resolve conflicting row configuration.
+  final HomericTouchSelectionConfiguration? touchSelectionConfiguration;
+
   @override
   State<HomericEditableParagraph> createState() =>
       _HomericEditableParagraphState();
@@ -336,6 +346,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
   ParagraphGeometry? _paragraphGeometry;
+  final LayerLink _selectionStartLayerLink = LayerLink();
+  final LayerLink _selectionEndLayerLink = LayerLink();
   int _hostEpoch = 0;
   late _EditableHostCommandDelegate _commandDelegate;
   late HomericEditorClipboard _clipboard;
@@ -785,6 +797,34 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
               globalRect: globalOrigin & localRect.size,
             );
           },
+          selectionEndpointGeometry: (endpoint, blockOffset, affinity) {
+            if (_resolvedTouchSelectionConfiguration == null ||
+                geometryDocumentRevision != _controller.documentRevision ||
+                !_isCurrentGeometry(geometry)) {
+              return null;
+            }
+            final localEndpoint = _localSelectionEndpoint(endpoint);
+            if (localEndpoint == null ||
+                localEndpoint.offset != blockOffset ||
+                localEndpoint.affinity != affinity) {
+              return null;
+            }
+            final render = overlayContext.findRenderObject();
+            if (render is! RenderBox || !render.attached || !render.hasSize) {
+              return null;
+            }
+            final localRect = consumerGeometry.caretRect(
+              blockOffset,
+              affinity: affinity,
+            );
+            if (localRect == null) return null;
+            return (
+              globalRect:
+                  render.localToGlobal(localRect.topLeft) & localRect.size,
+              layoutGeneration: geometry.generation,
+              layerLink: _selectionLayerLink(endpoint),
+            );
+          },
         );
         _scheduleGeometryPublication(overlayContext, geometry);
         final caret = focused && localSelection.isCollapsed
@@ -836,6 +876,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                 child: selectionPlane,
               );
         return <Widget>[
+          ..._selectionEndpointTargets(geometry),
           if (fullySelectedEmptyBlock)
             Positioned.fill(
               child: IgnorePointer(
@@ -1237,6 +1278,78 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     } on ArgumentError {
       return null;
     }
+  }
+
+  ({int offset, HomericCaretAffinity affinity})? _localSelectionEndpoint(
+    HomericSelectionEndpoint endpoint,
+  ) {
+    final selection = _controller.selection;
+    if (selection == null) return null;
+    final globalPosition = endpoint == HomericSelectionEndpoint.start
+        ? selection.start
+        : selection.end;
+    final resolved = _controller.document.resolve(globalPosition);
+    if (resolved is! InlinePosition || resolved.block.id != widget.blockId) {
+      return null;
+    }
+    return (
+      offset: resolved.offset,
+      affinity: globalPosition == selection.head
+          ? selection.affinity
+          : endpoint == HomericSelectionEndpoint.start
+              ? HomericCaretAffinity.downstream
+              : HomericCaretAffinity.upstream,
+    );
+  }
+
+  LayerLink _selectionLayerLink(HomericSelectionEndpoint endpoint) =>
+      endpoint == HomericSelectionEndpoint.start
+          ? _selectionStartLayerLink
+          : _selectionEndLayerLink;
+
+  List<Widget> _selectionEndpointTargets(ParagraphGeometry geometry) {
+    if (_resolvedTouchSelectionConfiguration == null) {
+      return const <Widget>[];
+    }
+    final targets = <Widget>[];
+    for (final endpoint in HomericSelectionEndpoint.values) {
+      final local = _localSelectionEndpoint(endpoint);
+      if (local == null) continue;
+      final rect = geometry
+          .caretRect(
+            DocOffset(local.offset),
+            assoc: _assoc(local.affinity),
+          )
+          .value;
+      targets.add(
+        Positioned.fromRect(
+          rect: Rect.fromLTWH(
+            rect.left,
+            rect.top,
+            rect.width <= 0 ? 1 : rect.width,
+            rect.height <= 0 ? 1 : rect.height,
+          ),
+          child: IgnorePointer(
+            child: CompositedTransformTarget(
+              link: _selectionLayerLink(endpoint),
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      );
+    }
+    return targets;
+  }
+
+  HomericResolvedTouchSelectionConfiguration?
+      get _resolvedTouchSelectionConfiguration {
+    final documentHost = _documentHost;
+    if (documentHost != null) {
+      return documentHost.resolvedTouchSelectionConfiguration;
+    }
+    return (widget.touchSelectionConfiguration ??
+            const HomericTouchSelectionConfiguration.adaptive())
+        .resolve(defaultTargetPlatform);
   }
 
   BlockTextRange? _localComposing() {

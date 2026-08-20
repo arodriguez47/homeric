@@ -1,12 +1,16 @@
 /// Experimental document-owned editing coordination.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../input/text_input_session.dart';
 import '../model/block.dart';
 import '../model/position.dart';
+import '../model/selection.dart';
+import '../render/paragraph_geometry.dart';
 import 'block_height_cache.dart';
 import 'editor_controller.dart';
 
@@ -15,6 +19,14 @@ typedef HomericEditableBlockBuilder = Widget Function(
   Block block,
   FocusNode focusNode,
 );
+
+typedef HomericDocumentSelectionHit = ({
+  int offset,
+  HomericCaretAffinity affinity,
+});
+
+typedef HomericDocumentSelectionHitTest = HomericDocumentSelectionHit? Function(
+    Offset globalPoint);
 
 enum HomericScrollToBlockResult { reached, missing, stale, notReached }
 
@@ -74,8 +86,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool _selectionDragActive = false;
   final Map<String, HomericTextInputCommandDelegate> _commandHosts = {};
   final Map<String, BuildContext> _mountedRows = <String, BuildContext>{};
+  final Map<String, FocusNode> _mountedFocusNodes = <String, FocusNode>{};
   final Map<String, GlobalKey> _rowKeys = <String, GlobalKey>{};
   final Map<GlobalKey, String> _blockIdsByRowKey = <GlobalKey, String>{};
+  final Map<String, _MountedSelectionHost> _selectionHosts =
+      <String, _MountedSelectionHost>{};
   late BlockHeightCache _heightCache;
   late ScrollController _scrollController;
   double _layoutWidth = 0;
@@ -84,6 +99,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   int _heightOrderRevision = -1;
   Object? _globalLayoutSignature;
   _BlockMoveWitness? _dragMoveWitness;
+  int _selectionDragGeneration = 0;
+  int? _selectionDragAnchor;
+  int? _selectionDragDocumentRevision;
+  Object? _selectionDragOwner;
+  Offset? _selectionDragPointer;
+  Timer? _selectionAutoScrollTimer;
 
   @override
   void initState() {
@@ -101,6 +122,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   void didUpdateWidget(HomericEditableDocument oldWidget) {
     super.didUpdateWidget(oldWidget);
     _validateSession();
+    if (!identical(oldWidget.controller, widget.controller) ||
+        !identical(oldWidget.inputSession, widget.inputSession) ||
+        !identical(oldWidget.scrollController, widget.scrollController)) {
+      cancelPointerSelectionDrag();
+    }
     if (!identical(oldWidget.controller, widget.controller)) {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
@@ -123,10 +149,72 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   }
 
   /// Suspends platform deltas while a document-global drag moves its head.
+  bool get pointerSelectionDragActive =>
+      _selectionDragActive && _selectionDragAnchor != null;
+
+  /// Suspends platform deltas while a document-global drag moves its head.
   void beginSelectionDrag() {
     if (_selectionDragActive) return;
     _selectionDragActive = true;
     widget.inputSession.suspendDeltas();
+  }
+
+  /// Starts one document-owned pointer selection generation at [anchor].
+  void beginPointerSelectionDrag(int anchor, {Object? owner}) {
+    cancelPointerSelectionDrag();
+    _selectionDragGeneration++;
+    _selectionDragAnchor = anchor;
+    _selectionDragDocumentRevision = widget.controller.documentRevision;
+    _selectionDragOwner = owner;
+    beginSelectionDrag();
+  }
+
+  /// Extends the current pointer selection through mounted row geometry.
+  void updatePointerSelectionDrag(Offset globalPoint) {
+    if (!_selectionDragActive || _selectionDragAnchor == null) return;
+    _selectionDragPointer = globalPoint;
+    _updatePointerSelectionHead(globalPoint);
+    _syncSelectionAutoscroll(globalPoint);
+  }
+
+  /// Ends the pointer generation and retargets platform input once.
+  bool endPointerSelectionDrag({Object? owner}) {
+    if (owner != null && !identical(owner, _selectionDragOwner)) return false;
+    _stopSelectionAutoscroll();
+    _selectionDragPointer = null;
+    _selectionDragAnchor = null;
+    _selectionDragDocumentRevision = null;
+    _selectionDragOwner = null;
+    _selectionDragGeneration++;
+    return endSelectionDrag();
+  }
+
+  /// Cancels any pointer generation without retaining a recurrent timer.
+  void cancelPointerSelectionDrag({Object? owner}) {
+    if (owner != null && !identical(owner, _selectionDragOwner)) return;
+    if (!_selectionDragActive && _selectionAutoScrollTimer == null) return;
+    endPointerSelectionDrag(owner: owner);
+  }
+
+  /// Registers current mounted hit-test geometry for [blockId].
+  void registerSelectionHost(
+    String blockId, {
+    required Object owner,
+    required Rect? Function() globalRect,
+    required HomericDocumentSelectionHitTest hitTest,
+  }) {
+    _selectionHosts[blockId] = _MountedSelectionHost(
+      owner: owner,
+      globalRect: globalRect,
+      hitTest: hitTest,
+    );
+  }
+
+  /// Removes a selection host only when [owner] still owns it.
+  void unregisterSelectionHost(String blockId, Object owner) {
+    if (identical(_selectionHosts[blockId]?.owner, owner)) {
+      _selectionHosts.remove(blockId);
+    }
   }
 
   /// Retargets once to the final selection head and resumes platform input.
@@ -135,6 +223,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _selectionDragActive = false;
     final retargeted = _retargetActiveHost();
     widget.inputSession.resumeDeltas();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
     return retargeted;
   }
 
@@ -182,6 +273,239 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     return anchor is InlinePosition &&
         head is InlinePosition &&
         anchor.blockIndex == head.blockIndex;
+  }
+
+  /// Whether any mounted paragraph currently owns the editing focus.
+  bool get hasEditingFocus =>
+      _mountedFocusNodes.values.any((focusNode) => focusNode.hasFocus);
+
+  /// Stable id of the mounted paragraph that currently owns focus.
+  String? get focusedBlockId {
+    for (final entry in _mountedFocusNodes.entries) {
+      if (entry.value.hasFocus) return entry.key;
+    }
+    return null;
+  }
+
+  /// Whether both directional endpoints resolve inside one block.
+  bool get selectionIsBlockLocal {
+    final selection = widget.controller.selection;
+    if (selection == null) return false;
+    final document = widget.controller.document;
+    final anchor = document.resolve(selection.anchor);
+    final head = document.resolve(selection.head);
+    return anchor is InlinePosition &&
+        head is InlinePosition &&
+        anchor.blockIndex == head.blockIndex;
+  }
+
+  /// Returns this row's directional intersection with the global selection.
+  BlockTextSelection? selectionFragmentForBlock(String blockId) {
+    final selection = widget.controller.selection;
+    final document = widget.controller.document;
+    final index = document.indexOfBlockId(blockId);
+    if (selection == null || index == null) return null;
+    final block = document.blocks[index];
+    final contentStart = document.positionAt(index, 0);
+    final contentEnd = document.positionAt(index, block.contentLength);
+    if (selection.isCollapsed) {
+      final head = document.resolve(selection.head);
+      if (head is! InlinePosition || head.block.id != blockId) return null;
+      return BlockTextSelection.collapsed(
+        head.offset,
+        affinity: selection.affinity,
+      );
+    }
+    if (selection.end < contentStart || selection.start > contentEnd) {
+      return null;
+    }
+    final localStart =
+        (selection.start - contentStart).clamp(0, block.contentLength);
+    final localEnd =
+        (selection.end - contentStart).clamp(0, block.contentLength);
+    if (localStart == localEnd &&
+        !isBlockFullySelected(blockId) &&
+        block.contentLength != 0) {
+      final head = document.resolve(selection.head);
+      if (head is! InlinePosition || head.block.id != blockId) return null;
+      return BlockTextSelection.collapsed(
+        head.offset,
+        affinity: selection.affinity,
+      );
+    }
+    return selection.anchor <= selection.head
+        ? BlockTextSelection(
+            anchor: localStart,
+            head: localEnd,
+            affinity: selection.affinity,
+          )
+        : BlockTextSelection(
+            anchor: localEnd,
+            head: localStart,
+            affinity: selection.affinity,
+          );
+  }
+
+  /// Whether the global range contains the complete structural block span.
+  bool isBlockFullySelected(String blockId) {
+    final selection = widget.controller.selection;
+    final document = widget.controller.document;
+    final index = document.indexOfBlockId(blockId);
+    return selection != null &&
+        !selection.isCollapsed &&
+        index != null &&
+        selection.start <= document.positionBeforeBlock(index) &&
+        selection.end >= document.positionAfterBlock(index);
+  }
+
+  /// Moves or extends a cross-block selection from its logical head.
+  bool moveDocumentSelection(
+    CaretMovementDirection direction, {
+    required bool extend,
+  }) {
+    final selection = widget.controller.selection;
+    if (selection == null) return false;
+    if (!extend && !selection.isCollapsed) {
+      final target = direction == CaretMovementDirection.left ||
+              direction == CaretMovementDirection.up
+          ? selection.start
+          : selection.end;
+      return _setDocumentSelection(
+        target,
+        target,
+        affinity: direction == CaretMovementDirection.left ||
+                direction == CaretMovementDirection.up
+            ? HomericCaretAffinity.upstream
+            : HomericCaretAffinity.downstream,
+        resetPreferredX: true,
+      );
+    }
+    final head = widget.controller.document.resolve(selection.head);
+    if (head is! InlinePosition) return false;
+    return moveAcrossBlockBoundary(
+      head.block.id,
+      direction,
+      extend: extend,
+    );
+  }
+
+  /// Crosses from [blockId] to the adjacent block in [direction].
+  bool moveAcrossBlockBoundary(
+    String blockId,
+    CaretMovementDirection direction, {
+    required bool extend,
+    double? preferredX,
+  }) {
+    final document = widget.controller.document;
+    final sourceIndex = document.indexOfBlockId(blockId);
+    final selection = widget.controller.selection;
+    if (sourceIndex == null || selection == null) return false;
+    final backward = direction == CaretMovementDirection.left ||
+        direction == CaretMovementDirection.up;
+    final targetIndex = sourceIndex + (backward ? -1 : 1);
+    if (targetIndex < 0 || targetIndex >= document.blockCount) return false;
+    final targetOffset =
+        backward ? document.blocks[targetIndex].contentLength : 0;
+    final target = document.positionAt(targetIndex, targetOffset);
+    return _setDocumentSelection(
+      extend ? selection.anchor : target,
+      target,
+      affinity: backward
+          ? HomericCaretAffinity.upstream
+          : HomericCaretAffinity.downstream,
+      preferredX: direction == CaretMovementDirection.up ||
+              direction == CaretMovementDirection.down
+          ? preferredX ?? widget.controller.preferredX
+          : null,
+      resetPreferredX: direction == CaretMovementDirection.left ||
+          direction == CaretMovementDirection.right,
+    );
+  }
+
+  /// Moves only the global head to [offset] inside [blockId].
+  bool setSelectionHead(
+    String blockId,
+    int offset, {
+    required HomericCaretAffinity affinity,
+    double? preferredX,
+    bool resetPreferredX = false,
+  }) {
+    final selection = widget.controller.selection;
+    final index = widget.controller.document.indexOfBlockId(blockId);
+    if (selection == null || index == null) return false;
+    return _setDocumentSelection(
+      selection.anchor,
+      widget.controller.document.positionAt(index, offset),
+      affinity: affinity,
+      preferredX: preferredX,
+      resetPreferredX: resetPreferredX,
+    );
+  }
+
+  /// Moves or extends to the canonical start/end of the whole document.
+  bool moveToDocumentBoundary({
+    required bool forward,
+    required bool extend,
+  }) {
+    final selection = widget.controller.selection;
+    if (selection == null) return false;
+    final document = widget.controller.document;
+    final lastIndex = document.blockCount - 1;
+    final target = forward
+        ? document.positionAt(
+            lastIndex,
+            document.blocks[lastIndex].contentLength,
+          )
+        : document.positionAt(0, 0);
+    return _setDocumentSelection(
+      extend ? selection.anchor : target,
+      target,
+      affinity: forward
+          ? HomericCaretAffinity.downstream
+          : HomericCaretAffinity.upstream,
+      resetPreferredX: true,
+    );
+  }
+
+  /// Selects from the first block's start through the last block's end.
+  bool selectAll() => _setDocumentSelection(
+        widget.controller.document.positionAt(0, 0),
+        widget.controller.document.positionAt(
+          widget.controller.document.blockCount - 1,
+          widget.controller.document.blocks.last.contentLength,
+        ),
+        affinity: HomericCaretAffinity.downstream,
+        resetPreferredX: true,
+      );
+
+  bool _setDocumentSelection(
+    int anchor,
+    int head, {
+    required HomericCaretAffinity affinity,
+    double? preferredX,
+    bool resetPreferredX = false,
+  }) {
+    final changed = widget.controller.setSelection(
+      HomericSelection(anchor: anchor, head: head, affinity: affinity),
+      preferredX: preferredX,
+      resetPreferredX: resetPreferredX,
+    );
+    if (!changed) return false;
+    final resolved = widget.controller.document.resolve(head);
+    if (resolved is InlinePosition) _focusBlock(resolved.block.id);
+    return true;
+  }
+
+  void _focusBlock(String blockId) {
+    final focusNode = _mountedFocusNodes[blockId];
+    if (focusNode != null) {
+      focusNode.requestFocus();
+      return;
+    }
+    unawaited(scrollToBlock(blockId).then((result) {
+      if (!mounted || result != HomericScrollToBlockResult.reached) return;
+      _mountedFocusNodes[blockId]?.requestFocus();
+    }));
   }
 
   /// Moves the active selection block by [delta] through the shared command.
@@ -234,6 +558,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   }
 
   void _controllerChanged() {
+    if (_selectionDragAnchor != null &&
+        widget.controller.documentRevision != _selectionDragDocumentRevision) {
+      cancelPointerSelectionDrag();
+    }
     final documentChanged = _syncOrder();
     if (documentChanged && mounted) setState(() {});
     if (_selectionDragActive || !widget.inputSession.isAttached) return;
@@ -247,11 +575,106 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _retargetActiveHost();
   }
 
+  void _updatePointerSelectionHead(Offset globalPoint) {
+    final anchor = _selectionDragAnchor;
+    if (anchor == null) return;
+    final candidates =
+        <({String blockId, Rect rect, _MountedSelectionHost host})>[];
+    for (final entry in _selectionHosts.entries) {
+      final rect = entry.value.globalRect();
+      if (rect != null) {
+        candidates.add((blockId: entry.key, rect: rect, host: entry.value));
+      }
+    }
+    if (candidates.isEmpty) return;
+    candidates.sort((a, b) => a.rect.top.compareTo(b.rect.top));
+    var target = candidates.first;
+    for (final candidate in candidates) {
+      if (candidate.rect.contains(globalPoint)) {
+        target = candidate;
+        break;
+      }
+      if (globalPoint.dy >= candidate.rect.top) target = candidate;
+    }
+    final clampedPoint = Offset(
+      globalPoint.dx.clamp(target.rect.left, target.rect.right),
+      globalPoint.dy.clamp(target.rect.top, target.rect.bottom),
+    );
+    final hit = target.host.hitTest(clampedPoint);
+    if (hit == null) return;
+    final head = widget.controller.globalPositionForBlockOffset(
+      target.blockId,
+      hit.offset,
+    );
+    widget.controller.setSelection(HomericSelection(
+      anchor: anchor,
+      head: head,
+      affinity: hit.affinity,
+    ));
+  }
+
+  void _syncSelectionAutoscroll(Offset globalPoint) {
+    if (!_scrollController.hasClients) return;
+    final render = context.findRenderObject();
+    if (render is! RenderBox || !render.attached) return;
+    final viewport = render.localToGlobal(Offset.zero) & render.size;
+    const edge = 36.0;
+    final direction = globalPoint.dy < viewport.top + edge
+        ? -1
+        : globalPoint.dy > viewport.bottom - edge
+            ? 1
+            : 0;
+    if (direction == 0) {
+      _stopSelectionAutoscroll();
+      return;
+    }
+    if (_selectionAutoScrollTimer != null) return;
+    final generation = _selectionDragGeneration;
+    _selectionAutoScrollTimer = Timer.periodic(
+      const Duration(milliseconds: 16),
+      (_) => _selectionAutoscrollTick(generation, direction),
+    );
+  }
+
+  void _selectionAutoscrollTick(int generation, int direction) {
+    if (!mounted ||
+        generation != _selectionDragGeneration ||
+        !_selectionDragActive ||
+        !_scrollController.hasClients ||
+        widget.controller.documentRevision != _selectionDragDocumentRevision) {
+      _stopSelectionAutoscroll();
+      return;
+    }
+    final position = _scrollController.position;
+    final target = (_scrollController.offset + direction * 12)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if ((target - _scrollController.offset).abs() < 0.5) {
+      _stopSelectionAutoscroll();
+      return;
+    }
+    _scrollController.jumpTo(target);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pointer = _selectionDragPointer;
+      if (!mounted ||
+          generation != _selectionDragGeneration ||
+          pointer == null) {
+        return;
+      }
+      _updatePointerSelectionHead(pointer);
+    });
+  }
+
+  void _stopSelectionAutoscroll() {
+    _selectionAutoScrollTimer?.cancel();
+    _selectionAutoScrollTimer = null;
+  }
+
   bool _retargetActiveHost() {
     final blockId = widget.controller.activeBlockId;
     if (blockId == null) return false;
     final delegate = _commandHosts[blockId];
     if (delegate == null) return false;
+    _mountedFocusNodes[blockId]?.requestFocus();
     return widget.inputSession.retarget(
       blockId: blockId,
       commandDelegate: delegate,
@@ -421,10 +844,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
 
   @override
   void dispose() {
+    _stopSelectionAutoscroll();
     widget.controller.removeListener(_controllerChanged);
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
     _commandHosts.clear();
     _mountedRows.clear();
+    _mountedFocusNodes.clear();
+    _selectionHosts.clear();
     _rowKeys.clear();
     _blockIdsByRowKey.clear();
     if (widget.scrollController == null) _scrollController.dispose();
@@ -495,13 +921,23 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
                 totalCount: document.blockCount,
                 builder: widget.blockBuilder!,
                 witness: witness,
+                keepAlive: () =>
+                    widget.controller.activeBlockId == block.id ||
+                    (_selectionDragActive &&
+                        widget.inputSession.activeBlockId == block.id),
                 canReorder: () => canReorderBlock(block.id),
                 onMove: (delta) => moveBlockBy(block.id, delta),
                 onHeight: _recordHeight,
-                onMount: (context) => _mountedRows[block.id] = context,
-                onUnmount: (context) {
+                onMount: (context, focusNode) {
+                  _mountedRows[block.id] = context;
+                  _mountedFocusNodes[block.id] = focusNode;
+                },
+                onUnmount: (context, focusNode) {
                   if (identical(_mountedRows[block.id], context)) {
                     _mountedRows.remove(block.id);
+                  }
+                  if (identical(_mountedFocusNodes[block.id], focusNode)) {
+                    _mountedFocusNodes.remove(block.id);
                   }
                   _releaseRowKeyWhenUnused(block.id);
                 },
@@ -541,6 +977,18 @@ final class _BlockMoveWitness {
   final String? nextBlockId;
 }
 
+final class _MountedSelectionHost {
+  const _MountedSelectionHost({
+    required this.owner,
+    required this.globalRect,
+    required this.hitTest,
+  });
+
+  final Object owner;
+  final Rect? Function() globalRect;
+  final HomericDocumentSelectionHitTest hitTest;
+}
+
 final class _ViewportAnchor {
   const _ViewportAnchor(this.blockId, this.intraBlockOffset);
 
@@ -557,6 +1005,7 @@ class _DocumentBlockRow extends StatefulWidget {
     required this.totalCount,
     required this.builder,
     required this.witness,
+    required this.keepAlive,
     required this.canReorder,
     required this.onMove,
     required this.onHeight,
@@ -570,11 +1019,12 @@ class _DocumentBlockRow extends StatefulWidget {
   final int totalCount;
   final HomericEditableBlockBuilder builder;
   final BlockHeightWitness witness;
+  final ValueGetter<bool> keepAlive;
   final ValueGetter<bool> canReorder;
   final ValueChanged<int> onMove;
   final void Function(BlockHeightWitness witness, double height) onHeight;
-  final ValueChanged<BuildContext> onMount;
-  final ValueChanged<BuildContext> onUnmount;
+  final void Function(BuildContext context, FocusNode focusNode) onMount;
+  final void Function(BuildContext context, FocusNode focusNode) onUnmount;
 
   @override
   State<_DocumentBlockRow> createState() => _DocumentBlockRowState();
@@ -585,7 +1035,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
   late final FocusNode _focusNode = FocusNode();
 
   @override
-  bool get wantKeepAlive => widget.controller.activeBlockId == widget.block.id;
+  bool get wantKeepAlive => widget.keepAlive();
 
   @override
   void initState() {
@@ -596,7 +1046,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    widget.onMount(context);
+    widget.onMount(context, _focusNode);
   }
 
   @override
@@ -616,7 +1066,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
 
   @override
   void dispose() {
-    widget.onUnmount(context);
+    widget.onUnmount(context, _focusNode);
     widget.controller.removeListener(_controllerChanged);
     _focusNode.dispose();
     super.dispose();

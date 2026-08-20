@@ -216,6 +216,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final documentHost = HomericEditableDocument.maybeOf(context);
     if (!identical(documentHost, _documentHost)) {
       _documentHost?.unregisterCommandHost(widget.blockId, _commandDelegate);
+      _documentHost?.unregisterSelectionHost(widget.blockId, this);
       _documentHost = documentHost;
       documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
     }
@@ -275,6 +276,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     }
     if (hostDependenciesChanged) {
       _documentHost?.unregisterCommandHost(oldWidget.blockId, oldDelegate);
+      _documentHost?.unregisterSelectionHost(oldWidget.blockId, this);
       _renewHostBindings();
       _documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
     }
@@ -302,6 +304,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _caretVisibility.dispose();
     _clipboard.dispose();
     _documentHost?.unregisterCommandHost(widget.blockId, _commandDelegate);
+    _documentHost?.unregisterSelectionHost(widget.blockId, this);
     _controller.removeListener(_controllerChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
       widget.inputSession.blur();
@@ -407,6 +410,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final block = _block;
     if (block == null) return const SizedBox.shrink();
     final localSelection = _localSelection();
+    final fullySelectedEmptyBlock = block.contentLength == 0 &&
+        (_documentHost?.isBlockFullySelected(widget.blockId) ?? false);
     final localComposing = _localComposing();
     final decorations = _controller.decorations.forBlock(widget.blockId);
     final reveal = _revealState(decorations, localSelection, localComposing);
@@ -424,7 +429,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       spec: widget.paragraphSpec,
     );
     _ensureSpellCheck(semanticsSource);
-    final focused = _ownsEditingFocus && localSelection != null;
+    final focused = localSelection != null &&
+        (_ownsEditingFocus || (_documentHost?.hasEditingFocus ?? false));
     final brightness = MediaQuery.maybePlatformBrightnessOf(context) ??
         ui.PlatformDispatcher.instance.platformBrightness;
     final caretColor = widget.caretColor ??
@@ -503,6 +509,34 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       slotLayoutRevision: widget.slotLayoutRevision,
       overlayBuilder: (overlayContext, geometry) {
         _overlayContext = overlayContext;
+        _documentHost?.registerSelectionHost(
+          widget.blockId,
+          owner: this,
+          globalRect: () {
+            final render = overlayContext.findRenderObject();
+            if (render is! RenderBox || !render.attached || !render.hasSize) {
+              return null;
+            }
+            return render.localToGlobal(Offset.zero) & render.size;
+          },
+          hitTest: (globalPoint) {
+            if (!_isCurrentGeometry(geometry)) return null;
+            final render = overlayContext.findRenderObject();
+            if (render is! RenderBox || !render.attached || !render.hasSize) {
+              return null;
+            }
+            final localPoint = render.globalToLocal(globalPoint);
+            final rect = geometry.blockRect.value;
+            final hit = _caretForPoint(
+              geometry,
+              Offset(
+                localPoint.dx.clamp(rect.left, rect.right),
+                localPoint.dy.clamp(rect.top, rect.bottom),
+              ),
+            );
+            return (offset: hit.position, affinity: hit.affinity);
+          },
+        );
         _scheduleGeometryPublication(overlayContext, geometry);
         final caret = focused && localSelection.isCollapsed
             ? geometry
@@ -513,6 +547,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                 .value
             : null;
         return <Widget>[
+          if (fullySelectedEmptyBlock)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: ColoredBox(
+                  key: ValueKey<String>(
+                    'homeric-empty-selection-${widget.blockId}',
+                  ),
+                  color: focused ? selectionColor : inactiveSelectionColor,
+                ),
+              ),
+            ),
           Positioned.fill(
             child: TextSelectionGestureDetector(
               behavior: HitTestBehavior.translucent,
@@ -523,9 +568,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                   _startSelectionDrag(geometry, details),
               onDragSelectionUpdate: (details) =>
                   _updateSelectionDrag(geometry, details.localPosition),
-              onDragSelectionEnd: (_) => _resetPointerState(),
-              onSingleTapCancel: _resetPointerState,
-              onTapTrackReset: _resetPointerState,
+              onDragSelectionEnd: (_) => _endSelectionPointer(),
+              onSingleTapCancel: _cancelSelectionPointer,
+              onTapTrackReset: _cancelSelectionPointer,
               onSecondaryTapDown: (details) =>
                   _secondaryTapDown(geometry, details.localPosition),
               onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
@@ -617,6 +662,38 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           !intent.collapseSelection,
         )),
       ),
+      ExtendSelectionToLineBreakIntent:
+          _HostAction<ExtendSelectionToLineBreakIntent>(
+        enabled: (_) => _canUseActions,
+        invoke: (intent) => _moveToLineBoundary(
+          forward: intent.forward,
+          extend: !intent.collapseSelection,
+        ),
+      ),
+      ExpandSelectionToLineBreakIntent:
+          _HostAction<ExpandSelectionToLineBreakIntent>(
+        enabled: (_) => _canUseActions,
+        invoke: (intent) => _moveToLineBoundary(
+          forward: intent.forward,
+          extend: true,
+        ),
+      ),
+      ExtendSelectionToDocumentBoundaryIntent:
+          _HostAction<ExtendSelectionToDocumentBoundaryIntent>(
+        enabled: (_) => _canUseActions && _documentHost != null,
+        invoke: (intent) => _documentHost?.moveToDocumentBoundary(
+          forward: intent.forward,
+          extend: !intent.collapseSelection,
+        ),
+      ),
+      ExpandSelectionToDocumentBoundaryIntent:
+          _HostAction<ExpandSelectionToDocumentBoundaryIntent>(
+        enabled: (_) => _canUseActions && _documentHost != null,
+        invoke: (intent) => _documentHost?.moveToDocumentBoundary(
+          forward: intent.forward,
+          extend: true,
+        ),
+      ),
       ExtendSelectionToNextWordBoundaryIntent:
           _HostAction<ExtendSelectionToNextWordBoundaryIntent>(
         enabled: (_) => _canUseActions,
@@ -649,8 +726,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         invoke: (_) => _clipboard.paste(),
       ),
       SelectAllTextIntent: _HostAction<SelectAllTextIntent>(
-        enabled: (_) => _canUseActions && block.contentLength > 0,
-        invoke: (_) => _selectAll(),
+        enabled: (_) =>
+            _canUseActions &&
+            (_documentHost != null || block.contentLength > 0),
+        invoke: (_) => _documentHost?.selectAll() ?? _selectAll(),
       ),
       UndoTextIntent: _HostAction<UndoTextIntent>(
         enabled: (_) => _canUseActions && _controller.canUndo,
@@ -741,6 +820,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   BlockTextSelection? _localSelection() {
+    final documentHost = _documentHost;
+    if (documentHost != null) {
+      return documentHost.selectionFragmentForBlock(widget.blockId);
+    }
     final selection = _controller.selection;
     if (selection == null) return null;
     try {
@@ -849,9 +932,27 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _dragAnchor = hit.position;
     _dragWordAnchor = null;
     _relocate(hit.position, hit.position, affinity: hit.affinity);
+    final documentHost = _documentHost;
+    if (documentHost != null) {
+      documentHost.beginPointerSelectionDrag(
+        _controller.globalPositionForBlockOffset(
+          widget.blockId,
+          hit.position,
+        ),
+        owner: this,
+      );
+    }
   }
 
   void _updateSelectionDrag(ParagraphGeometry geometry, Offset point) {
+    final documentHost = _documentHost;
+    if (documentHost?.pointerSelectionDragActive ?? false) {
+      final render = _overlayContext?.findRenderObject();
+      if (render is RenderBox && render.attached) {
+        documentHost!.updatePointerSelectionDrag(render.localToGlobal(point));
+      }
+      return;
+    }
     final anchor = _dragAnchor;
     final mode = _dragMode;
     if (anchor == null || mode == null || !_canUsePointer(geometry)) return;
@@ -924,6 +1025,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _dragAnchor = null;
     _dragWordAnchor = null;
     _dragMode = null;
+  }
+
+  void _endSelectionPointer() {
+    _documentHost?.endPointerSelectionDrag(owner: this);
+    _resetPointerState();
+  }
+
+  void _cancelSelectionPointer() {
+    _documentHost?.cancelPointerSelectionDrag(owner: this);
+    _resetPointerState();
   }
 
   void _secondaryTapDown(ParagraphGeometry geometry, Offset point) {
@@ -1295,6 +1406,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   Object? _moveCaret(_MoveCaretIntent intent) {
+    final documentHost = _documentHost;
+    final documentSelectionIsCrossBlock =
+        documentHost != null && !documentHost.selectionIsBlockLocal;
+    if (documentSelectionIsCrossBlock && !intent.extend) {
+      documentHost.moveDocumentSelection(
+        intent.direction,
+        extend: intent.extend,
+      );
+      return null;
+    }
     final local = _localSelection();
     if (local == null) return null;
     if (!intent.extend && !local.isCollapsed) {
@@ -1324,13 +1445,78 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           preferredX: _controller.preferredX,
         )
         .value;
+    final crossesHorizontalBoundary =
+        intent.direction == CaretMovementDirection.left
+            ? local.head == 0 && result.position.value == local.head
+            : intent.direction == CaretMovementDirection.right
+                ? local.head == (_block?.contentLength ?? 0) &&
+                    result.position.value == local.head
+                : false;
+    final currentCaret = geometry
+        .caretRect(
+          DocOffset(local.head),
+          assoc: _assoc(local.affinity),
+        )
+        .value;
+    final blockRect = geometry.blockRect.value;
+    final crossesVerticalBoundary = switch (intent.direction) {
+      CaretMovementDirection.up => currentCaret.top <= blockRect.top + 0.5,
+      CaretMovementDirection.down =>
+        currentCaret.bottom >= blockRect.bottom - 0.5,
+      _ => false,
+    };
+    if (documentHost != null &&
+        (crossesHorizontalBoundary || crossesVerticalBoundary) &&
+        documentHost.moveAcrossBlockBoundary(
+          widget.blockId,
+          intent.direction,
+          extend: intent.extend,
+          preferredX: result.preferredX,
+        )) {
+      return null;
+    }
     final anchor = intent.extend ? local.anchor : result.position.value;
+    if (documentSelectionIsCrossBlock && intent.extend) {
+      documentHost.setSelectionHead(
+        widget.blockId,
+        result.position.value,
+        affinity: result.affinity,
+        preferredX: result.preferredX,
+        resetPreferredX: result.preferredX == null,
+      );
+    } else {
+      _setLocalSelection(
+        anchor,
+        result.position.value,
+        affinity: result.affinity,
+        preferredX: result.preferredX,
+        resetPreferredX: result.preferredX == null,
+      );
+    }
+    return null;
+  }
+
+  Object? _moveToLineBoundary({
+    required bool forward,
+    required bool extend,
+  }) {
+    final local = _localSelection();
+    final geometry = _currentGeometry();
+    if (local == null || geometry == null) return null;
+    final boundary = geometry
+        .lineBoundaryAt(
+          DocOffset(local.head),
+          assoc: _assoc(local.affinity),
+        )
+        .value;
+    final target = forward ? boundary.end.value : boundary.start.value;
     _setLocalSelection(
-      anchor,
-      result.position.value,
-      affinity: result.affinity,
-      preferredX: result.preferredX,
-      resetPreferredX: result.preferredX == null,
+      extend ? local.anchor : target,
+      target,
+      affinity: forward
+          ? HomericCaretAffinity.downstream
+          : HomericCaretAffinity.upstream,
+      resetPreferredX: true,
     );
     return null;
   }
@@ -1457,7 +1643,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     } else if (_contextMenuController?.isShown ?? false) {
       // The adaptive toolbar is part of this host's editing focus. Keyboard
       // traversal may focus a menu button without ending the input epoch.
+    } else if (_documentHost?.pointerSelectionDragActive ?? false) {
+      // Recycling may temporarily remove focus from the anchor row while the
+      // document coordinator owns the drag and preserves its input epoch.
     } else {
+      _cancelSelectionPointer();
       _clearTransientState();
       _renewHostBindings();
       widget.inputSession.blur();

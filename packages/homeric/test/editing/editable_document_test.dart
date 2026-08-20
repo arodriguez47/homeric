@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -344,6 +345,315 @@ void main() {
     expect(controller.document.blocks.last.id, 'block-0');
   });
 
+  testWidgets('global selection exposes directional fragments and empty wash',
+      (tester) async {
+    final document = _document(<String>['ab', '', 'cd']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 1),
+        head: document.positionAt(2, 1),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+
+    expect(
+      key.currentState!.selectionFragmentForBlock('block-0'),
+      const BlockTextSelection(anchor: 1, head: 2),
+    );
+    expect(
+      key.currentState!.selectionFragmentForBlock('block-1'),
+      const BlockTextSelection(anchor: 0, head: 0),
+    );
+    expect(
+      key.currentState!.selectionFragmentForBlock('block-2'),
+      const BlockTextSelection(anchor: 0, head: 1),
+    );
+    expect(key.currentState!.isBlockFullySelected('block-1'), isTrue);
+    expect(
+      find.byKey(const ValueKey('homeric-empty-selection-block-1')),
+      findsOneWidget,
+    );
+
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(2, 1),
+      head: document.positionAt(0, 1),
+      affinity: HomericCaretAffinity.upstream,
+    ));
+    await tester.pump();
+    expect(
+      key.currentState!.selectionFragmentForBlock('block-0'),
+      const BlockTextSelection(
+        anchor: 2,
+        head: 1,
+        affinity: HomericCaretAffinity.upstream,
+      ),
+    );
+    expect(
+      key.currentState!.selectionFragmentForBlock('block-2'),
+      const BlockTextSelection(
+        anchor: 1,
+        head: 0,
+        affinity: HomericCaretAffinity.upstream,
+      ),
+    );
+  });
+
+  testWidgets('arrows and Shift arrows cross blocks without losing the anchor',
+      (tester) async {
+    final document = _document(<String>['ab', 'cd']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
+    expect(session.activeBlockId, 'block-1');
+    expect(key.currentState!.focusedBlockId, 'block-1');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    _expectSelectionHead(controller, blockId: 'block-0', offset: 2);
+
+    await _sendShiftArrow(tester, LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    final anchor = controller.document.positionAt(0, 2);
+    expect(controller.selection?.anchor, anchor);
+    _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
+
+    await _sendShiftArrow(tester, LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(controller.selection?.anchor, anchor);
+    _expectSelectionHead(controller, blockId: 'block-1', offset: 1);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(controller.selection?.isCollapsed, isTrue);
+    _expectSelectionHead(controller, blockId: 'block-1', offset: 1);
+  });
+
+  testWidgets('vertical arrows cross single-line blocks and retain preferred x',
+      (tester) async {
+    final document = _document(<String>['ab', 'cd']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 1)),
+    );
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
+    final preferredX = controller.preferredX;
+    expect(preferredX, isNotNull);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    _expectSelectionHead(controller, blockId: 'block-0', offset: 2);
+    expect(controller.preferredX, preferredX);
+  });
+
+  testWidgets('document Select All and boundary commands own global positions',
+      (tester) async {
+    final document = _document(<String>['ab', 'cd']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tap(paragraph);
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 1)),
+    );
+    await tester.pump();
+
+    expect(key.currentState!.selectAll(), isTrue);
+    await tester.pump();
+    expect(
+      controller.selection,
+      HomericSelection(
+        anchor: controller.document.positionAt(0, 0),
+        head: controller.document.positionAt(1, 2),
+      ),
+    );
+
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 1)),
+    );
+    await tester.pump();
+    expect(
+      key.currentState!.moveToDocumentBoundary(
+        forward: true,
+        extend: true,
+      ),
+      isTrue,
+    );
+    await tester.pump();
+    expect(controller.selection?.anchor, controller.document.positionAt(0, 1));
+    expect(controller.selection?.head, controller.document.positionAt(1, 2));
+  });
+
+  testWidgets(
+      'stationary edge drag autoscrolls through recycled rows and retargets once',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(80, (index) => 'row $index content'),
+    );
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final scrollController = ScrollController();
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(scrollController.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 180,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        scrollController: scrollController,
+        cacheExtent: 0,
+        estimatedBlockHeight: 44,
+        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: block.id,
+          focusNode: focusNode,
+          resolveStyle: (_) => _style,
+        ),
+      ),
+    )));
+    await tester.pump();
+
+    final paragraph = find.byKey(
+      const ValueKey<String>('homeric-editable-block-0'),
+    );
+    final viewport = tester.getRect(find.byType(CustomScrollView));
+    final start = tester.getCenter(paragraph);
+    await tester.tap(paragraph);
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+    key.currentState!.beginPointerSelectionDrag(document.positionAt(0, 2));
+    key.currentState!.updatePointerSelectionDrag(
+      Offset(start.dx, viewport.bottom + 20),
+    );
+    for (var tick = 0; tick < 24; tick++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(scrollController.offset, greaterThan(0));
+    expect(session.activeBlockId, 'block-0');
+    final selection = controller.selection!;
+    final anchor =
+        controller.document.resolve(selection.anchor) as InlinePosition;
+    final head = controller.document.resolve(selection.head) as InlinePosition;
+    expect(anchor.block.id, 'block-0');
+    expect(controller.document.indexOfBlockId(head.block.id), greaterThan(0));
+
+    expect(key.currentState!.endPointerSelectionDrag(), isTrue);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(session.activeBlockId, head.block.id);
+    final stoppedOffset = scrollController.offset;
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(scrollController.offset, stoppedOffset);
+  });
+
+  testWidgets('document mutation cancels selection autoscroll immediately',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'row $index content'),
+    );
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final scrollController = ScrollController();
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(scrollController.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 180,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        scrollController: scrollController,
+        cacheExtent: 0,
+        estimatedBlockHeight: 44,
+        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: block.id,
+          focusNode: focusNode,
+          resolveStyle: (_) => _style,
+        ),
+      ),
+    )));
+    await tester.pump();
+
+    final paragraph = find.byKey(
+      const ValueKey<String>('homeric-editable-block-0'),
+    );
+    final viewport = tester.getRect(find.byType(CustomScrollView));
+    final start = tester.getCenter(paragraph);
+    await tester.tap(paragraph);
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+    key.currentState!.beginPointerSelectionDrag(document.positionAt(0, 2));
+    key.currentState!.updatePointerSelectionDrag(
+      Offset(start.dx, viewport.bottom + 20),
+    );
+    await tester.pump(const Duration(milliseconds: 32));
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+
+    expect(
+      controller.applyBlockEditBatch(
+        blockId: 'block-0',
+        edits: const <CanonicalTextEdit>[CanonicalTextEdit(0, 0, 'X')],
+        selection: const BlockTextSelection.collapsed(1),
+        composing: null,
+      ),
+      isTrue,
+    );
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    final stoppedOffset = scrollController.offset;
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(scrollController.offset, stoppedOffset);
+  });
+
   testWidgets('edge grabber is visible, opaque, and reorders only by its drag',
       (tester) async {
     final document = _document(<String>['alpha', 'beta', 'gamma']);
@@ -672,12 +982,14 @@ void main() {
 
 Widget _editableDocument(
   HomericEditorController controller,
-  HomericTextInputSession session,
-) =>
+  HomericTextInputSession session, {
+  Key? key,
+}) =>
     _withOverlay(SizedBox(
       width: 500,
       height: 300,
       child: HomericEditableDocument.builder(
+        key: key,
         controller: controller,
         inputSession: session,
         cacheExtent: 0,
@@ -691,6 +1003,31 @@ Widget _editableDocument(
         ),
       ),
     ));
+
+void _expectSelectionHead(
+  HomericEditorController controller, {
+  required String blockId,
+  required int offset,
+}) {
+  final selection = controller.selection;
+  expect(selection, isNotNull);
+  final resolved = controller.document.resolve(selection!.head);
+  expect(resolved, isA<InlinePosition>());
+  expect((resolved as InlinePosition).block.id, blockId);
+  expect(resolved.offset, offset);
+}
+
+Future<void> _sendShiftArrow(
+  WidgetTester tester,
+  LogicalKeyboardKey arrow,
+) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  try {
+    await tester.sendKeyEvent(arrow);
+  } finally {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  }
+}
 
 Future<void> _sendBlockMoveShortcut(
   WidgetTester tester,

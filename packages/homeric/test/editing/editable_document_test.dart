@@ -47,18 +47,113 @@ void main() {
       1,
       'TextInputAction.newline',
     );
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['al', 'pha']);
+    final trailingBlockId = controller.document.blocks.last.id;
+    _insertAtStartThroughPlatform(session, oldText: 'pha', text: 'X');
+    expect(controller.document.blocks.last.text, 'Xpha');
     await tester.pump();
     await tester.pump();
 
     expect(controller.document.blocks.map((block) => block.text),
-        <String>['al', 'pha']);
-    final trailingBlockId = controller.document.blocks.last.id;
+        <String>['al', 'Xpha']);
     expect(controller.activeBlockId, trailingBlockId);
     expect(session.activeBlockId, trailingBlockId);
     expect(key.currentState!.focusedBlockId, trailingBlockId);
-    _insertAtStartThroughPlatform(session, oldText: 'pha', text: 'X');
+  });
+
+  testWidgets('two immediate newline actions survive pending-row settlement',
+      (tester) async {
+    TextInputConnection.debugResetId();
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
     await tester.pump();
-    expect(controller.document.blocks.last.text, 'Xpha');
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+
+    await _sendTextInputAction(
+      tester.binding,
+      1,
+      'TextInputAction.newline',
+    );
+    await _sendTextInputAction(
+      tester.binding,
+      1,
+      'TextInputAction.newline',
+    );
+
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['al', '', 'pha']);
+    expect(
+      session.activeBlockId,
+      controller.document.blocks.last.id,
+      reason: 'each synchronous break must advance the platform shadow to '
+          'the newest trailing block',
+    );
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['al', 'pha']);
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['alpha']);
+    expect(controller.undo(), isFalse);
+  });
+
+  testWidgets('pending-row newline stays inert during document drag',
+      (tester) async {
+    TextInputConnection.debugResetId();
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+
+    await _sendTextInputAction(
+      tester.binding,
+      1,
+      'TextInputAction.newline',
+    );
+    final pendingBlockId = controller.document.blocks.last.id;
+    key.currentState!.beginSelectionDrag();
+    await _sendTextInputAction(
+      tester.binding,
+      1,
+      'TextInputAction.newline',
+    );
+
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['al', 'pha']);
+    expect(session.activeBlockId, pendingBlockId);
+    expect(session.isAttached, isTrue);
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['alpha']);
+    expect(controller.undo(), isFalse);
   });
 
   testWidgets('document drag suspends input and retargets only on release',
@@ -2324,18 +2419,25 @@ Future<void> _expectBreakRetargetsAndAcceptsDelta(
   );
 
   await trigger();
-  await tester.pump();
-  await tester.pump();
-
   expect(controller.document.blocks.map((block) => block.text),
       <String>['al', 'pha']);
   final trailingBlockId = controller.document.blocks.last.id;
   expect(controller.activeBlockId, trailingBlockId);
+  _insertAtStartThroughPlatform(session, oldText: 'pha', text: 'X');
+  expect(
+    controller.document.blocks.last.text,
+    'Xpha',
+    reason: 'the first platform delta after Enter must not wait for the new '
+        'row to mount',
+  );
+  await tester.pump();
+  await tester.pump();
+
+  expect(controller.document.blocks.map((block) => block.text),
+      <String>['al', 'Xpha']);
+  expect(controller.activeBlockId, trailingBlockId);
   expect(session.activeBlockId, trailingBlockId);
   expect(key.currentState!.focusedBlockId, trailingBlockId);
-  _insertAtStartThroughPlatform(session, oldText: 'pha', text: 'X');
-  await tester.pump();
-  expect(controller.document.blocks.last.text, 'Xpha');
 }
 
 void _insertAtStartThroughPlatform(

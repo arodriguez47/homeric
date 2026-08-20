@@ -1023,7 +1023,18 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       widget.inputSession.blur();
       return;
     }
-    if (!_retargetActiveHost()) _scheduleActiveHostSettlement(activeBlockId);
+    if (!_retargetActiveHost()) {
+      // A structural command can make a not-yet-mounted trailing row active.
+      // Retarget the canonical platform value immediately so characters that
+      // arrive before the next frame cannot be dropped against the old block's
+      // shadow value. The mounted row replaces the narrow temporary command
+      // binding during settlement below.
+      widget.inputSession.retarget(
+        blockId: activeBlockId,
+        commandDelegate: _PendingRowCommandDelegate(this, activeBlockId),
+      );
+      _scheduleActiveHostSettlement(activeBlockId);
+    }
   }
 
   void _scheduleActiveHostSettlement(String blockId) {
@@ -1586,6 +1597,33 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       ),
     );
   }
+}
+
+final class _PendingRowCommandDelegate
+    implements HomericTextInputCommandDelegate {
+  const _PendingRowCommandDelegate(this.state, this.blockId);
+
+  final HomericEditableDocumentState state;
+  final String blockId;
+
+  @override
+  Object? invoke(Intent intent) {
+    final controller = state.widget.controller;
+    if (!state.mounted ||
+        state._selectionDragActive ||
+        controller.isReadOnly ||
+        controller.composing != null ||
+        controller.activeBlockId != blockId) {
+      return false;
+    }
+    if (intent is HomericInsertParagraphBreakIntent) {
+      return controller.insertParagraphBreak();
+    }
+    return null;
+  }
+
+  @override
+  void showToolbar() {}
 }
 
 class _HomericEditableDocumentScope extends InheritedWidget {

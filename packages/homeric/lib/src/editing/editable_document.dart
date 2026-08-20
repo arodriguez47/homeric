@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 
 import '../input/text_input_session.dart';
 import '../model/block.dart';
+import '../model/position.dart';
 import 'block_height_cache.dart';
 import 'editor_controller.dart';
 
@@ -73,6 +74,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool _selectionDragActive = false;
   final Map<String, HomericTextInputCommandDelegate> _commandHosts = {};
   final Map<String, BuildContext> _mountedRows = <String, BuildContext>{};
+  final Map<String, GlobalKey> _rowKeys = <String, GlobalKey>{};
+  final Map<GlobalKey, String> _blockIdsByRowKey = <GlobalKey, String>{};
   late BlockHeightCache _heightCache;
   late ScrollController _scrollController;
   double _layoutWidth = 0;
@@ -80,6 +83,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool _anchorCorrectionScheduled = false;
   int _heightOrderRevision = -1;
   Object? _globalLayoutSignature;
+  _BlockMoveWitness? _dragMoveWitness;
 
   @override
   void initState() {
@@ -164,6 +168,42 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     );
   }
 
+  /// Whether [blockId] can move through any reorder surface right now.
+  bool canReorderBlock(String blockId) {
+    final document = widget.controller.document;
+    if (document.indexOfBlockId(blockId) == null ||
+        widget.controller.composing != null) {
+      return false;
+    }
+    final selection = widget.controller.selection;
+    if (selection == null) return false;
+    final anchor = document.resolve(selection.anchor);
+    final head = document.resolve(selection.head);
+    return anchor is InlinePosition &&
+        head is InlinePosition &&
+        anchor.blockIndex == head.blockIndex;
+  }
+
+  /// Moves the active selection block by [delta] through the shared command.
+  bool moveActiveBlock(int delta) {
+    final blockId = widget.controller.activeBlockId;
+    return blockId != null && moveBlockBy(blockId, delta);
+  }
+
+  /// Moves [blockId] by [delta] through one stale-safe controller request.
+  bool moveBlockBy(String blockId, int delta) {
+    if (!canReorderBlock(blockId) || delta == 0) return false;
+    final document = widget.controller.document;
+    final sourceIndex = document.indexOfBlockId(blockId);
+    if (sourceIndex == null) return false;
+    final targetIndex = sourceIndex + delta;
+    if (targetIndex < 0 || targetIndex >= document.blockCount) return false;
+    return _moveBlock(
+      _captureMoveWitness(sourceIndex),
+      targetIndex,
+    );
+  }
+
   Future<HomericScrollToBlockResult> scrollToBlock(String blockId) async {
     final revision = widget.controller.documentRevision;
     final index = widget.controller.document.indexOfBlockId(blockId);
@@ -216,6 +256,118 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       blockId: blockId,
       commandDelegate: delegate,
     );
+  }
+
+  _BlockMoveWitness _captureMoveWitness(int sourceIndex) {
+    final document = widget.controller.document;
+    return _BlockMoveWitness(
+      blockId: document.blocks[sourceIndex].id,
+      documentRevision: widget.controller.documentRevision,
+      previousBlockId:
+          sourceIndex == 0 ? null : document.blocks[sourceIndex - 1].id,
+      nextBlockId: sourceIndex == document.blockCount - 1
+          ? null
+          : document.blocks[sourceIndex + 1].id,
+    );
+  }
+
+  void _reorderStarted(int index) {
+    if (index < 0 || index >= widget.controller.document.blockCount) return;
+    final witness = _captureMoveWitness(index);
+    _dragMoveWitness = canReorderBlock(witness.blockId) ? witness : null;
+  }
+
+  void _reorderEnded(int _) => _dragMoveWitness = null;
+
+  void _reorder(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= widget.controller.document.blockCount) {
+      _dragMoveWitness = null;
+      return;
+    }
+    final witness = _dragMoveWitness ?? _captureMoveWitness(oldIndex);
+    _dragMoveWitness = null;
+    final targetIndex = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    _moveBlock(witness, targetIndex);
+  }
+
+  bool _moveBlock(_BlockMoveWitness witness, int targetIndex) {
+    if (!canReorderBlock(witness.blockId)) return false;
+    final anchor = _captureViewportAnchor(witness.blockId);
+    final moved = widget.controller.moveBlock(BlockMoveRequest(
+      blockId: witness.blockId,
+      targetIndex: targetIndex,
+      documentRevision: witness.documentRevision,
+      previousBlockId: witness.previousBlockId,
+      nextBlockId: witness.nextBlockId,
+    ));
+    if (!moved) return false;
+    _restoreViewportAnchor(anchor);
+    final nextIndex =
+        widget.controller.document.indexOfBlockId(witness.blockId);
+    if (nextIndex != null) {
+      // Flutter 3.24 does not yet expose the multi-view announcement API.
+      // ignore: deprecated_member_use
+      SemanticsService.announce(
+        'Moved block to position ${nextIndex + 1}',
+        Directionality.of(context),
+      );
+    }
+    return true;
+  }
+
+  _ViewportAnchor? _captureViewportAnchor(String movingBlockId) {
+    if (!_scrollController.hasClients) return null;
+    final index = _heightCache.indexAtOffset(_scrollController.offset);
+    if (index == null) return null;
+    final blocks = widget.controller.document.blocks;
+    var anchorIndex = index;
+    if (blocks[index].id == movingBlockId && blocks.length > 1) {
+      anchorIndex = index + 1 < blocks.length ? index + 1 : index - 1;
+    }
+    return _ViewportAnchor(
+      blocks[anchorIndex].id,
+      _scrollController.offset - _heightCache.offsetBefore(anchorIndex),
+    );
+  }
+
+  void _restoreViewportAnchor(_ViewportAnchor? anchor) {
+    if (anchor == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final index = widget.controller.document.indexOfBlockId(anchor.blockId);
+      if (index == null) return;
+      final position = _scrollController.position;
+      final target =
+          (_heightCache.offsetBefore(index) + anchor.intraBlockOffset)
+              .clamp(position.minScrollExtent, position.maxScrollExtent);
+      if ((_scrollController.offset - target).abs() > 0.5) {
+        _scrollController.jumpTo(target);
+      }
+    });
+  }
+
+  GlobalKey _rowKeyFor(String blockId) {
+    final existing = _rowKeys[blockId];
+    if (existing != null) return existing;
+    final key = GlobalKey(debugLabel: 'homeric-block-$blockId');
+    _rowKeys[blockId] = key;
+    _blockIdsByRowKey[key] = blockId;
+    return key;
+  }
+
+  void _releaseRowKeyWhenUnused(String blockId) {
+    final key = _rowKeys[blockId];
+    if (key == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !identical(_rowKeys[blockId], key) ||
+          key.currentContext != null ||
+          widget.controller.activeBlockId == blockId) {
+        return;
+      }
+      _rowKeys.remove(blockId);
+      _blockIdsByRowKey.remove(key);
+    });
   }
 
   void _validateSession() {
@@ -273,6 +425,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
     _commandHosts.clear();
     _mountedRows.clear();
+    _rowKeys.clear();
+    _blockIdsByRowKey.clear();
     if (widget.scrollController == null) _scrollController.dispose();
     super.dispose();
   }
@@ -305,12 +459,27 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
           sliver: SliverReorderableList(
             itemCount: document.blockCount,
             findChildIndexCallback: (key) {
-              if (key is! ValueKey<String>) return null;
-              return widget.controller.document.indexOfBlockId(key.value);
+              final stableKey = key is GlobalObjectKey && key.value is Key
+                  ? key.value as Key
+                  : key;
+              final blockId = stableKey is GlobalKey
+                  ? _blockIdsByRowKey[stableKey]
+                  : stableKey is ValueKey<String>
+                      ? stableKey.value
+                      : null;
+              return blockId == null
+                  ? null
+                  : widget.controller.document.indexOfBlockId(blockId);
             },
             // Flutter 3.24 exposes only this callback.
             // ignore: deprecated_member_use
-            onReorder: (_, __) {},
+            onReorder: _reorder,
+            onReorderStart: _reorderStarted,
+            onReorderEnd: _reorderEnded,
+            proxyDecorator: (child, _, __) => MouseRegion(
+              cursor: SystemMouseCursors.grabbing,
+              child: child,
+            ),
             itemBuilder: (context, index) {
               final block = document.blocks[index];
               final witness = _heightCache.prepareMeasurement(
@@ -319,17 +488,22 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
                 layoutSignature: (block, _layoutWidth, widget.layoutRevision),
               );
               return _DocumentBlockRow(
-                key: ValueKey<String>(block.id),
+                key: _rowKeyFor(block.id),
                 controller: widget.controller,
                 block: block,
+                index: index,
+                totalCount: document.blockCount,
                 builder: widget.blockBuilder!,
                 witness: witness,
+                canReorder: () => canReorderBlock(block.id),
+                onMove: (delta) => moveBlockBy(block.id, delta),
                 onHeight: _recordHeight,
                 onMount: (context) => _mountedRows[block.id] = context,
                 onUnmount: (context) {
                   if (identical(_mountedRows[block.id], context)) {
                     _mountedRows.remove(block.id);
                   }
+                  _releaseRowKeyWhenUnused(block.id);
                 },
               );
             },
@@ -353,13 +527,38 @@ class _HomericEditableDocumentScope extends InheritedWidget {
       !identical(state, oldWidget.state);
 }
 
+final class _BlockMoveWitness {
+  const _BlockMoveWitness({
+    required this.blockId,
+    required this.documentRevision,
+    required this.previousBlockId,
+    required this.nextBlockId,
+  });
+
+  final String blockId;
+  final int documentRevision;
+  final String? previousBlockId;
+  final String? nextBlockId;
+}
+
+final class _ViewportAnchor {
+  const _ViewportAnchor(this.blockId, this.intraBlockOffset);
+
+  final String blockId;
+  final double intraBlockOffset;
+}
+
 class _DocumentBlockRow extends StatefulWidget {
   const _DocumentBlockRow({
     super.key,
     required this.controller,
     required this.block,
+    required this.index,
+    required this.totalCount,
     required this.builder,
     required this.witness,
+    required this.canReorder,
+    required this.onMove,
     required this.onHeight,
     required this.onMount,
     required this.onUnmount,
@@ -367,8 +566,12 @@ class _DocumentBlockRow extends StatefulWidget {
 
   final HomericEditorController controller;
   final Block block;
+  final int index;
+  final int totalCount;
   final HomericEditableBlockBuilder builder;
   final BlockHeightWitness witness;
+  final ValueGetter<bool> canReorder;
+  final ValueChanged<int> onMove;
   final void Function(BlockHeightWitness witness, double height) onHeight;
   final ValueChanged<BuildContext> onMount;
   final ValueChanged<BuildContext> onUnmount;
@@ -406,7 +609,10 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
     updateKeepAlive();
   }
 
-  void _controllerChanged() => updateKeepAlive();
+  void _controllerChanged() {
+    updateKeepAlive();
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
@@ -419,10 +625,57 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final inheritedColor =
+        DefaultTextStyle.of(context).style.color ?? const Color(0xFF000000);
+    final canReorder = widget.canReorder();
+    final canMoveUp = canReorder && widget.index > 0;
+    final canMoveDown = canReorder && widget.index + 1 < widget.totalCount;
+    final actions = <CustomSemanticsAction, VoidCallback>{
+      if (canMoveUp)
+        const CustomSemanticsAction(label: 'Move block up'): () {
+          widget.onMove(-1);
+        },
+      if (canMoveDown)
+        const CustomSemanticsAction(label: 'Move block down'): () {
+          widget.onMove(1);
+        },
+    };
     return _MeasureNaturalHeight(
       witness: widget.witness,
       onHeight: widget.onHeight,
-      child: widget.builder(context, widget.block, _focusNode),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Semantics(
+            container: true,
+            excludeSemantics: true,
+            button: true,
+            enabled: canReorder,
+            label:
+                'Move block, block ${widget.index + 1} of ${widget.totalCount}',
+            customSemanticsActions: actions,
+            child: ReorderableDragStartListener(
+              index: widget.index,
+              enabled: canReorder,
+              child: MouseRegion(
+                cursor:
+                    canReorder ? SystemMouseCursors.grab : MouseCursor.defer,
+                child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Center(
+                    child: Text(
+                      '⋮',
+                      style: TextStyle(color: inheritedColor.withAlpha(255)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: widget.builder(context, widget.block, _focusNode)),
+        ],
+      ),
     );
   }
 }

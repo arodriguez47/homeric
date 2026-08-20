@@ -558,6 +558,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           const _TraverseIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true):
           const _TraverseIntent(true),
+      const SingleActivator(
+        LogicalKeyboardKey.arrowUp,
+        meta: true,
+        shift: true,
+      ): const _MoveDocumentBlockIntent(-1),
+      const SingleActivator(
+        LogicalKeyboardKey.arrowDown,
+        meta: true,
+        shift: true,
+      ): const _MoveDocumentBlockIntent(1),
     };
     final actions = <Type, Action<Intent>>{
       DoNothingAndStopPropagationTextIntent:
@@ -570,6 +580,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         invoke: (intent) => intent.backward
             ? _focusNode.previousFocus()
             : _focusNode.nextFocus(),
+      ),
+      _MoveDocumentBlockIntent: _HostAction<_MoveDocumentBlockIntent>(
+        // Keep the exact chord at this nearest command boundary even when
+        // composition or a cross-block selection makes the move a no-op.
+        enabled: (_) => _ownsEditingFocus && _documentHost != null,
+        invoke: (intent) => _documentHost?.moveActiveBlock(intent.delta),
       ),
       DismissIntent: _HostAction<DismissIntent>(
         enabled: (_) => _contextMenuController?.isShown ?? false,
@@ -1535,6 +1551,12 @@ final class _MoveCaretIntent extends Intent {
 
   final CaretMovementDirection direction;
   final bool extend;
+}
+
+final class _MoveDocumentBlockIntent extends Intent {
+  const _MoveDocumentBlockIntent(this.delta);
+
+  final int delta;
 }
 
 enum _DragSelectionMode { character, word, paragraph }

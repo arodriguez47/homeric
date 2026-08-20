@@ -1,6 +1,10 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+
+const _style = TextStyle(fontSize: 14);
 
 void main() {
   testWidgets('document drag suspends input and retargets only on release',
@@ -291,8 +295,415 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(scrollController.offset, closeTo(before + 50, 0.01));
+    // The always-visible 44px reorder target is now the row's minimum height.
+    expect(scrollController.offset, closeTo(before + 36, 0.01));
   });
+
+  testWidgets('reorder preserves an unaffected visible viewport anchor',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(60, (index) => 'row $index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(20, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        cacheExtent: 100,
+        estimatedBlockHeight: 44,
+        blockBuilder: (context, block, focusNode) => SizedBox(
+          key: ValueKey('content-${block.id}'),
+          height: 30,
+        ),
+      ),
+    )));
+    final result = key.currentState!.scrollToBlock('block-20');
+    for (var frame = 0; frame < 10; frame++) {
+      await tester.pump();
+    }
+    expect(await result, HomericScrollToBlockResult.reached);
+    final anchor = find.byKey(const ValueKey('content-block-20'));
+    final beforeTop = tester.getTopLeft(anchor).dy;
+
+    expect(key.currentState!.moveBlockBy('block-0', 59), isTrue);
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.getTopLeft(anchor).dy, closeTo(beforeTop, 0.5));
+    expect(controller.document.blocks.last.id, 'block-0');
+  });
+
+  testWidgets('edge grabber is visible, opaque, and reorders only by its drag',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(1, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+
+    final handles = find.text('⋮');
+    expect(handles, findsNWidgets(3));
+    final firstHandle = handles.at(0);
+    expect(tester.getSize(firstHandle).width, lessThanOrEqualTo(44));
+    final handleTarget = find.ancestor(
+      of: firstHandle,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is SizedBox && widget.width == 44 && widget.height == 44,
+      ),
+    );
+    expect(handleTarget, findsOneWidget);
+    final handleText = tester.widget<Text>(firstHandle);
+    // `Color.a` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(handleText.style?.color?.alpha, 255);
+    final mouseRegion = find.ancestor(
+      of: firstHandle,
+      matching: find.byType(MouseRegion),
+    );
+    expect(tester.widget<MouseRegion>(mouseRegion).cursor,
+        SystemMouseCursors.grab);
+
+    final focusedNode = FocusManager.instance.primaryFocus;
+    expect(focusedNode, isNotNull);
+    final inputEpoch = session.debugDeltaCallback;
+    expect(inputEpoch, isNotNull);
+    final gesture = await tester.startGesture(tester.getCenter(firstHandle));
+    await tester.pump();
+    expect(
+      tester
+          .widgetList<MouseRegion>(find.byType(MouseRegion))
+          .any((region) => region.cursor == SystemMouseCursors.grabbing),
+      isTrue,
+    );
+    await gesture.moveBy(const Offset(0, 70));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-1', 'block-2', 'block-0'],
+    );
+    expect(FocusManager.instance.primaryFocus, same(focusedNode));
+    expect(controller.activeBlockId, 'block-1');
+    final resolvedHead =
+        controller.document.resolve(controller.selection!.head);
+    expect(resolvedHead, isA<InlinePosition>());
+    expect((resolvedHead as InlinePosition).block.id, 'block-1');
+    expect(resolvedHead.offset, 2);
+    inputEpoch!(<TextEditingDelta>[
+      const TextEditingDeltaInsertion(
+        oldText: 'beta',
+        textInserted: 'X',
+        insertionOffset: 2,
+        selection: TextSelection.collapsed(offset: 3),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(
+      controller.document.blocks
+          .singleWhere((block) => block.id == 'block-1')
+          .text,
+      'beXta',
+    );
+  });
+
+  testWidgets('Cmd Shift arrows move a focused block once and edge is a no-op',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    final focusedNode = FocusManager.instance.primaryFocus;
+    expect(focusedNode, isNotNull);
+
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+
+    expect(notifications, 1);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-1', 'block-0', 'block-2'],
+    );
+    expect(controller.activeBlockId, 'block-1');
+    expect(FocusManager.instance.primaryFocus, same(focusedNode));
+    expect(controller.canUndo, isTrue);
+
+    notifications = 0;
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(notifications, 0);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-1', 'block-0', 'block-2'],
+    );
+
+    expect(controller.undo(), isTrue);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-0', 'block-1', 'block-2'],
+    );
+  });
+
+  testWidgets('Cmd Shift Down moves a focused block once', (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+
+    expect(notifications, 1);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-0', 'block-2', 'block-1'],
+    );
+    expect(controller.activeBlockId, 'block-1');
+  });
+
+  testWidgets('handle accessibility action uses the same one-move command',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(1, 2)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    final node = tester.getSemantics(
+      find.bySemanticsLabel('Move block, block 2 of 3'),
+    );
+    final actionId = CustomSemanticsAction.getIdentifier(
+      const CustomSemanticsAction(label: 'Move block down'),
+    );
+    expect(
+        node.getSemanticsData().customSemanticsActionIds, contains(actionId));
+
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    // `rootPipelineOwner` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    tester.binding.pipelineOwner.semanticsOwner!.performAction(
+      node.id,
+      SemanticsAction.customAction,
+      actionId,
+    );
+    await tester.pumpAndSettle();
+
+    expect(notifications, 1);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-0', 'block-2', 'block-1'],
+    );
+    expect(controller.activeBlockId, 'block-1');
+    semantics.dispose();
+  });
+
+  testWidgets('all reorder surfaces disable for cross-block selection',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 1),
+        head: document.positionAt(1, 2),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+
+    final before = controller.document;
+    final handle = find.text('⋮').at(1);
+    await tester.drag(handle, const Offset(0, -70));
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+
+    expect(identical(controller.document, before), isTrue);
+    final semantics = tester.getSemantics(
+      find.ancestor(
+        of: handle,
+        matching: find.bySemanticsLabel('Move block, block 2 of 3'),
+      ),
+    );
+    // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(semantics.hasFlag(SemanticsFlag.isEnabled), isFalse);
+
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    final enabledSemantics = tester.getSemantics(
+      find.bySemanticsLabel('Move block, block 2 of 3'),
+    );
+    // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(enabledSemantics.hasFlag(SemanticsFlag.isEnabled), isTrue);
+  });
+
+  testWidgets('composition disables handle and both move shortcuts',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(1, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    expect(
+      controller.applyBlockEditBatch(
+        blockId: 'block-1',
+        edits: const <CanonicalTextEdit>[
+          CanonicalTextEdit(1, 1, 'X'),
+        ],
+        selection: const BlockTextSelection.collapsed(2),
+        composing: const BlockTextRange(1, 2),
+      ),
+      isTrue,
+    );
+    await tester.pump();
+    final before = controller.document;
+
+    final handle = find.text('⋮').at(1);
+    await tester.drag(handle, const Offset(0, -70));
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+
+    expect(identical(controller.document, before), isTrue);
+    final semantics = tester.getSemantics(
+      find.bySemanticsLabel('Move block, block 2 of 3'),
+    );
+    // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(semantics.hasFlag(SemanticsFlag.isEnabled), isFalse);
+  });
+
+  testWidgets('drag witness goes stale when the document changes mid-drag',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(1, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    final handle = find.text('⋮').first;
+    final gesture = await tester.startGesture(tester.getCenter(handle));
+    await tester.pump();
+    expect(controller.replaceSelection('X'), isTrue);
+    await tester.pump();
+
+    await gesture.moveBy(const Offset(0, 70));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-0', 'block-1', 'block-2'],
+    );
+    expect(controller.document.blocks[1].text, 'bXeta');
+  });
+}
+
+Widget _editableDocument(
+  HomericEditorController controller,
+  HomericTextInputSession session,
+) =>
+    _withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        cacheExtent: 0,
+        estimatedBlockHeight: 44,
+        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: block.id,
+          focusNode: focusNode,
+          resolveStyle: (_) => _style,
+        ),
+      ),
+    ));
+
+Future<void> _sendBlockMoveShortcut(
+  WidgetTester tester,
+  LogicalKeyboardKey arrow,
+) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  try {
+    await tester.sendKeyEvent(arrow);
+  } finally {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  }
 }
 
 Widget _withOverlay(Widget child) => Directionality(

@@ -58,19 +58,20 @@ melos run test
 
 ### Run the playground
 
-`packages/homeric/examples/playground` is a runnable Flutter app whose every
-block is a `HomericEditableParagraph`. The blocks share one experimental
-`HomericEditorController` and `HomericTextInputSession`, so keyboard, pointer,
-composition, debug transactions, decorations, and undo all observe the same
-canonical state. It also keeps the Phase 1 transaction controls (`insertText`,
-`deleteRange`, `splitBlock`, `joinBlocks`, `moveBlock`, `setBlockType`, and
-`toggleMark`) for inspecting the pipeline by hand.
+`packages/homeric/examples/playground` is a runnable Flutter app built around
+one `HomericEditableDocument`. Its lazily mounted paragraphs share one
+experimental `HomericEditorController` and `HomericTextInputSession`, so
+keyboard, pointer, composition, cross-block selection, structural editing,
+decorations, and undo/redo all observe the same canonical state. Every row has
+an accessible `⋮` grabber; on macOS, `Cmd+Shift+Up/Down` moves the focused
+block through the same controller command. The Phase 1 transaction controls
+remain available for inspecting the pipeline by hand.
 
-This is the macOS-first [HOM-18](https://linear.app/xana-studios/issue/HOM-18)
-editing foundation. Automated playground coverage is in place; real macOS
-acceptance and Windows/Linux certification are not claimed here. Clipboard,
-history/word gestures, and native menus remain
-[HOM-19](https://linear.app/xana-studios/issue/HOM-19), touch selection remains
+This combines the macOS-first [HOM-18](https://linear.app/xana-studios/issue/HOM-18)
+editing foundation with the multi-block viewport from
+[HOM-6](https://linear.app/xana-studios/issue/HOM-6). Automated playground and
+profile-benchmark coverage are in place; real macOS acceptance and
+Windows/Linux certification are not claimed here. Touch selection remains
 [HOM-20](https://linear.app/xana-studios/issue/HOM-20), and cross-platform IME
 certification remains [HOM-21](https://linear.app/xana-studios/issue/HOM-21).
 

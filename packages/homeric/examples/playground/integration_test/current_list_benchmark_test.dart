@@ -18,7 +18,7 @@ const _scenario = String.fromEnvironment(
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('current lazy-list control', (tester) async {
+  testWidgets('Homeric document viewport profile trace', (tester) async {
     if (_fixtureName.isEmpty) {
       fail('HOMERIC_BENCH_FIXTURE must name a generated corpus file.');
     }

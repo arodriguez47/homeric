@@ -1,6 +1,8 @@
 # Performance Budget
 
-Homeric's reason to exist is large-document performance. Numbers here are the contract.
+Homeric's reason to exist is large-document performance. Numbers here are the
+contract. The current profile route is the real `HomericEditableDocument`
+playground; `benchmarks/baseline.json` retains the pre-viewport comparison.
 
 ## Test fixtures
 

@@ -27,14 +27,27 @@ paragraph can become active, while cross-block selection and structural input
 remain outside this slice. A real macOS acceptance pass is still required, and
 Windows/Linux behavior is explicitly unverified.
 
-Deferred Phase 3 slices are tracked rather than hidden in the foundation:
-[HOM-19](https://linear.app/xana-studios/issue/HOM-19) owns desktop clipboard,
-history/word gestures, and native menus;
-[HOM-20](https://linear.app/xana-studios/issue/HOM-20) owns touch selection and
-mobile gestures; [HOM-21](https://linear.app/xana-studios/issue/HOM-21) owns
-cross-platform IME certification. Multi-block editing remains
-[HOM-6](https://linear.app/xana-studios/issue/HOM-6), and Nexus parity/default
-switching remains [HOM-7](https://linear.app/xana-studios/issue/HOM-7).
+[HOM-19](https://linear.app/xana-studios/issue/HOM-19) adds desktop clipboard,
+redo, word gestures, adaptive menus, and injectable spelling affordances; its
+real macOS acceptance pass remains separate. Deferred Phase 3 slices are
+tracked rather than hidden: [HOM-20](https://linear.app/xana-studios/issue/HOM-20)
+owns touch selection and mobile gestures, while
+[HOM-21](https://linear.app/xana-studios/issue/HOM-21) owns cross-platform IME
+certification. Phase 4 status is below, and Nexus parity/default switching
+remains [HOM-7](https://linear.app/xana-studios/issue/HOM-7).
+
+### Phase 4 status — multi-block viewport
+
+[HOM-6](https://linear.app/xana-studios/issue/HOM-6) now supplies the package's
+document-owned lazy viewport. Natural-height rows remain bounded to the
+viewport/cache plus the active input row; global directional selection,
+structural split/join/paste, selection autoscroll, measured far jumps, and
+undoable block reorder all stay in the single controller/session pipeline.
+Each row exposes an opaque accessible `⋮` grabber, and macOS
+`Cmd+Shift+Up/Down` invokes the same stable-ID move command. The playground is
+the first real consumer. Local automated and profile evidence is recorded;
+manual desktop certification and the Nexus default switch remain separate
+acceptance work.
 
 > **Phase 2's deliverable used to read "All four workarounds die."** It was measured and it is wrong. Three of the four are reached through AppFlowy's editor-wide `textSpanDecorator`, which is not gated on block type, and an aside anchor survives a `# ` conversion onto a heading — so the machinery stays reachable for the block types that remain on AppFlowy. A fourth, `journalAsideAnchorRunRangesIn`, turned out to be a pure delta query the Homeric projection itself depends on. What Phase 2 actually delivers is that the **paragraph path** stops using them; the deletion waits for Phase 5 (HOM-7), when AppFlowy goes. Pinned by `nexus/test/widgets/journal_aside_block_type_test.dart`.
 

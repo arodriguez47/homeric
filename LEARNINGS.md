@@ -2,6 +2,32 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-19 — A recycled row cannot own a document drag
+
+**What:** Multi-block pointer selection began inside a paragraph, but the
+selection anchor, autoscroll generation, and platform-input suspension had to
+move to `HomericEditableDocument`. As the pointer autoscrolled, Flutter
+recycled unrelated paragraph gesture detectors and invoked their reset
+callbacks. Allowing any reset callback to cancel the global drag stopped
+selection at the first recycled row. The document now binds each drag to its
+starting host capability, keeps the input row alive through release, and
+accepts end/cancel only from that owner or from a document-level invalidation.
+
+**Why it mattered:** Virtualization turns ordinary widget disposal into a
+high-frequency event. Lifecycle callbacks that are correct for a standalone
+paragraph become stale capabilities once selection spans blocks. Without an
+owner and generation, recycling can cancel current work, retarget the platform
+connection through every intermediate row, or let a disposed row mutate the
+current selection.
+
+**Rule going forward:** Canonical document state and any transient operation
+that can outlive one mounted row belong to the document host. Row callbacks
+carry owner identity and current geometry; document mutation, dependency
+replacement, focus loss, pointer cancellation, boundaries, and disposal stop
+the operation centrally. Keep natural-height virtualization and input
+capability lifetimes separate: a row may recycle freely unless it owns the
+active platform epoch, while no recycled row may resurrect selection state.
+
 ## editor-architect — 2026-08-18 — Undo must invert mapping metadata, not only steps
 
 **What:** Reversing `Step.invert(docBefore)` calls restored the document but

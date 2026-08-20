@@ -2990,4 +2990,7 @@ final class _CommandDelegate implements HomericTextInputCommandDelegate {
 
   @override
   void showToolbar() {}
+
+  @override
+  void updateFloatingCursor(RawFloatingCursorPoint point) {}
 }

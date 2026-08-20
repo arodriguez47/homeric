@@ -61,6 +61,44 @@ void main() {
     controller.dispose();
   });
 
+  test('floating cursor callbacks stay ordered and bound to their epoch', () {
+    final controller = HomericEditorController(
+      document: _document('ab'),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final oldDelegate = _FakeCommandDelegate();
+    final currentDelegate = _FakeCommandDelegate();
+
+    session.attach(blockId: 'a', commandDelegate: oldDelegate);
+    final stale = session.debugFloatingCursorCallback!;
+    session.attach(blockId: 'a', commandDelegate: currentDelegate);
+    stale(RawFloatingCursorPoint(state: FloatingCursorDragState.Start));
+    expect(oldDelegate.floatingCursorPoints, isEmpty);
+
+    final current = session.debugFloatingCursorCallback!;
+    current(RawFloatingCursorPoint(state: FloatingCursorDragState.Start));
+    current(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Update,
+      offset: const Offset(12, 4),
+    ));
+    current(RawFloatingCursorPoint(state: FloatingCursorDragState.End));
+    expect(
+      currentDelegate.floatingCursorPoints.map((point) => point.state),
+      <FloatingCursorDragState>[
+        FloatingCursorDragState.Start,
+        FloatingCursorDragState.Update,
+        FloatingCursorDragState.End,
+      ],
+    );
+
+    session.blur();
+    current(RawFloatingCursorPoint(state: FloatingCursorDragState.Start));
+    expect(currentDelegate.floatingCursorPoints, hasLength(3));
+    session.dispose();
+    controller.dispose();
+  });
+
   test('attaches a delta client over canonical block text before geometry', () {
     final document = _document('raw **text**');
     final controller = HomericEditorController(
@@ -861,6 +899,8 @@ List<MethodCall> _editingStateCalls(List<MethodCall> calls) =>
 
 final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
   final List<Intent> intents = <Intent>[];
+  final List<RawFloatingCursorPoint> floatingCursorPoints =
+      <RawFloatingCursorPoint>[];
   int toolbarCount = 0;
 
   @override
@@ -871,4 +911,9 @@ final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
 
   @override
   void showToolbar() => toolbarCount++;
+
+  @override
+  void updateFloatingCursor(RawFloatingCursorPoint point) {
+    floatingCursorPoints.add(point);
+  }
 }

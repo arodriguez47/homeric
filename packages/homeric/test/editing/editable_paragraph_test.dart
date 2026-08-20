@@ -3,7 +3,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart'
-    show PointerDeviceKind, kDoubleTapTimeout, kSecondaryMouseButton;
+    show
+        PointerDeviceKind,
+        kDoubleTapTimeout,
+        kLongPressTimeout,
+        kSecondaryMouseButton;
 import 'package:flutter/material.dart'
     show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold;
 import 'package:flutter/services.dart';
@@ -228,6 +232,124 @@ void main() {
     await drag.up();
     await tester.pump();
     expect(controller.selection!.anchor, document.positionAt(0, 5));
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+      'iOS focused long press defers to one epoch-bound floating cursor',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final document = _document('alpha beta');
+    final initial = HomericSelection.collapsed(document.positionAt(0, 1));
+    final controller = HomericEditorController(
+      document: document,
+      selection: initial,
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Padding(
+          padding: const EdgeInsets.all(48),
+          child: SizedBox(
+            width: 200,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: 'b',
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        ),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+
+    final paragraph = find.byType(HomericParagraph);
+    final tap = await tester.startGesture(
+      tester.getCenter(paragraph),
+      kind: PointerDeviceKind.touch,
+    );
+    await tap.up();
+    await tester.pump();
+    expect(controller.selection, isNot(initial),
+        reason: 'an ordinary iOS touch still settles on tap-up');
+    controller.setSelection(initial);
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+    final longPress = await tester.startGesture(
+      tester.getCenter(paragraph),
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await longPress.up();
+    await tester.pump();
+    expect(controller.selection, initial,
+        reason: 'focused iOS long press leaves selection to the platform');
+
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    final callback = session.debugFloatingCursorCallback!;
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Update,
+      offset: const Offset(10, 0),
+    ));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('homeric-floating-caret-b')), findsNothing,
+        reason: 'malformed update-before-start fails closed');
+
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Start,
+      offset: Offset.zero,
+    ));
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Update,
+      offset: const Offset(90, 0),
+    ));
+    await tester.pump();
+    expect(
+        find.byKey(const ValueKey('homeric-floating-caret-b')), findsOneWidget);
+    expect(controller.selection, initial);
+    expect(controller.canUndo, isFalse);
+    expect(notifications, 0);
+
+    callback(RawFloatingCursorPoint(state: FloatingCursorDragState.End));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+        find.byKey(const ValueKey('homeric-floating-caret-b')), findsNothing);
+    expect(controller.selection!.isCollapsed, isTrue);
+    expect(controller.selection, isNot(initial));
+    expect(controller.canUndo, isFalse);
+    expect(notifications, 1);
+
+    final collapsed = controller.selection!;
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Start,
+      offset: Offset.zero,
+    ));
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Update,
+      offset: const Offset(-30, 0),
+    ));
+    final expanded = HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 5),
+    );
+    controller.setSelection(expanded);
+    final notificationsBeforeEnd = notifications;
+    callback(RawFloatingCursorPoint(state: FloatingCursorDragState.End));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.selection, expanded,
+        reason: 'platform-expanded selection wins over floating collapse');
+    expect(controller.selection, isNot(collapsed));
+    expect(notifications, notificationsBeforeEnd);
     debugDefaultTargetPlatformOverride = null;
   });
 

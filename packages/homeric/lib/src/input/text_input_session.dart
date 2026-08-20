@@ -18,6 +18,9 @@ abstract interface class HomericTextInputCommandDelegate {
 
   /// Requests the current host's editing toolbar.
   void showToolbar();
+
+  /// Forwards one ordered platform floating-cursor callback.
+  void updateFloatingCursor(RawFloatingCursorPoint point);
 }
 
 /// Requests a document-owned structural paragraph break.
@@ -92,6 +95,11 @@ final class HomericTextInputSession {
   /// Captures the current adapter's epoch-bound toolbar callback for tests.
   @visibleForTesting
   VoidCallback? get debugToolbarCallback => _client?.showToolbar;
+
+  /// Captures the current adapter's epoch-bound floating-cursor callback.
+  @visibleForTesting
+  ValueChanged<RawFloatingCursorPoint>? get debugFloatingCursorCallback =>
+      _client?.updateFloatingCursor;
 
   /// Opens platform input for [blockId], or reuses its live connection.
   ///
@@ -612,7 +620,10 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   void performPrivateCommand(String action, Map<String, dynamic> data) {}
 
   @override
-  void updateFloatingCursor(RawFloatingCursorPoint point) {}
+  void updateFloatingCursor(RawFloatingCursorPoint point) {
+    if (epoch != session._currentEpoch || session._disposed) return;
+    session._commandDelegate?.updateFloatingCursor(point);
+  }
 
   @override
   void showAutocorrectionPromptRect(int start, int end) {}

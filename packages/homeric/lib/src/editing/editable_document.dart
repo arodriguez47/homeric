@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show RawFloatingCursorPoint;
 import 'package:flutter/widgets.dart';
 
 import '../input/text_input_session.dart';
@@ -2104,6 +2105,9 @@ final class _PendingRowCommandDelegate
 
   @override
   void showToolbar() {}
+
+  @override
+  void updateFloatingCursor(RawFloatingCursorPoint point) {}
 }
 
 class _HomericEditableDocumentScope extends InheritedWidget {

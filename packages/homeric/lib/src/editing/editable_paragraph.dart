@@ -336,8 +336,10 @@ class HomericEditableParagraph extends StatefulWidget {
       _HomericEditableParagraphState();
 }
 
-class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
+class _HomericEditableParagraphState extends State<HomericEditableParagraph>
+    with SingleTickerProviderStateMixin {
   static const _caretBlinkHalfPeriod = Duration(milliseconds: 500);
+  static const _floatingCursorResetDuration = Duration(milliseconds: 75);
 
   late FocusNode _focusNode;
   int _geometryPublicationSerial = 0;
@@ -345,6 +347,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   BlockTextRange? _dragWordAnchor;
   _DragSelectionMode? _dragMode;
   bool _longPressActive = false;
+  ({int position, HomericCaretAffinity affinity})? _pendingIosTap;
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
   ParagraphGeometry? _paragraphGeometry;
@@ -379,6 +382,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   int _caretContentRevision = 0;
   bool _tickerEnabled = true;
   bool _disableAnimations = false;
+  AnimationController? _floatingCursorResetController;
+  Rect? _floatingCursorCaretRect;
+  Rect? _floatingCursorResetFrom;
+  Rect? _floatingCursorResetTo;
+  Offset? _floatingCursorOffsetOrigin;
+  Offset? _floatingCursorStartCenter;
+  ({int offset, HomericCaretAffinity affinity})? _floatingCursorCandidate;
+  int? _floatingCursorDocumentRevision;
+  int? _floatingCursorHostEpoch;
   bool _disposing = false;
 
   HomericEditorController get _controller => widget.controller;
@@ -501,6 +513,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _hostEpoch++;
     _clearTransientState();
     _localTouchOverlayCoordinator.dispose();
+    _floatingCursorResetController?.dispose();
+    _floatingCursorResetController = null;
     _stopCaretBlink();
     _caretVisibility.dispose();
     _clipboard.dispose();
@@ -557,6 +571,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
 
   void _controllerChanged() {
     if (!mounted) return;
+    if (_floatingCursorHostEpoch != null &&
+        (_floatingCursorDocumentRevision != _controller.documentRevision ||
+            _controller.activeBlockId != widget.blockId ||
+            _controller.isReadOnly ||
+            _controller.composing != null)) {
+      _cancelFloatingCursor(notify: false);
+    }
     if (_controller.isReadOnly) {
       if (widget.inputSession.activeBlockId == widget.blockId) {
         widget.inputSession.blur();
@@ -871,7 +892,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           },
         );
         _scheduleGeometryPublication(overlayContext, geometry);
-        final caret = focused && localSelection.isCollapsed
+        final caret = focused &&
+                localSelection.isCollapsed &&
+                _floatingCursorCaretRect == null
             ? geometry
                 .caretRect(
                   DocOffset(localSelection.head),
@@ -884,6 +907,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           onTapDown: (details) => _tapDown(geometry, details),
           onSingleTapUp: (details) {
             if (!consumerGeometry.isCurrent) return;
+            _completeSingleTap(details.kind);
             widget.onSingleTap?.call(
               consumerGeometry,
               details.localPosition,
@@ -959,6 +983,21 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                       ? ColoredBox(color: caretColor)
                       : const SizedBox.shrink(),
                 ),
+              ),
+            ),
+          if (_floatingCursorCaretRect case final floatingCaret?)
+            Positioned.fromRect(
+              key: ValueKey<String>(
+                'homeric-floating-caret-${widget.blockId}',
+              ),
+              rect: Rect.fromLTWH(
+                floatingCaret.left - widget.caretWidth / 2,
+                floatingCaret.top,
+                widget.caretWidth,
+                floatingCaret.height,
+              ),
+              child: IgnorePointer(
+                child: ColoredBox(color: caretColor),
               ),
             ),
         ];
@@ -1459,8 +1498,27 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _dismissContextMenu();
     final hit = _caretForPoint(geometry, details.localPosition);
     _resetPointerState();
+    if (defaultTargetPlatform == TargetPlatform.iOS &&
+        details.kind == PointerDeviceKind.touch &&
+        _ownsEditingFocus &&
+        !_controller.isReadOnly) {
+      _pendingIosTap = hit;
+      return;
+    }
     _relocate(hit.position, hit.position, affinity: hit.affinity);
     _syncTouchSelectionChrome(details.kind);
+  }
+
+  void _completeSingleTap(PointerDeviceKind? kind) {
+    final pending = _pendingIosTap;
+    _pendingIosTap = null;
+    if (pending == null) return;
+    _relocate(
+      pending.position,
+      pending.position,
+      affinity: pending.affinity,
+    );
+    _syncTouchSelectionChrome(kind);
   }
 
   void _doubleTapDown(
@@ -1523,6 +1581,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     LongPressStartDetails details,
   ) {
     if (!_canUsePointer(geometry)) return;
+    if (defaultTargetPlatform == TargetPlatform.iOS &&
+        _ownsEditingFocus &&
+        !_controller.isReadOnly &&
+        widget.inputSession.activeBlockId == widget.blockId) {
+      _resetPointerState();
+      return;
+    }
     _longPressActive = true;
     _dismissContextMenu();
     final word = _wordForPoint(geometry, details.localPosition);
@@ -1844,6 +1909,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
 
   void _resetPointerState() {
     _longPressActive = false;
+    _pendingIosTap = null;
     _dragAnchor = null;
     _dragWordAnchor = null;
     _dragMode = null;
@@ -2122,6 +2188,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   void _clearTransientState() {
+    _cancelFloatingCursor(notify: false);
     _resetPointerState();
     _hideLocalTouchSelectionChrome();
     _secondaryLocalPosition = null;
@@ -2130,6 +2197,197 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     _spellRequestGeneration++;
     _spellRequestKey = null;
     _spellingSuggestions = const [];
+  }
+
+  void _updateFloatingCursor(RawFloatingCursorPoint point, int epoch) {
+    if (!_isHostEpochCurrent(epoch) ||
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return;
+    }
+    switch (point.state) {
+      case FloatingCursorDragState.Start:
+        _startFloatingCursor(point, epoch);
+        return;
+      case FloatingCursorDragState.Update:
+        _moveFloatingCursor(point, epoch);
+        return;
+      case FloatingCursorDragState.End:
+        _endFloatingCursor(epoch);
+        return;
+    }
+  }
+
+  void _startFloatingCursor(RawFloatingCursorPoint point, int epoch) {
+    _cancelFloatingCursor(notify: false);
+    final selection = _localSelection();
+    final geometry = _currentGeometry();
+    if (selection == null ||
+        !selection.isCollapsed ||
+        geometry == null ||
+        !_isCurrentGeometry(geometry) ||
+        _controller.isReadOnly ||
+        _controller.composing != null) {
+      return;
+    }
+    final caret = geometry
+        .caretRect(
+          DocOffset(selection.head),
+          assoc: _assoc(selection.affinity),
+        )
+        .value;
+    _floatingCursorOffsetOrigin = point.offset ?? Offset.zero;
+    _floatingCursorStartCenter = point.startLocation?.$1 ?? caret.center;
+    _floatingCursorCandidate = (
+      offset: selection.head,
+      affinity: selection.affinity,
+    );
+    _floatingCursorDocumentRevision = _controller.documentRevision;
+    _floatingCursorHostEpoch = epoch;
+    _floatingCursorCaretRect = caret;
+    _stopCaretBlink();
+    _caretVisibility.value = true;
+    if (mounted) setState(() {});
+  }
+
+  void _moveFloatingCursor(RawFloatingCursorPoint point, int epoch) {
+    if (_floatingCursorHostEpoch != epoch || point.offset == null) return;
+    final geometry = _currentGeometry();
+    final origin = _floatingCursorOffsetOrigin;
+    final startCenter = _floatingCursorStartCenter;
+    if (!_floatingCursorWitnessIsCurrent(epoch) ||
+        geometry == null ||
+        !_isCurrentGeometry(geometry) ||
+        origin == null ||
+        startCenter == null) {
+      _cancelFloatingCursor();
+      return;
+    }
+    final bounds = geometry.blockRect.value;
+    final rawCenter = startCenter + point.offset! - origin;
+    final boundedCenter = Offset(
+      rawCenter.dx.clamp(bounds.left, bounds.right),
+      rawCenter.dy.clamp(bounds.top, bounds.bottom),
+    );
+    final hit = _caretForPoint(geometry, boundedCenter);
+    final target = geometry
+        .caretRect(
+          DocOffset(hit.position),
+          assoc: _assoc(hit.affinity),
+        )
+        .value;
+    _floatingCursorCandidate = (
+      offset: hit.position,
+      affinity: hit.affinity,
+    );
+    _floatingCursorCaretRect = Rect.fromCenter(
+      center: boundedCenter,
+      width: target.width,
+      height: target.height,
+    );
+    if (mounted) setState(() {});
+  }
+
+  void _endFloatingCursor(int epoch) {
+    if (_floatingCursorHostEpoch != epoch ||
+        !_floatingCursorWitnessIsCurrent(epoch)) {
+      _cancelFloatingCursor();
+      return;
+    }
+    final selection = _localSelection();
+    if (selection == null || !selection.isCollapsed) {
+      _cancelFloatingCursor();
+      return;
+    }
+    final candidate = _floatingCursorCandidate;
+    final geometry = _currentGeometry();
+    if (candidate == null ||
+        geometry == null ||
+        !_isCurrentGeometry(geometry)) {
+      _cancelFloatingCursor();
+      return;
+    }
+    final target = geometry
+        .caretRect(
+          DocOffset(candidate.offset),
+          assoc: _assoc(candidate.affinity),
+        )
+        .value;
+    if (_disableAnimations || _floatingCursorCaretRect == null) {
+      _finishFloatingCursor(epoch);
+      return;
+    }
+    _floatingCursorResetFrom = _floatingCursorCaretRect;
+    _floatingCursorResetTo = target;
+    final controller = _floatingCursorResetController ??= AnimationController(
+      vsync: this,
+      duration: _floatingCursorResetDuration,
+    )
+      ..addListener(_floatingCursorResetTick)
+      ..addStatusListener(_floatingCursorResetStatusChanged);
+    controller.forward(from: 0);
+  }
+
+  void _floatingCursorResetTick() {
+    final from = _floatingCursorResetFrom;
+    final to = _floatingCursorResetTo;
+    final controller = _floatingCursorResetController;
+    if (from == null || to == null || controller == null) return;
+    _floatingCursorCaretRect = Rect.lerp(from, to, controller.value);
+    if (mounted) setState(() {});
+  }
+
+  void _floatingCursorResetStatusChanged(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    final epoch = _floatingCursorHostEpoch;
+    if (epoch == null) {
+      _cancelFloatingCursor();
+    } else {
+      _finishFloatingCursor(epoch);
+    }
+  }
+
+  void _finishFloatingCursor(int epoch) {
+    final candidate = _floatingCursorCandidate;
+    final current = _localSelection();
+    final canSettle = candidate != null &&
+        current != null &&
+        current.isCollapsed &&
+        _floatingCursorWitnessIsCurrent(epoch);
+    _cancelFloatingCursor();
+    if (!canSettle) return;
+    _controller.setSelection(HomericSelection.collapsed(
+      _controller.globalPositionForBlockOffset(
+        widget.blockId,
+        candidate.offset,
+      ),
+      affinity: candidate.affinity,
+    ));
+  }
+
+  bool _floatingCursorWitnessIsCurrent(int epoch) =>
+      _floatingCursorHostEpoch == epoch &&
+      _floatingCursorDocumentRevision == _controller.documentRevision &&
+      _controller.activeBlockId == widget.blockId &&
+      !_controller.isReadOnly &&
+      _controller.composing == null &&
+      _isHostEpochCurrent(epoch);
+
+  void _cancelFloatingCursor({bool notify = true}) {
+    final hadFloatingCursor = _floatingCursorHostEpoch != null ||
+        _floatingCursorCaretRect != null ||
+        (_floatingCursorResetController?.isAnimating ?? false);
+    if (!hadFloatingCursor) return;
+    _floatingCursorResetController?.stop();
+    _floatingCursorResetFrom = null;
+    _floatingCursorResetTo = null;
+    _floatingCursorCaretRect = null;
+    _floatingCursorOffsetOrigin = null;
+    _floatingCursorStartCenter = null;
+    _floatingCursorCandidate = null;
+    _floatingCursorDocumentRevision = null;
+    _floatingCursorHostEpoch = null;
+    _syncCaretBlink(resetVisible: true);
+    if (notify && mounted) setState(() {});
   }
 
   Iterable<_ResolvedSpellingSuggestion> get _currentSpellingSuggestions =>
@@ -2805,6 +3063,11 @@ final class _EditableHostCommandDelegate
   void showToolbar() {
     if (!state._isHostEpochCurrent(epoch)) return;
     state._showContextMenu();
+  }
+
+  @override
+  void updateFloatingCursor(RawFloatingCursorPoint point) {
+    state._updateFloatingCursor(point, epoch);
   }
 }
 

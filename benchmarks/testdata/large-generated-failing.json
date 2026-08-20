@@ -1,0 +1,18 @@
+{
+  "scroll_disabled": {
+    "total_p50_us": 16000,
+    "total_p95_us": 33000
+  },
+  "cold_mount": {
+    "total_p95_us": 50000
+  },
+  "calibration": {
+    "paired_total_p95_delta_basis_points": 100,
+    "valid": true
+  },
+  "homeric": {
+    "cold_load_first_frame_us": 500000,
+    "max_mounted_rows": 500,
+    "layout_median_sample_us": 200000
+  }
+}

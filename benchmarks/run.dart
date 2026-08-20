@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'performance_gate.dart';
+
 const _fixtureCases = <(String, String)>[
   ('tiny.md', 'generated'),
   ('small.md', 'generated'),
@@ -87,16 +89,42 @@ Future<void> main(List<String> arguments) async {
     final exitCode = await process.exitCode;
     if (exitCode != 0) exit(exitCode);
     if (name == 'large-generated') {
-      final result = jsonDecode(await File(resultPath).readAsString())
-          as Map<String, Object?>;
-      final calibration = result['calibration']! as Map<String, Object?>;
-      if (calibration['valid'] != true) {
-        stderr.writeln(
-          'large-generated instrumentation calibration was noisy: '
-          '${calibration['paired_total_p95_delta_basis_points']} bp',
-        );
-        exit(2);
-      }
+      await _enforceLargeGeneratedGate(root, resultPath);
     }
+  }
+}
+
+Future<void> _enforceLargeGeneratedGate(
+    Directory root, String resultPath) async {
+  try {
+    final result = jsonDecode(await File(resultPath).readAsString())
+        as Map<String, Object?>;
+    final calibrationFailure = instrumentationCalibrationFailure(result);
+    if (calibrationFailure != null) {
+      stderr.writeln('large-generated $calibrationFailure');
+      exit(2);
+    }
+
+    final baseline = jsonDecode(
+      await File('${root.path}/benchmarks/baseline.json').readAsString(),
+    ) as Map<String, Object?>;
+    final failures = largeGeneratedBudgetFailures(
+      result: result,
+      baseline: baseline,
+    );
+    if (failures.isEmpty) {
+      stdout.writeln('large-generated performance gate passed');
+      return;
+    }
+
+    stderr.writeln('large-generated performance gate failed:');
+    for (final failure in failures) {
+      stderr.writeln('  - $failure');
+    }
+    exit(3);
+  } on FormatException catch (error) {
+    stderr.writeln('large-generated performance gate could not be evaluated:');
+    stderr.writeln('  - ${error.message}');
+    exit(2);
   }
 }

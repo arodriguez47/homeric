@@ -1,0 +1,175 @@
+const _firstFrameBudgetUs = 500000;
+const _coldMountP95BudgetUs = 50000;
+const _scrollP50BudgetUs = 16000;
+const _scrollP95BudgetUs = 33000;
+const _activeWidgetsBudget = 500;
+const _layoutBudgetUs = 200000;
+const _baselineP95TolerancePercent = 5;
+
+String? instrumentationCalibrationFailure(Map<String, Object?> result) {
+  final calibration = _map(result, 'calibration');
+  if (calibration['valid'] == true) return null;
+  final delta = _integer(
+    calibration,
+    'paired_total_p95_delta_basis_points',
+    path: 'calibration',
+  );
+  return 'instrumentation calibration was noisy: $delta bp';
+}
+
+List<String> largeGeneratedBudgetFailures({
+  required Map<String, Object?> result,
+  required Map<String, Object?> baseline,
+}) {
+  final schema = _integer(baseline, 'schema', path: 'baseline');
+  if (schema != 1) {
+    throw FormatException(
+      'Unsupported benchmarks/baseline.json schema: $schema',
+    );
+  }
+
+  final scrollDisabled = _map(result, 'scroll_disabled');
+  final coldMount = _map(result, 'cold_mount');
+  final homeric = _map(result, 'homeric');
+  final observed = _map(baseline, 'observed');
+
+  final firstFrameUs = _integer(
+    homeric,
+    'cold_load_first_frame_us',
+    path: 'homeric',
+  );
+  final coldMountP95Us = _integer(
+    coldMount,
+    'total_p95_us',
+    path: 'cold_mount',
+  );
+  final scrollP50Us = _integer(
+    scrollDisabled,
+    'total_p50_us',
+    path: 'scroll_disabled',
+  );
+  final scrollP95Us = _integer(
+    scrollDisabled,
+    'total_p95_us',
+    path: 'scroll_disabled',
+  );
+  final activeWidgets = _integer(
+    homeric,
+    'max_mounted_rows',
+    path: 'homeric',
+  );
+  final layoutUs = _integer(
+    homeric,
+    'layout_median_sample_us',
+    path: 'homeric',
+  );
+
+  final failures = <String>[];
+  _requireUnder(
+    failures,
+    label: 'time to first frame',
+    actual: firstFrameUs,
+    budget: _firstFrameBudgetUs,
+    unit: 'us',
+  );
+  _requireUnder(
+    failures,
+    label: 'cold-load p95 frame time',
+    actual: coldMountP95Us,
+    budget: _coldMountP95BudgetUs,
+    unit: 'us',
+  );
+  _requireUnder(
+    failures,
+    label: 'scroll p50 frame time',
+    actual: scrollP50Us,
+    budget: _scrollP50BudgetUs,
+    unit: 'us',
+  );
+  _requireUnder(
+    failures,
+    label: 'scroll p95 frame time',
+    actual: scrollP95Us,
+    budget: _scrollP95BudgetUs,
+    unit: 'us',
+  );
+  _requireUnder(
+    failures,
+    label: 'active widget count',
+    actual: activeWidgets,
+    budget: _activeWidgetsBudget,
+    unit: 'widgets',
+  );
+  _requireUnder(
+    failures,
+    label: 'five-second cumulative paragraph layout',
+    actual: layoutUs,
+    budget: _layoutBudgetUs,
+    unit: 'us',
+  );
+
+  _requireP95WithinBaseline(
+    failures,
+    label: 'cold-load p95 frame time',
+    actual: coldMountP95Us,
+    baseline: _integer(
+      observed,
+      'cold_mount_total_p95_us',
+      path: 'baseline.observed',
+    ),
+  );
+  _requireP95WithinBaseline(
+    failures,
+    label: 'scroll p95 frame time',
+    actual: scrollP95Us,
+    baseline: _integer(
+      observed,
+      'scroll_disabled_total_p95_us',
+      path: 'baseline.observed',
+    ),
+  );
+  return failures;
+}
+
+Map<String, Object?> _map(Map<String, Object?> parent, String key) {
+  final value = parent[key];
+  if (value is Map<String, Object?>) return value;
+  throw FormatException('Expected $key to be a JSON object');
+}
+
+int _integer(
+  Map<String, Object?> parent,
+  String key, {
+  required String path,
+}) {
+  final value = parent[key];
+  if (value is int) return value;
+  throw FormatException('Expected $path.$key to be an integer');
+}
+
+void _requireUnder(
+  List<String> failures, {
+  required String label,
+  required int actual,
+  required int budget,
+  required String unit,
+}) {
+  if (actual < budget) return;
+  failures.add('$label: $actual $unit (must be < $budget $unit)');
+}
+
+void _requireP95WithinBaseline(
+  List<String> failures, {
+  required String label,
+  required int actual,
+  required int baseline,
+}) {
+  if (actual * 100 <= baseline * (100 + _baselineP95TolerancePercent)) {
+    return;
+  }
+  final regression = (actual / baseline - 1) * 100;
+  failures.add(
+    '$label regression: $actual us vs $baseline us baseline '
+    '(${regression.toStringAsFixed(1)}%; max +5.0%)',
+  );
+}

@@ -22,10 +22,24 @@ import '../view_models/document_view_model.dart';
 /// Renders [viewModel]'s document as a scrolling list of blocks.
 class EditorPage extends StatefulWidget {
   /// Creates the editor page over [viewModel].
-  const EditorPage({super.key, required this.viewModel});
+  const EditorPage({
+    super.key,
+    required this.viewModel,
+    this.cacheExtent = 250,
+    this.scrollController,
+  });
 
   /// The document view-model this page renders and edits.
   final DocumentViewModel viewModel;
+
+  /// Logical pixels retained before and after the visible list extent.
+  ///
+  /// Explicitly pinned so benchmark runs do not inherit a framework-default
+  /// change silently.
+  final double cacheExtent;
+
+  /// Optional controller used by deterministic benchmark traces.
+  final ScrollController? scrollController;
 
   @override
   State<EditorPage> createState() => _EditorPageState();
@@ -61,7 +75,12 @@ class _EditorPageState extends State<EditorPage> {
               builder: (context, _) {
                 final document = widget.viewModel.document;
                 return ListView.builder(
+                  controller: widget.scrollController,
                   padding: const EdgeInsets.all(16),
+                  // Flutter 3.24 minimum uses cacheExtent; the replacement
+                  // name exists only on newer SDKs.
+                  // ignore: deprecated_member_use
+                  cacheExtent: widget.cacheExtent,
                   itemCount: document.blockCount,
                   itemBuilder: (context, index) {
                     final block = document.blocks[index];

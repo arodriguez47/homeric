@@ -34,8 +34,16 @@ Measured on Alvaro's MacBook Pro M5 Max, Flutter `stable` channel, release build
 
 ## Regression policy
 
-Once the benchmark harness is rebuilt, PRs touching the editor core automatically run the benchmark suite. A regression of more than **5%** on any p95 metric blocks merge unless the PR explicitly accepts it and updates this document's baseline.
+The benchmark suite currently runs locally; GitHub Actions remain deliberately
+disabled for this phase. A regression of more than **5%** on any p95 metric
+blocks acceptance unless the change explicitly updates the baseline with a
+performance rationale. The median of three paired disabled-versus-instrumented
+p95 deltas above 5% on the 100k fixture invalidates the run as noisy rather
+than proving a product regression.
 
 ## How to measure locally
 
-The benchmark harness is being rebuilt for the from-scratch core; `melos run benchmark` will return alongside it. Baselines will be committed to `benchmarks/` so CI can diff against them.
+Run `melos run benchmark` on macOS. It records profile `FrameTiming`, mounted
+row counts, and cumulative engine paragraph-layout counts/time for the real
+playground editor. Results are local and ignored; the accepted summary lives
+under `benchmarks/`.

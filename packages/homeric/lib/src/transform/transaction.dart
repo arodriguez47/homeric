@@ -86,7 +86,8 @@ final class Transaction {
   /// matching insertion while mapping through this transaction.
   Transaction.inverting(Transaction source)
       : before = source.doc,
-        _doc = source.doc {
+        _doc = source.doc,
+        _blockIdSupplier = source._blockIdSupplier {
     final stepCount = source.steps.length;
     for (var i = stepCount - 1; i >= 0; i--) {
       step(source.steps[i].invert(source.docs[i]));

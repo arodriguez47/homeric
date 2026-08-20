@@ -1,8 +1,7 @@
-/// The editor page: a `ListView` of [HomericEditableParagraph] views over the
-/// current document (R8), with per-build style resolution from a small
-/// in-page theme (R7 — no special plumbing, just calling [resolveStyle]
-/// with the current theme each build). Every paragraph is an editing entry
-/// point backed by the same controller and epoch-bound input session.
+/// The editor page: one [HomericEditableDocument] over the current document,
+/// with per-build style resolution from a small in-page theme. Every paragraph
+/// remains an editing entry point backed by the same controller and
+/// epoch-bound input session.
 ///
 /// This is the "view" side of the flutter-architecture MVVM split: no
 /// business logic lives here — every widget either reads
@@ -70,32 +69,24 @@ class _EditorPageState extends State<EditorPage> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: ListenableBuilder(
-              listenable: widget.viewModel,
-              builder: (context, _) {
-                final document = widget.viewModel.document;
-                return ListView.builder(
-                  controller: widget.scrollController,
-                  padding: const EdgeInsets.all(16),
-                  // Flutter 3.24 minimum uses cacheExtent; the replacement
-                  // name exists only on newer SDKs.
-                  // ignore: deprecated_member_use
-                  cacheExtent: widget.cacheExtent,
-                  itemCount: document.blockCount,
-                  itemBuilder: (context, index) {
-                    final block = document.blocks[index];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _BlockView(
-                        key: ValueKey(block.id),
-                        viewModel: widget.viewModel,
-                        block: block,
-                        baseStyle: _baseStyle,
-                      ),
-                    );
-                  },
-                );
-              },
+            child: HomericEditableDocument.builder(
+              controller: widget.viewModel.editorController,
+              inputSession: widget.viewModel.inputSession,
+              scrollController: widget.scrollController,
+              padding: const EdgeInsets.all(16),
+              cacheExtent: widget.cacheExtent,
+              estimatedBlockHeight: 54,
+              layoutRevision: (_darkText, _fontSize),
+              blockBuilder: (context, block, focusNode) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _BlockView(
+                  key: ValueKey(block.id),
+                  viewModel: widget.viewModel,
+                  block: block,
+                  focusNode: focusNode,
+                  baseStyle: _baseStyle,
+                ),
+              ),
             ),
           ),
         ],
@@ -150,11 +141,13 @@ class _BlockView extends StatelessWidget {
     super.key,
     required this.viewModel,
     required this.block,
+    required this.focusNode,
     required this.baseStyle,
   });
 
   final DocumentViewModel viewModel;
   final Block block;
+  final FocusNode focusNode;
   final TextStyle baseStyle;
 
   @override
@@ -165,6 +158,7 @@ class _BlockView extends StatelessWidget {
       controller: viewModel.editorController,
       inputSession: viewModel.inputSession,
       blockId: block.id,
+      focusNode: focusNode,
       baseStyle: baseStyle,
       resolveStyle: (run) => _resolveRunStyle(run, baseStyle),
       paintLayers: layers,

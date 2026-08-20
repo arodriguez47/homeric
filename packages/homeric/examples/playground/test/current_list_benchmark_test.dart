@@ -25,7 +25,7 @@ void main() {
     ]);
   });
 
-  testWidgets('current ListView baseline never eagerly mounts all rows',
+  testWidgets('document viewport stays lazy across playground scrolling',
       (tester) async {
     tester.view
       ..physicalSize = const Size(1440, 900)
@@ -48,8 +48,10 @@ void main() {
       ),
     ));
 
+    expect(find.byType(HomericEditableDocument), findsOneWidget);
     expect(
         find.byType(HomericEditableParagraph).evaluate().length, lessThan(50));
+    expect(find.text('⋮'), findsWidgets);
     expect(find.text('block 699 has benchmark text'), findsNothing);
 
     await tester.drag(find.byType(Scrollable), const Offset(0, -600));

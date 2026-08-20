@@ -1,5 +1,5 @@
 // Playground integration: Phase 1 debug commands, public canonical editing,
-// shared undo/decorations, and every block mounted as HomericEditableParagraph.
+// shared undo/decorations, and the lazy HomericEditableDocument viewport.
 
 import 'package:flutter/material.dart'
     show ColoredBox, Colors, OutlinedButton, Size, Slider, SnackBar, Switch;

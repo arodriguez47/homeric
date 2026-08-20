@@ -110,6 +110,7 @@ import 'package:meta/meta.dart';
 
 import '../view/view_map.dart';
 import 'paint_layers.dart';
+import 'paragraph_layout_instrumentation.dart';
 import 'paragraph_geometry.dart';
 import 'paragraph_source.dart';
 
@@ -864,8 +865,13 @@ class RenderHomericParagraph extends RenderBox
     builder.pushStyle((_baseStyle ?? const TextStyle())
         .getTextStyle(textScaler: _textScaler));
     builder.addText(' ');
-    return _lineTemplate = builder.build()
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final template = builder.build();
+    HomericParagraphLayoutProbe.layout(
+      HomericParagraphLayoutCategory.template,
+      template,
+      const ui.ParagraphConstraints(width: double.infinity),
+    );
+    return _lineTemplate = template;
   }
 
   /// Lays [paragraph] out at [maxWidth] and returns its natural size.
@@ -873,11 +879,22 @@ class RenderHomericParagraph extends RenderBox
   /// An infinite max width gets a second pass at the max intrinsic width,
   /// so ParagraphStyle-driven alignment always works against a finite
   /// width (TextPainter's adjusted-max-width dance).
-  Size _layoutAt(ui.Paragraph paragraph, double maxWidth) {
-    paragraph.layout(ui.ParagraphConstraints(width: maxWidth));
+  Size _layoutAt(
+    ui.Paragraph paragraph,
+    double maxWidth,
+    HomericParagraphLayoutCategory category,
+  ) {
+    HomericParagraphLayoutProbe.layout(
+      category,
+      paragraph,
+      ui.ParagraphConstraints(width: maxWidth),
+    );
     if (!maxWidth.isFinite) {
-      paragraph
-          .layout(ui.ParagraphConstraints(width: paragraph.maxIntrinsicWidth));
+      HomericParagraphLayoutProbe.layout(
+        category,
+        paragraph,
+        ui.ParagraphConstraints(width: paragraph.maxIntrinsicWidth),
+      );
     }
     return Size(paragraph.width, paragraph.height);
   }
@@ -968,7 +985,11 @@ class RenderHomericParagraph extends RenderBox
       _rebuildForPaint = false;
     }
     _liveDimensions = dimensions;
-    final natural = _layoutAt(paragraph, constraints.maxWidth);
+    final natural = _layoutAt(
+      paragraph,
+      constraints.maxWidth,
+      HomericParagraphLayoutCategory.live,
+    );
     _layoutGeneration += 1;
     size = constraints.constrain(natural);
     _positionChildren(paragraph);
@@ -1022,8 +1043,12 @@ class RenderHomericParagraph extends RenderBox
         ? _intrinsicWidthDimensions(
             (child) => child.getMinIntrinsicWidth(double.infinity))
         : _externalDimensions();
-    final paragraph = _intrinsicsFor(dimensions)
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final paragraph = _intrinsicsFor(dimensions);
+    HomericParagraphLayoutProbe.layout(
+      HomericParagraphLayoutCategory.intrinsic,
+      paragraph,
+      const ui.ParagraphConstraints(width: double.infinity),
+    );
     return paragraph.minIntrinsicWidth;
   }
 
@@ -1033,31 +1058,47 @@ class RenderHomericParagraph extends RenderBox
         ? _intrinsicWidthDimensions(
             (child) => child.getMaxIntrinsicWidth(double.infinity))
         : _externalDimensions();
-    final paragraph = _intrinsicsFor(dimensions)
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final paragraph = _intrinsicsFor(dimensions);
+    HomericParagraphLayoutProbe.layout(
+      HomericParagraphLayoutCategory.intrinsic,
+      paragraph,
+      const ui.ParagraphConstraints(width: double.infinity),
+    );
     return paragraph.maxIntrinsicWidth;
   }
 
   @override
-  double computeMinIntrinsicHeight(double width) =>
-      _layoutAt(_intrinsicsFor(_dryDimensions(width)), width).height;
+  double computeMinIntrinsicHeight(double width) => _layoutAt(
+        _intrinsicsFor(_dryDimensions(width)),
+        width,
+        HomericParagraphLayoutCategory.intrinsic,
+      ).height;
 
   @override
-  double computeMaxIntrinsicHeight(double width) =>
-      _layoutAt(_intrinsicsFor(_dryDimensions(width)), width).height;
+  double computeMaxIntrinsicHeight(double width) => _layoutAt(
+        _intrinsicsFor(_dryDimensions(width)),
+        width,
+        HomericParagraphLayoutCategory.intrinsic,
+      ).height;
 
   @override
   @protected
   Size computeDryLayout(covariant BoxConstraints constraints) =>
       constraints.constrain(_layoutAt(
-          _intrinsicsFor(_dryDimensions(constraints.maxWidth)),
-          constraints.maxWidth));
+        _intrinsicsFor(_dryDimensions(constraints.maxWidth)),
+        constraints.maxWidth,
+        HomericParagraphLayoutCategory.intrinsic,
+      ));
 
   @override
   double? computeDryBaseline(
       covariant BoxConstraints constraints, TextBaseline baseline) {
     final paragraph = _intrinsicsFor(_dryDimensions(constraints.maxWidth));
-    _layoutAt(paragraph, constraints.maxWidth);
+    _layoutAt(
+      paragraph,
+      constraints.maxWidth,
+      HomericParagraphLayoutCategory.intrinsic,
+    );
     if (paragraph.numberOfLines == 0) {
       return switch (baseline) {
         TextBaseline.alphabetic => preferredLineBaseline,
@@ -1099,8 +1140,12 @@ class RenderHomericParagraph extends RenderBox
       // (TextPainter.paint's _rebuildParagraphForPaint path). Slot
       // dimensions are the live ones: a paint-only change cannot resize
       // children.
-      final rebuilt = _buildParagraph(_liveDimensions!)
-        ..layout(ui.ParagraphConstraints(width: paragraph.width));
+      final rebuilt = _buildParagraph(_liveDimensions!);
+      HomericParagraphLayoutProbe.layout(
+        HomericParagraphLayoutCategory.paintRebuild,
+        rebuilt,
+        ui.ParagraphConstraints(width: paragraph.width),
+      );
       assert(() {
         if (rebuilt.width != paragraph.width ||
             rebuilt.height != paragraph.height ||

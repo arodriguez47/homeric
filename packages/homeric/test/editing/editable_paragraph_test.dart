@@ -705,6 +705,125 @@ void main() {
     handle.dispose();
   });
 
+  testWidgets('consumer decorations project from the current canonical block',
+      (tester) async {
+    final document = Document([
+      Block(
+        id: 'b',
+        type: 'paragraph',
+        runs: [
+          InlineRun('a', attributes: const {'tone': 'warm'}),
+          InlineRun('b'),
+        ],
+      ),
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      decorations: DecorationSet.of([
+        Decoration.inline('b', 0, 2, spec: 'controller'),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final canonicalDecorations = controller.decorations;
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    Iterable<Decoration> project(Block block) sync* {
+      var offset = 0;
+      for (final run in block.runs) {
+        final tone = run.attributes['tone'];
+        if (tone != null) {
+          yield Decoration.inline(
+            block.id,
+            offset,
+            offset + run.length,
+            spec: tone,
+          );
+        }
+        offset += run.length;
+      }
+    }
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      deriveDecorations: project,
+      derivePaintLayers: (block, decorations) => <PaintLayer>[
+        for (final decoration in decorations)
+          if (decoration.spec == 'warm' || decoration.spec == 'cool')
+            PaintLayer(
+              range: DocRange(
+                DocOffset(decoration.start),
+                DocOffset(decoration.end),
+              ),
+              band: PaintBand.underlay,
+              painter: solidWashPainter,
+              spec: SolidWashSpec(
+                decoration.spec == 'warm'
+                    ? const Color(0x11FF0000)
+                    : const Color(0x110000FF),
+              ),
+            ),
+      ],
+      resolveStyle: (run) => TextStyle(
+        color: switch (run.decorations.map((item) => item.spec).toSet()) {
+          final specs when specs.contains('warm') => const Color(0xFFFF0000),
+          final specs when specs.contains('cool') => const Color(0xFF0000FF),
+          _ => const Color(0xFF000000),
+        },
+        decoration: run.decorations.any((item) => item.spec == 'controller')
+            ? TextDecoration.underline
+            : null,
+      ),
+    )));
+    await tester.pump();
+
+    RenderHomericParagraph render() =>
+        tester.renderObject(find.byType(HomericParagraph));
+    TextStyle styleAt(int offset) => render()
+        .source
+        .segments
+        .whereType<TextSegment<TextStyle>>()
+        .singleWhere((segment) =>
+            segment.viewStart <= offset && segment.viewEnd > offset)
+        .style;
+    expect(styleAt(0).color, const Color(0xFFFF0000));
+    expect(styleAt(0).decoration, TextDecoration.underline,
+        reason: 'consumer projection merges with controller decorations');
+    expect(
+      (render().paintLayers.single.spec as SolidWashSpec).color,
+      const Color(0x11FF0000),
+    );
+    expect(styleAt(1).color, const Color(0xFF000000));
+
+    final mark = Transaction(controller.document)
+      ..step(AddMarkStep(2, 3, 'tone', 'cool'));
+    expect(controller.applyTransaction(mark), isTrue);
+    await tester.pump();
+
+    expect(styleAt(1).color, const Color(0xFF0000FF),
+        reason: 'projection must read the new immutable Block, not a stale '
+            'parent-built decoration list');
+    expect(styleAt(1).decoration, TextDecoration.underline);
+    expect(
+      (render().paintLayers.last.spec as SolidWashSpec).color,
+      const Color(0x110000FF),
+      reason: 'derived paint observes the same current merged decorations',
+    );
+    expect(controller.decorations, same(canonicalDecorations),
+        reason: 'transient projection never enters canonical history');
+
+    expect(controller.undo(), isTrue);
+    await tester.pump();
+    expect(styleAt(1).color, const Color(0xFF000000));
+    expect(controller.redo(), isTrue);
+    await tester.pump();
+    expect(styleAt(1).color, const Color(0xFF0000FF),
+        reason: 'undo and redo each derive from their current immutable block');
+    expect(controller.decorations, same(canonicalDecorations));
+  });
+
   testWidgets('hidden deletion callback runs before canonical mutation',
       (tester) async {
     final document = _document('**bold**');

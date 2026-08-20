@@ -30,6 +30,23 @@ typedef HomericEditableOverlayBuilder = List<Widget> Function(
   HomericEditableBlockGeometry geometry,
 );
 
+/// Projects transient consumer decorations from the current immutable block.
+///
+/// The callback runs inside each paragraph rebuild, after the controller has
+/// resolved [blockId]. Returned decorations are merged with the controller's
+/// canonical [DecorationSet] for layout, reveal, painting, slots, and
+/// semantics, but are never written into editor history.
+typedef HomericBlockDecorationDeriver = Iterable<Decoration> Function(
+  Block block,
+);
+
+/// Derives transient paint layers from the current block and merged
+/// controller-plus-consumer decorations.
+typedef HomericBlockPaintLayerDeriver = Iterable<PaintLayer> Function(
+  Block block,
+  Iterable<Decoration> decorations,
+);
+
 /// A generation-stamped geometry capability for one editable block.
 ///
 /// Query methods return `null` after the render generation becomes stale.
@@ -131,12 +148,14 @@ class HomericEditableParagraph extends StatefulWidget {
     this.baseStyle,
     this.textAlign = TextAlign.start,
     this.textScaler,
+    this.deriveDecorations,
     this.slotBuilder,
     this.slotLayoutRevision,
     this.slotAlignment = ui.PlaceholderAlignment.middle,
     this.slotBaseline,
     this.paintStyler,
     this.paintLayers = const <PaintLayer>[],
+    this.derivePaintLayers,
     this.caretColor,
     this.selectionColor,
     this.inactiveSelectionColor,
@@ -177,6 +196,14 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Explicit text scaling override.
   final TextScaler? textScaler;
 
+  /// Derives consumer-owned, non-history decorations from the live block.
+  ///
+  /// Results must target [blockId]. They are recomputed rather than retained
+  /// or mapped, and stable logical projections should reuse opaque `spec`
+  /// identities to avoid unnecessary slot replacement or paragraph shaping.
+  /// Range painting remains the separate [paintLayers] contract.
+  final HomericBlockDecorationDeriver? deriveDecorations;
+
   /// Builds inline slot children.
   final SlotWidgetBuilder? slotBuilder;
 
@@ -196,6 +223,13 @@ class HomericEditableParagraph extends StatefulWidget {
   /// fixed order: existing underlays, selection, glyphs, existing overlays,
   /// composing underline, then caret.
   final List<PaintLayer> paintLayers;
+
+  /// Derives consumer-owned paint from the same current projection used by
+  /// layout, slots, reveal, and semantics. Results are transient and do not
+  /// enter controller state or history. They are paint-only and carry no
+  /// accessibility meaning; use stable painter identities and value-equal
+  /// specs when the logical result is unchanged.
+  final HomericBlockPaintLayerDeriver? derivePaintLayers;
 
   /// Focused caret color, or a visible brightness-aware default.
   final Color? caretColor;
@@ -511,7 +545,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final fullySelectedEmptyBlock = block.contentLength == 0 &&
         (_documentHost?.isBlockFullySelected(widget.blockId) ?? false);
     final localComposing = _localComposing();
-    final decorations = _controller.decorations.forBlock(widget.blockId);
+    final derivedDecorations = widget.deriveDecorations?.call(block);
+    final decorations = List<Decoration>.unmodifiable(<Decoration>[
+      ..._controller.decorations.forBlock(widget.blockId),
+      if (derivedDecorations != null) ...derivedDecorations,
+    ]);
     final reveal = _revealState(decorations, localSelection, localComposing);
     final source = ParagraphSource<TextStyle>.build(
       block: block,
@@ -551,8 +589,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         (brightness == Brightness.dark
             ? const Color(0xFFFF7B72)
             : const Color(0xFFD93025));
+    final derivedPaintLayers = List<PaintLayer>.unmodifiable(
+      widget.derivePaintLayers?.call(block, decorations) ??
+          const <PaintLayer>[],
+    );
     final editingLayers = <PaintLayer>[
       ...widget.paintLayers,
+      ...derivedPaintLayers,
       if (localSelection != null && !localSelection.isCollapsed)
         PaintLayer(
           range: DocRange(

@@ -88,10 +88,12 @@ final class HomericEditorCommand {
   /// Canonical inserted text for [HomericCommandKind.preInsert].
   final String? text;
 
-  /// Boundary-join direction for [HomericCommandKind.preDelete].
+  /// Structural-boundary direction for [HomericCommandKind.preDelete].
   ///
-  /// `false` joins the active block backward, `true` joins it forward, and
-  /// `null` identifies a block-local or range deletion rather than a join.
+  /// `false` requests the boundary before the active block, `true` requests
+  /// the boundary after it, and `null` identifies a block-local or range
+  /// deletion. At a flat document edge the built-in command remains a no-op,
+  /// but a consumer may claim the request for its own enclosing topology.
   final bool? forward;
 
   /// Explicit first trailing block identity requested for a paragraph break.
@@ -1073,7 +1075,12 @@ class HomericEditorController extends ChangeNotifier {
       final boundary = CharacterBoundary(host.block.text);
       if (backward) {
         if (offset == 0) {
-          if (host.blockIndex == 0) return false;
+          if (host.blockIndex == 0) {
+            return _interceptDocumentEdgeDelete(
+              host.block.id,
+              forward: false,
+            );
+          }
           return _joinAtBoundary(
             host.blockIndex,
             _document.blocks[host.blockIndex - 1].contentLength,
@@ -1083,7 +1090,12 @@ class HomericEditorController extends ChangeNotifier {
         start = boundary.getLeadingTextBoundaryAt(offset - 1) ?? 0;
       } else {
         if (offset == host.block.contentLength) {
-          if (host.blockIndex == _document.blockCount - 1) return false;
+          if (host.blockIndex == _document.blockCount - 1) {
+            return _interceptDocumentEdgeDelete(
+              host.block.id,
+              forward: true,
+            );
+          }
           return _joinAtBoundary(
             host.blockIndex + 1,
             offset,
@@ -1100,6 +1112,19 @@ class HomericEditorController extends ChangeNotifier {
       selection: BlockTextSelection.collapsed(start),
     );
   }
+
+  bool _interceptDocumentEdgeDelete(
+    String blockId, {
+    required bool forward,
+  }) =>
+      _interceptedResult(HomericEditorCommand(
+        kind: HomericCommandKind.preDelete,
+        controller: this,
+        selection: _selection,
+        blockId: blockId,
+        forward: forward,
+      )) ??
+      false;
 
   bool _joinAtBoundary(
     int insertionIndex,

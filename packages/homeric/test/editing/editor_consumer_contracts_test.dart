@@ -256,6 +256,41 @@ void main() {
       expect(directions, <bool?>[false, true, null]);
     });
 
+    test('document-edge deletes remain available to consumer topology', () {
+      final document = _document(['ab']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+      );
+      addTearDown(controller.dispose);
+      final commands = <({String? blockId, bool? forward})>[];
+      controller.addCommandInterceptor((command) {
+        if (command.kind != HomericCommandKind.preDelete) {
+          return HomericCommandInterception.ignored;
+        }
+        commands.add((blockId: command.blockId, forward: command.forward));
+        return HomericCommandInterception.rejected(#consumerBoundary);
+      });
+
+      expect(controller.deleteBackward(), isFalse);
+      expect(controller.lastCommandRejection?.reason, #consumerBoundary);
+
+      controller.setSelection(HomericSelection.collapsed(
+        document.positionAt(0, document.blocks.single.contentLength),
+      ));
+      expect(controller.deleteForward(), isFalse);
+
+      expect(
+        commands,
+        <({String? blockId, bool? forward})>[
+          (blockId: 'a', forward: false),
+          (blockId: 'a', forward: true),
+        ],
+      );
+      expect(controller.document, same(document));
+      expect(controller.canUndo, isFalse);
+    });
+
     test('ignored or rejected interceptors cannot mutate then continue', () {
       final document = _document(['ab']);
       final controller = HomericEditorController(

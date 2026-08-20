@@ -12,6 +12,7 @@ import '../model/document.dart';
 import '../model/inline_run.dart';
 import '../model/position.dart';
 import '../model/selection.dart';
+import '../transform/builders.dart';
 import '../transform/replace_step.dart';
 import '../transform/transaction.dart';
 
@@ -140,6 +141,37 @@ final class CanonicalEditTarget {
   int get hashCode => Object.hash(blockId, start, end);
 }
 
+/// A stale-safe request to move one stable block to [targetIndex].
+///
+/// [previousBlockId] and [nextBlockId] are the source block's neighbors at
+/// capture time. Together with [documentRevision] they prevent a delayed drop
+/// or shortcut from applying to a structurally different document.
+final class BlockMoveRequest {
+  /// Creates a captured block-move request.
+  const BlockMoveRequest({
+    required this.blockId,
+    required this.targetIndex,
+    required this.documentRevision,
+    required this.previousBlockId,
+    required this.nextBlockId,
+  });
+
+  /// Stable ID of the block being moved.
+  final String blockId;
+
+  /// Destination index in the resulting document.
+  final int targetIndex;
+
+  /// Controller document revision observed when this request was captured.
+  final int documentRevision;
+
+  /// Source neighbor immediately before [blockId], or null at the start.
+  final String? previousBlockId;
+
+  /// Source neighbor immediately after [blockId], or null at the end.
+  final String? nextBlockId;
+}
+
 /// Events that interrupt an open platform composition.
 enum CompositionInterruption {
   blur,
@@ -195,8 +227,11 @@ class HomericEditorController extends ChangeNotifier {
       );
     }
     if (!_isValidSelection(document, selection)) {
-      throw ArgumentError.value(selection, 'selection',
-          'endpoints must resolve inside the same block');
+      throw ArgumentError.value(
+        selection,
+        'selection',
+        'endpoints must resolve inside document blocks',
+      );
     }
     if (!_isValidComposing(document, selection, composing)) {
       throw ArgumentError.value(composing, 'composing',
@@ -216,6 +251,7 @@ class HomericEditorController extends ChangeNotifier {
   bool _compositionDidEdit = false;
   int _stateRevision = 0;
   int _contentRevision = 0;
+  int _documentRevision = 0;
 
   /// Called synchronously before a mutation touching hidden canonical text.
   ///
@@ -253,6 +289,12 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Monotonic witness for changes to canonical block text.
   int get contentRevision => _contentRevision;
+
+  /// Monotonic witness for every canonical document version change.
+  ///
+  /// Unlike [stateRevision], selection-only movement does not advance it.
+  /// Unlike [contentRevision], a reorder of text-identical blocks does.
+  int get documentRevision => _documentRevision;
 
   /// Stable id of the selection's active block, or `null` without selection.
   String? get activeBlockId {
@@ -366,6 +408,146 @@ class HomericEditorController extends ChangeNotifier {
     );
   }
 
+  /// Replaces the directional canonical selection with possibly multiline
+  /// [text] as one structural transaction.
+  ///
+  /// Line separators create blocks, including empty blocks between adjacent
+  /// separators. The leading selected block keeps its stable ID. Every
+  /// additional block receives a fresh transaction-scoped ID; callers may
+  /// pin the first one with [firstTrailingBlockId] for deterministic split
+  /// and replay tests.
+  bool replaceSelectionStructurally(
+    String text, {
+    String? firstTrailingBlockId,
+  }) {
+    if (_compositionStart != null || _composing != null) return false;
+    final current = _selection;
+    if (current == null || !_isValidSelection(_document, current)) {
+      return false;
+    }
+    final normalized = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final segments = normalized.split('\n');
+    final start = _document.resolve(current.start);
+    final end = _document.resolve(current.end);
+    if (start is! InlinePosition || end is! InlinePosition) return false;
+    if (segments.length == 1 && start.blockIndex == end.blockIndex) {
+      return replaceSelection(segments.single);
+    }
+
+    final tx = Transaction(_document);
+    String? lastInsertedId;
+    try {
+      final inserted = <Block>[];
+      for (var index = 0; index < segments.length; index++) {
+        final id = switch (index) {
+          0 => start.block.id,
+          1 when firstTrailingBlockId != null => firstTrailingBlockId,
+          _ => tx.allocateBlockId(),
+        };
+        lastInsertedId = id;
+        inserted.add(Block(
+          id: id,
+          type: start.block.type,
+          attributes: start.block.attributes,
+          runs: segments[index].isEmpty
+              ? const <InlineRun>[]
+              : <InlineRun>[
+                  InlineRun(
+                    segments[index],
+                    attributes: _typingAttributes(
+                      start.block,
+                      start.offset,
+                      start.offset,
+                    ),
+                  ),
+                ],
+        ));
+      }
+      tx.step(ReplaceStep(
+        current.start,
+        current.end,
+        Slice(inserted, openStart: true, openEnd: true),
+      ));
+    } on ArgumentError {
+      return false;
+    } on PositionOutOfRangeError {
+      return false;
+    } on StepFailedError {
+      return false;
+    } on StateError {
+      return false;
+    }
+
+    final result = tx.finish();
+    final targetId = segments.length == 1 ? start.block.id : lastInsertedId!;
+    final targetIndex = result.doc.indexOfBlockId(targetId);
+    if (targetIndex == null) return false;
+    final targetOffset = segments.length == 1
+        ? start.offset + segments.single.length
+        : segments.last.length;
+    final nextSelection = HomericSelection.collapsed(
+      result.doc.positionAt(targetIndex, targetOffset),
+    );
+    return _commitStructuralTransaction(
+      tx,
+      result,
+      nextSelection,
+      revealTargets: _hiddenTargetsForSelection(current),
+    );
+  }
+
+  /// Splits after replacing any expanded selection, focusing the fresh
+  /// trailing block at offset zero.
+  bool insertParagraphBreak({String? trailingBlockId}) =>
+      replaceSelectionStructurally(
+        '\n',
+        firstTrailingBlockId: trailingBlockId,
+      );
+
+  /// Applies a stale-safe stable-ID block move as one history unit.
+  ///
+  /// Directional selection endpoints are mapped through the mirrored move;
+  /// the model preserves endpoints and affinity, not a non-contiguous set of
+  /// content when a moved block crosses the other endpoint.
+  bool moveBlock(BlockMoveRequest request) {
+    if (_compositionStart != null ||
+        _composing != null ||
+        request.documentRevision != _documentRevision) {
+      return false;
+    }
+    final sourceIndex = _document.indexOfBlockId(request.blockId);
+    if (sourceIndex == null ||
+        request.targetIndex < 0 ||
+        request.targetIndex >= _document.blockCount ||
+        request.targetIndex == sourceIndex) {
+      return false;
+    }
+    final previous =
+        sourceIndex == 0 ? null : _document.blocks[sourceIndex - 1].id;
+    final next = sourceIndex == _document.blockCount - 1
+        ? null
+        : _document.blocks[sourceIndex + 1].id;
+    if (previous != request.previousBlockId || next != request.nextBlockId) {
+      return false;
+    }
+    final tx = Transaction(_document);
+    try {
+      tx.moveBlock(request.blockId, request.targetIndex);
+    } on ArgumentError {
+      return false;
+    } on StepFailedError {
+      return false;
+    }
+    final result = tx.finish();
+    final mappedSelection = _selection?.map(result.mapping);
+    if (!_isValidSelection(result.doc, mappedSelection)) return false;
+    return _commitStructuralTransaction(
+      tx,
+      result,
+      mappedSelection,
+    );
+  }
+
   /// Deletes the selection or the preceding canonical grapheme.
   bool deleteBackward() => _deleteCanonical(backward: true);
 
@@ -376,17 +558,29 @@ class HomericEditorController extends ChangeNotifier {
     if (_compositionStart != null || _composing != null) return false;
     final current = _selection;
     final host = _selectionHost(_document, current);
-    if (current == null || host == null) return false;
+    if (current == null || !_isValidSelection(_document, current)) return false;
+    if (host == null) {
+      return current.isCollapsed ? false : replaceSelectionStructurally('');
+    }
     var start = current.start - host.blockStart - 1;
     var end = current.end - host.blockStart - 1;
     if (current.isCollapsed) {
       final offset = start;
       final boundary = CharacterBoundary(host.block.text);
       if (backward) {
-        if (offset == 0) return false;
+        if (offset == 0) {
+          if (host.blockIndex == 0) return false;
+          return _joinAtBoundary(
+            host.blockIndex,
+            _document.blocks[host.blockIndex - 1].contentLength,
+          );
+        }
         start = boundary.getLeadingTextBoundaryAt(offset - 1) ?? 0;
       } else {
-        if (offset == host.block.contentLength) return false;
+        if (offset == host.block.contentLength) {
+          if (host.blockIndex == _document.blockCount - 1) return false;
+          return _joinAtBoundary(host.blockIndex + 1, offset);
+        }
         end = boundary.getTrailingTextBoundaryAt(offset) ??
             host.block.contentLength;
       }
@@ -396,6 +590,87 @@ class HomericEditorController extends ChangeNotifier {
       edits: [CanonicalTextEdit(start, end, '')],
       selection: BlockTextSelection.collapsed(start),
     );
+  }
+
+  bool _joinAtBoundary(int insertionIndex, int caretOffset) {
+    final leadingIndex = insertionIndex - 1;
+    if (leadingIndex < 0 || insertionIndex >= _document.blockCount) {
+      return false;
+    }
+    final tx = Transaction(_document);
+    try {
+      tx.joinBlocks(_document.positionBeforeBlock(insertionIndex));
+    } on ArgumentError {
+      return false;
+    } on StepFailedError {
+      return false;
+    }
+    final result = tx.finish();
+    return _commitStructuralTransaction(
+      tx,
+      result,
+      HomericSelection.collapsed(
+        result.doc.positionAt(leadingIndex, caretOffset),
+      ),
+    );
+  }
+
+  bool _commitStructuralTransaction(
+    Transaction transaction,
+    TransactionResult result,
+    HomericSelection? nextSelection, {
+    Iterable<CanonicalEditTarget> revealTargets = const <CanonicalEditTarget>[],
+  }) {
+    if (!identical(transaction.before, _document) ||
+        !transaction.docChanged ||
+        !_isValidSelection(result.doc, nextSelection)) {
+      return false;
+    }
+    final before = _snapshot();
+    final callback = onBeforeCanonicalMutation;
+    if (callback != null) {
+      for (final target in revealTargets.toSet()) {
+        callback(target);
+      }
+    }
+    _document = result.doc;
+    _decorations = _decorations.map(result.mapping, result.changes);
+    _selection = nextSelection;
+    _composing = null;
+    _preferredX = null;
+    _pushUndo(before);
+    _redoStack.clear();
+    _notifyTransition(
+      documentChanged: true,
+      contentChanged: _canonicalTextDiffers(before.document, _document),
+    );
+    return true;
+  }
+
+  Iterable<CanonicalEditTarget> _hiddenTargetsForSelection(
+    HomericSelection selection,
+  ) sync* {
+    if (selection.isCollapsed) return;
+    final start = _document.resolve(selection.start);
+    final end = _document.resolve(selection.end);
+    if (start is! InlinePosition || end is! InlinePosition) return;
+    for (var index = start.blockIndex; index <= end.blockIndex; index++) {
+      final block = _document.blocks[index];
+      final localStart = index == start.blockIndex ? start.offset : 0;
+      final localEnd =
+          index == end.blockIndex ? end.offset : block.contentLength;
+      for (final decoration in _decorations.forBlock(block.id)) {
+        if (decoration.kind == DecorationKind.replace &&
+            decoration.end > localStart &&
+            decoration.start < localEnd) {
+          yield CanonicalEditTarget(
+            block.id,
+            decoration.start,
+            decoration.end,
+          );
+        }
+      }
+    }
   }
 
   /// Applies sequential canonical edits as one observable transition.
@@ -502,6 +777,7 @@ class HomericEditorController extends ChangeNotifier {
     }
     if (tx.docChanged) _redoStack.clear();
     _notifyTransition(
+      documentChanged: tx.docChanged,
       contentChanged: _canonicalTextDiffers(before.document, _document),
     );
     return true;
@@ -533,6 +809,7 @@ class HomericEditorController extends ChangeNotifier {
     _pushUndo(before);
     _redoStack.clear();
     _notifyTransition(
+      documentChanged: true,
       contentChanged: _canonicalTextDiffers(before.document, _document),
     );
     return true;
@@ -577,8 +854,12 @@ class HomericEditorController extends ChangeNotifier {
       current.document,
       snapshot.document,
     );
+    final documentChanged = !identical(current.document, snapshot.document);
     _restore(snapshot);
-    _notifyTransition(contentChanged: contentChanged);
+    _notifyTransition(
+      documentChanged: documentChanged,
+      contentChanged: contentChanged,
+    );
     return true;
   }
 
@@ -596,8 +877,12 @@ class HomericEditorController extends ChangeNotifier {
       current.document,
       snapshot.document,
     );
+    final documentChanged = !identical(current.document, snapshot.document);
     _restore(snapshot);
-    _notifyTransition(contentChanged: contentChanged);
+    _notifyTransition(
+      documentChanged: documentChanged,
+      contentChanged: contentChanged,
+    );
     return true;
   }
 
@@ -688,8 +973,12 @@ class HomericEditorController extends ChangeNotifier {
     }
   }
 
-  void _notifyTransition({bool contentChanged = false}) {
+  void _notifyTransition({
+    bool documentChanged = false,
+    bool contentChanged = false,
+  }) {
     _stateRevision++;
+    if (documentChanged) _documentRevision++;
     if (contentChanged) _contentRevision++;
     notifyListeners();
   }
@@ -777,8 +1066,17 @@ class HomericEditorController extends ChangeNotifier {
   static bool _isValidSelection(
     Document document,
     HomericSelection? selection,
-  ) =>
-      selection == null || _selectionHost(document, selection) != null;
+  ) {
+    if (selection == null) return true;
+    if (selection.anchor < 0 ||
+        selection.anchor > document.size ||
+        selection.head < 0 ||
+        selection.head > document.size) {
+      return false;
+    }
+    return document.resolve(selection.anchor) is InlinePosition &&
+        document.resolve(selection.head) is InlinePosition;
+  }
 
   static bool _isValidComposing(
     Document document,

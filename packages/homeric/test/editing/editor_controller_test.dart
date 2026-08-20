@@ -42,7 +42,7 @@ void main() {
       );
     });
 
-    test('invalid cross-block selection is rejected without partial state', () {
+    test('block-boundary endpoints are rejected without partial state', () {
       final doc = _document(['one', 'two']);
       final initial = HomericSelection.collapsed(doc.positionAt(0, 1));
       final controller = HomericEditorController(
@@ -55,7 +55,7 @@ void main() {
       expect(
         controller.setSelection(HomericSelection(
           anchor: doc.positionAt(0, 1),
-          head: doc.positionAt(1, 1),
+          head: doc.positionAfterBlock(0),
         )),
         isFalse,
       );
@@ -189,7 +189,7 @@ void main() {
       expect(controller.document.blocks.single.text, 'b');
     });
 
-    test('block edges do not cross structural tokens', () {
+    test('inner block edges join while document edges remain no-ops', () {
       final doc = _document(['a', 'b']);
       final atStart = HomericEditorController(
         document: doc,
@@ -200,10 +200,23 @@ void main() {
         selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
       );
 
-      expect(atStart.deleteBackward(), isFalse);
-      expect(atEnd.deleteForward(), isFalse);
-      expect(atStart.document, same(doc));
-      expect(atEnd.document, same(doc));
+      expect(atStart.deleteBackward(), isTrue);
+      expect(atEnd.deleteForward(), isTrue);
+      expect(atStart.document.blocks.single.text, 'ab');
+      expect(atEnd.document.blocks.single.text, 'ab');
+
+      final firstEdge = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 0)),
+      );
+      final lastEdge = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(1, 1)),
+      );
+      expect(firstEdge.deleteBackward(), isFalse);
+      expect(lastEdge.deleteForward(), isFalse);
+      expect(firstEdge.document, same(doc));
+      expect(lastEdge.document, same(doc));
     });
 
     test('hidden deletion target is revealed before canonical mutation', () {

@@ -235,3 +235,27 @@ same retained session's authority only after rechecking its generation and
 current product state. Serialize conflicting per-entry lifecycle actions under
 explicit attempt ownership; never use wall-clock equality as the authority to
 roll back or complete them.
+
+## editor-architect — 2026-08-20 — Touch chrome is a projection of canonical selection, not another editor
+
+**What:** Mobile handles, magnifiers, long-press word selection, and the iOS
+floating cursor all need transient platform state, but none owns document
+selection. The document host resolves generation-stamped endpoint geometry;
+paragraphs publish current layer links; every drag or floating-cursor callback
+is bound to the current document, layout, focus, and input epoch. Lifecycle and
+metrics changes synchronously revoke that transient state without changing the
+logical selection.
+
+**Why it mattered:** A handle can outlive a recycled row, an overlay can remain
+mounted across rotation, and AppKit/UIKit can finish a floating-cursor sequence
+after focus or the platform connection has moved. Treating any of those objects
+as authoritative creates a second selection owner and lets stale callbacks
+mutate the document. Conversely, canceling the logical selection on background
+or rotation destroys user state that remains perfectly valid.
+
+**Rule going forward:** Keep mobile chrome disposable and reconstructible from
+canonical selection plus current geometry. Bind gesture/floating-cursor work to
+revocable generations, cancel it on mutation, blur, lifecycle, metrics, or row
+recycling, and require fresh focus before accepting more platform input.
+Widget and integration tests prove the contract; only recorded physical-device
+runs certify platform behavior.

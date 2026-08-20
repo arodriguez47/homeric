@@ -29,12 +29,14 @@ Windows/Linux behavior is explicitly unverified.
 
 [HOM-19](https://linear.app/xana-studios/issue/HOM-19) adds desktop clipboard,
 redo, word gestures, adaptive menus, and injectable spelling affordances; its
-real macOS acceptance pass remains separate. Deferred Phase 3 slices are
-tracked rather than hidden: [HOM-20](https://linear.app/xana-studios/issue/HOM-20)
-owns touch selection and mobile gestures, while
-[HOM-21](https://linear.app/xana-studios/issue/HOM-21) owns cross-platform IME
-certification. Phase 4 status is below, and Nexus parity/default switching
-remains [HOM-7](https://linear.app/xana-studios/issue/HOM-7).
+real macOS acceptance pass remains separate. [HOM-20](https://linear.app/xana-studios/issue/HOM-20)
+now supplies adaptive iOS/Android selection handles, long-press and word drag,
+magnifier, iOS floating cursor routing, and lifecycle-safe cancellation over
+the same controller/session. Automated coverage is green; the two physical
+device gates in [`mobile-touch-acceptance.md`](testing/mobile-touch-acceptance.md)
+remain unrun. [HOM-21](https://linear.app/xana-studios/issue/HOM-21) owns
+cross-platform IME certification. Phase 4 status is below, and Nexus
+parity/default switching remains [HOM-7](https://linear.app/xana-studios/issue/HOM-7).
 
 ### Phase 4 status — multi-block viewport
 
@@ -62,7 +64,7 @@ Not reasons to stop — reasons to re-scope, checked at each phase boundary:
 
 ## Non-goals (v1)
 
-- iOS (deferred — Apple Pencil and iPad polish are a project of their own)
+- Apple Pencil- and iPad-specific polish (core iOS touch editing is in HOM-20)
 - Real-time collaboration
 - Native (non-Flutter) bindings
 - A theme/design system — Homeric ships unstyled primitives
@@ -72,7 +74,7 @@ Not reasons to stop — reasons to re-scope, checked at each phase boundary:
 
 After v1 stable, the natural next investments:
 
-- iOS
+- Physical-device iOS and Android certification, followed by platform polish
 - An Operational Transform or CRDT layer for collaboration (likely Yjs-equivalent in Dart)
 - Paginated layout mode (PDF/book-style)
 - LSP-style language services for writers (grammar, style)

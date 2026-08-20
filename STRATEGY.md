@@ -1,6 +1,6 @@
 ---
 name: Homeric
-last_updated: 2026-08-08
+last_updated: 2026-08-20
 ---
 
 # Homeric Strategy
@@ -33,6 +33,12 @@ Build from scratch, natively in Dart and Flutter — no fork of super_editor, no
 The from-scratch editor core: document model, transactions, StepMap position mapping, and DecorationSet — correctness, fuzzing, and the composition model everything else builds on.
 
 _Why it serves the approach:_ These are the native-Dart primitives the whole bet rests on; if they're right, every feature is a composition.
+
+Desktop and mobile input share this core. Platform-adaptive handles,
+magnifiers, gestures, and floating-cursor presentation may differ, but they
+must resolve into the same canonical selection, controller history, and one
+revocable input epoch. Automated parity is necessary; physical-device evidence
+is a separate release gate.
 
 ### Performance at scale
 

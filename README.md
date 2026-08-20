@@ -25,9 +25,9 @@ See [`STRATEGY.md`](STRATEGY.md) for the strategy this serves.
 | macOS | ✅ |
 | Windows | ✅ |
 | Linux | ✅ |
-| Android | ✅ |
+| Android | ⚠️ Experimental touch editing; real-device certification pending. |
 | Web (Latin-script) | ⚠️ Best-effort. CJK IME blocked by [flutter/flutter#120613](https://github.com/flutter/flutter/issues/120613). |
-| iOS | ❌ Not in v1. |
+| iOS | ⚠️ Experimental touch editing; real-device certification pending. |
 
 ## Repository layout
 
@@ -71,9 +71,12 @@ This combines the macOS-first [HOM-18](https://linear.app/xana-studios/issue/HOM
 editing foundation with the multi-block viewport from
 [HOM-6](https://linear.app/xana-studios/issue/HOM-6). Automated playground and
 profile-benchmark coverage are in place; real macOS acceptance and
-Windows/Linux certification are not claimed here. Touch selection remains
-[HOM-20](https://linear.app/xana-studios/issue/HOM-20), and cross-platform IME
-certification remains [HOM-21](https://linear.app/xana-studios/issue/HOM-21).
+Windows/Linux certification are not claimed here. [HOM-20](https://linear.app/xana-studios/issue/HOM-20)
+adds adaptive mobile handles, magnifier, long-press/word gestures, iOS floating
+cursor support, and lifecycle-safe cancellation to the same document owner.
+Automated coverage is green, but the [physical-device acceptance matrix](docs/testing/mobile-touch-acceptance.md)
+remains unrun. Cross-platform IME certification remains
+[HOM-21](https://linear.app/xana-studios/issue/HOM-21).
 
 ```bash
 cd packages/homeric/examples/playground

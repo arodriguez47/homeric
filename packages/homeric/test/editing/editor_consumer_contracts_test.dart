@@ -230,6 +230,32 @@ void main() {
       expect(controller.lastCommandRejection?.reason, #opaque);
     });
 
+    test('boundary joins expose direction while local deletion does not', () {
+      final document = _document(['ab', 'cd']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(1, 0)),
+      );
+      addTearDown(controller.dispose);
+      final directions = <bool?>[];
+      controller.addCommandInterceptor((command) {
+        if (command.kind == HomericCommandKind.preDelete) {
+          directions.add(command.forward);
+          return HomericCommandInterception.rejected(#captured);
+        }
+        return HomericCommandInterception.ignored;
+      });
+
+      expect(controller.deleteBackward(), isFalse);
+      controller.setSelection(HomericSelection.collapsed(
+        document.positionAt(0, document.blocks.first.contentLength),
+      ));
+      expect(controller.deleteForward(), isFalse);
+      expect(controller.deleteBackward(), isFalse);
+
+      expect(directions, <bool?>[false, true, null]);
+    });
+
     test('ignored or rejected interceptors cannot mutate then continue', () {
       final document = _document(['ab']);
       final controller = HomericEditorController(

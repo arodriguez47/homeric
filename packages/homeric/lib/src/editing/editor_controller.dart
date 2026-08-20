@@ -64,6 +64,9 @@ final class HomericEditorCommand {
     this.blockId,
     this.text,
     this.forward,
+    this.trailingBlockId,
+    this.replacementSelection,
+    this.replacementComposing,
     this.blockMove,
   });
 
@@ -85,8 +88,21 @@ final class HomericEditorCommand {
   /// Canonical inserted text for [HomericCommandKind.preInsert].
   final String? text;
 
-  /// Delete direction for [HomericCommandKind.preDelete], when directional.
+  /// Boundary-join direction for [HomericCommandKind.preDelete].
+  ///
+  /// `false` joins the active block backward, `true` joins it forward, and
+  /// `null` identifies a block-local or range deletion rather than a join.
   final bool? forward;
+
+  /// Explicit first trailing block identity requested for a paragraph break.
+  final String? trailingBlockId;
+
+  /// Requested block-local selection in the replacement result, when the
+  /// platform supplied a complete text-editing value.
+  final BlockTextSelection? replacementSelection;
+
+  /// Requested block-local composing range in the replacement result.
+  final BlockTextRange? replacementComposing;
 
   /// Captured move request for [HomericCommandKind.block].
   final BlockMoveRequest? blockMove;
@@ -875,6 +891,9 @@ class HomericEditorController extends ChangeNotifier {
       selection: current,
       blockId: start.block.id,
       text: normalized,
+      trailingBlockId: firstTrailingBlockId,
+      replacementSelection: replacementSelection,
+      replacementComposing: replacementComposing,
     ));
     if (interception != null) return interception;
 
@@ -1058,13 +1077,18 @@ class HomericEditorController extends ChangeNotifier {
           return _joinAtBoundary(
             host.blockIndex,
             _document.blocks[host.blockIndex - 1].contentLength,
+            forward: false,
           );
         }
         start = boundary.getLeadingTextBoundaryAt(offset - 1) ?? 0;
       } else {
         if (offset == host.block.contentLength) {
           if (host.blockIndex == _document.blockCount - 1) return false;
-          return _joinAtBoundary(host.blockIndex + 1, offset);
+          return _joinAtBoundary(
+            host.blockIndex + 1,
+            offset,
+            forward: true,
+          );
         }
         end = boundary.getTrailingTextBoundaryAt(offset) ??
             host.block.contentLength;
@@ -1077,7 +1101,11 @@ class HomericEditorController extends ChangeNotifier {
     );
   }
 
-  bool _joinAtBoundary(int insertionIndex, int caretOffset) {
+  bool _joinAtBoundary(
+    int insertionIndex,
+    int caretOffset, {
+    required bool forward,
+  }) {
     final leadingIndex = insertionIndex - 1;
     if (leadingIndex < 0 || insertionIndex >= _document.blockCount) {
       return false;
@@ -1087,6 +1115,7 @@ class HomericEditorController extends ChangeNotifier {
       controller: this,
       selection: _selection,
       blockId: _document.blocks[insertionIndex].id,
+      forward: forward,
     ));
     if (interception != null) return interception;
     final tx = Transaction(_document);

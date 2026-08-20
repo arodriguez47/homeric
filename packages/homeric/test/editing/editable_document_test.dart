@@ -2080,6 +2080,7 @@ void main() {
     expect(initial, isNotNull);
     expect(firstGeometry!.isCurrent, isTrue);
     expect(firstGeometry!.documentRevision, controller.documentRevision);
+    expect(firstGeometry!.lineBoundaryAt(1), const BlockTextRange(0, 5));
     expect(
         find.byKey(const ValueKey('consumer-caret-overlay')), findsOneWidget);
 
@@ -2093,6 +2094,8 @@ void main() {
     expect(controller.replaceSelection('X'), isTrue);
     expect(firstGeometry!.isCurrent, isFalse,
         reason: 'document revision invalidates geometry before the next frame');
+    expect(firstGeometry!.lineBoundaryAt(1), isNull,
+        reason: 'line focus must never retain stale layout geometry');
     expect(key.currentState!.activeCaretGeometry, isNull);
     await tester.pumpWidget(build(180));
     await tester.pump();

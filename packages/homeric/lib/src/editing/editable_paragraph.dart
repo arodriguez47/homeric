@@ -128,6 +128,22 @@ final class HomericEditableBlockGeometry {
         )
       : null;
 
+  /// Returns the current visual line containing [offset] in canonical block
+  /// coordinates, or `null` after this layout generation is invalidated.
+  BlockTextRange? lineBoundaryAt(
+    int offset, {
+    HomericCaretAffinity affinity = HomericCaretAffinity.downstream,
+  }) {
+    if (!isCurrent) return null;
+    final range = _geometry
+        .lineBoundaryAt(
+          DocOffset(offset),
+          assoc: affinity == HomericCaretAffinity.upstream ? -1 : 1,
+        )
+        .value;
+    return BlockTextRange(range.start.value, range.end.value);
+  }
+
   /// Hit-tests [localPoint] into canonical block coordinates.
   HomericDocumentSelectionHit? positionForPoint(Offset localPoint) {
     if (!isCurrent) return null;

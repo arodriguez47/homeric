@@ -344,6 +344,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   int? _dragAnchor;
   BlockTextRange? _dragWordAnchor;
   _DragSelectionMode? _dragMode;
+  bool _longPressActive = false;
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
   ParagraphGeometry? _paragraphGeometry;
@@ -352,6 +353,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   final LayerLink _localTouchToolbarLayerLink = LayerLink();
   final HomericSelectionOverlayCoordinator _localTouchOverlayCoordinator =
       HomericSelectionOverlayCoordinator();
+  HomericSelectionEndpoint? _localTouchMovingEndpoint;
   bool _localTouchSelectionRequested = false;
   bool _localTouchSelectionSyncScheduled = false;
   int _hostEpoch = 0;
@@ -770,6 +772,22 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
             );
             return (offset: hit.position, affinity: hit.affinity);
           },
+          wordRangeAt: (globalPoint) {
+            if (!_isCurrentGeometry(geometry)) return null;
+            final render = overlayContext.findRenderObject();
+            if (render is! RenderBox || !render.attached || !render.hasSize) {
+              return null;
+            }
+            final localPoint = render.globalToLocal(globalPoint);
+            final rect = geometry.blockRect.value;
+            return _wordForPoint(
+              geometry,
+              Offset(
+                localPoint.dx.clamp(rect.left, rect.right),
+                localPoint.dy.clamp(rect.top, rect.bottom),
+              ),
+            );
+          },
           globalRangeRects: (range) {
             if (geometryDocumentRevision != _controller.documentRevision ||
                 !_isCurrentGeometry(geometry)) {
@@ -814,6 +832,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
               globalRect: globalOrigin & localRect.size,
             );
           },
+          magnifierInfo: (globalPoint) => _magnifierInfoForPoint(
+            geometry,
+            overlayContext,
+            globalPoint,
+          ),
           selectionEndpointGeometry: (endpoint, blockOffset, affinity) {
             if (_resolvedTouchSelectionConfiguration == null ||
                 geometryDocumentRevision != _controller.documentRevision ||
@@ -869,6 +892,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           },
           onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
           onTripleTapDown: (details) => _tripleTapDown(geometry, details),
+          onSingleLongTapStart: (details) => _longPressStart(geometry, details),
+          onSingleLongTapMoveUpdate: (details) =>
+              _longPressMoveUpdate(geometry, details),
+          onSingleLongTapEnd: (_) => _longPressEnd(),
+          onSingleLongTapCancel: _longPressCancel,
           onDragSelectionStart: (details) =>
               _startSelectionDrag(geometry, details),
           onDragSelectionUpdate: (details) =>
@@ -897,6 +925,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                 child: selectionPlane,
               );
         return <Widget>[
+          Positioned.fill(
+            child: hoverPlane,
+          ),
           ..._selectionEndpointTargets(geometry),
           if (fullySelectedEmptyBlock)
             Positioned.fill(
@@ -909,9 +940,6 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
                 ),
               ),
             ),
-          Positioned.fill(
-            child: hoverPlane,
-          ),
           ...?widget.overlayBuilder?.call(
             overlayContext,
             consumerGeometry,
@@ -1359,6 +1387,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           ),
           child: IgnorePointer(
             child: CompositedTransformTarget(
+              key: ValueKey<(HomericSelectionEndpoint, String)>(
+                (endpoint, widget.blockId),
+              ),
               link: _selectionLayerLink(endpoint),
               child: const SizedBox.expand(),
             ),
@@ -1487,6 +1518,75 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     }
   }
 
+  void _longPressStart(
+    ParagraphGeometry geometry,
+    LongPressStartDetails details,
+  ) {
+    if (!_canUsePointer(geometry)) return;
+    _longPressActive = true;
+    _dismissContextMenu();
+    final word = _wordForPoint(geometry, details.localPosition);
+    _startWordSelection(geometry, details.localPosition);
+    _syncTouchSelectionChrome(PointerDeviceKind.touch);
+    final documentHost = _documentHost;
+    if (documentHost != null) {
+      documentHost.beginPointerWordSelectionDrag(
+        _controller.globalPositionForBlockOffset(widget.blockId, word.start),
+        _controller.globalPositionForBlockOffset(widget.blockId, word.end),
+        owner: this,
+      );
+      documentHost.updateTouchSelectionMagnifier(details.globalPosition);
+    } else {
+      _updateLocalTouchMagnifier(geometry, details.globalPosition);
+    }
+  }
+
+  void _longPressMoveUpdate(
+    ParagraphGeometry geometry,
+    LongPressMoveUpdateDetails details,
+  ) {
+    final documentHost = _documentHost;
+    if (documentHost != null) {
+      documentHost.updatePointerSelectionDrag(details.globalPosition);
+      documentHost.updateTouchSelectionMagnifier(details.globalPosition);
+      return;
+    }
+    _updateSelectionDrag(geometry, details.localPosition);
+    _updateLocalTouchMagnifier(geometry, details.globalPosition);
+  }
+
+  void _longPressEnd() {
+    _longPressActive = false;
+    _documentHost?.hideTouchSelectionMagnifier();
+    _localTouchOverlayCoordinator.hideMagnifier();
+    _endSelectionPointer();
+  }
+
+  void _longPressCancel() {
+    _longPressActive = false;
+    _documentHost?.hideTouchSelectionMagnifier();
+    _localTouchOverlayCoordinator.hideMagnifier();
+    _cancelSelectionPointer();
+  }
+
+  void _updateLocalTouchMagnifier(
+    ParagraphGeometry geometry,
+    Offset globalPosition,
+  ) {
+    final overlayContext = _overlayContext;
+    if (overlayContext == null) return;
+    final info = _magnifierInfoForPoint(
+      geometry,
+      overlayContext,
+      globalPosition,
+    );
+    if (info == null) {
+      _localTouchOverlayCoordinator.hideMagnifier();
+    } else {
+      _localTouchOverlayCoordinator.showOrUpdateMagnifier(info);
+    }
+  }
+
   void _syncTouchSelectionChrome(PointerDeviceKind? kind) {
     final documentHost = _documentHost;
     if (kind == null ||
@@ -1577,7 +1677,65 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       start: start,
       end: end,
       onSelectionHandleTapped: _showContextMenu,
+      onStartHandleDragStart: (details) => _beginLocalTouchHandleDrag(
+        HomericSelectionEndpoint.start,
+        details.globalPosition,
+      ),
+      onStartHandleDragUpdate: (details) =>
+          _updateLocalTouchHandleDrag(details.globalPosition),
+      onStartHandleDragEnd: (_) => _endLocalTouchHandleDrag(),
+      onEndHandleDragStart: (details) => _beginLocalTouchHandleDrag(
+        HomericSelectionEndpoint.end,
+        details.globalPosition,
+      ),
+      onEndHandleDragUpdate: (details) =>
+          _updateLocalTouchHandleDrag(details.globalPosition),
+      onEndHandleDragEnd: (_) => _endLocalTouchHandleDrag(),
     );
+  }
+
+  void _beginLocalTouchHandleDrag(
+    HomericSelectionEndpoint endpoint,
+    Offset globalPosition,
+  ) {
+    final selection = _localSelection();
+    final geometry = _currentGeometry();
+    if (selection == null ||
+        geometry == null ||
+        _controller.composing != null) {
+      _endLocalTouchHandleDrag();
+      return;
+    }
+    _localTouchMovingEndpoint = endpoint;
+    _dragMode = _DragSelectionMode.character;
+    _dragWordAnchor = null;
+    _dragAnchor = endpoint == HomericSelectionEndpoint.start
+        ? selection.end
+        : selection.start;
+    _updateLocalTouchMagnifier(geometry, globalPosition);
+  }
+
+  void _updateLocalTouchHandleDrag(Offset globalPosition) {
+    if (_localTouchMovingEndpoint == null) return;
+    final geometry = _currentGeometry();
+    final overlayContext = _overlayContext;
+    final render = overlayContext?.findRenderObject();
+    if (geometry == null ||
+        !_isCurrentGeometry(geometry) ||
+        render is! RenderBox ||
+        !render.attached) {
+      _endLocalTouchHandleDrag();
+      return;
+    }
+    _updateSelectionDrag(geometry, render.globalToLocal(globalPosition));
+    _updateLocalTouchMagnifier(geometry, globalPosition);
+  }
+
+  void _endLocalTouchHandleDrag() {
+    if (_localTouchMovingEndpoint == null) return;
+    _localTouchMovingEndpoint = null;
+    _localTouchOverlayCoordinator.hideMagnifier();
+    _resetPointerState();
   }
 
   HomericSelectionOverlayEndpoint? _localTouchEndpoint(
@@ -1603,6 +1761,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   void _disposeLocalTouchSelectionOverlay() {
+    _endLocalTouchHandleDrag();
     _localTouchOverlayCoordinator.hide();
   }
 
@@ -1684,6 +1843,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   void _resetPointerState() {
+    _longPressActive = false;
     _dragAnchor = null;
     _dragWordAnchor = null;
     _dragMode = null;
@@ -1695,6 +1855,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   }
 
   void _cancelSelectionPointer() {
+    if (_longPressActive) return;
     _documentHost?.cancelPointerSelectionDrag(owner: this);
     _resetPointerState();
   }
@@ -2057,6 +2218,49 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       affinity: upstreamDistance < downstreamDistance
           ? HomericCaretAffinity.upstream
           : HomericCaretAffinity.downstream,
+    );
+  }
+
+  MagnifierInfo? _magnifierInfoForPoint(
+    ParagraphGeometry geometry,
+    BuildContext overlayContext,
+    Offset globalPoint,
+  ) {
+    if (!_isCurrentGeometry(geometry)) return null;
+    final render = overlayContext.findRenderObject();
+    if (render is! RenderBox || !render.attached || !render.hasSize) {
+      return null;
+    }
+    final blockRect = geometry.blockRect.value;
+    final localPoint = render.globalToLocal(globalPoint);
+    final clamped = Offset(
+      localPoint.dx.clamp(blockRect.left, blockRect.right),
+      localPoint.dy.clamp(blockRect.top, blockRect.bottom),
+    );
+    final hit = _caretForPoint(geometry, clamped);
+    final caret = geometry
+        .caretRect(
+          DocOffset(hit.position),
+          assoc: _assoc(hit.affinity),
+        )
+        .value;
+    final lineRange = geometry
+        .lineBoundaryAt(
+          DocOffset(hit.position),
+          assoc: _assoc(hit.affinity),
+        )
+        .value;
+    var lineRect = caret;
+    for (final box in geometry.rectsForRange(lineRange).value) {
+      lineRect = lineRect.expandToInclude(box.toRect());
+    }
+    Rect globalRect(Rect rect) =>
+        render.localToGlobal(rect.topLeft) & rect.size;
+    return MagnifierInfo(
+      globalGesturePosition: globalPoint,
+      caretRect: globalRect(caret),
+      fieldBounds: globalRect(blockRect),
+      currentLineBoundaries: globalRect(lineRect),
     );
   }
 

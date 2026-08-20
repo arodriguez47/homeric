@@ -132,6 +132,105 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('standalone touch handle crosses its stationary endpoint',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final document = _document('alpha beta');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 5),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 48),
+            child: SizedBox(
+              width: 200,
+              child: HomericEditableParagraph(
+                controller: controller,
+                inputSession: session,
+                blockId: 'b',
+                resolveStyle: (_) => _style,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    final editable = find.byType(HomericEditableParagraph);
+    final alpha = tester.getTopLeft(editable) + const Offset(15, 7);
+    final first = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await first.up();
+    await tester.pump(const Duration(milliseconds: 20));
+    final second = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await second.up();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+
+    final geometry = ParagraphGeometry(
+      tester
+          .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph)),
+    );
+    final origin = tester.getTopLeft(find.byType(HomericParagraph));
+    final beta = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(6), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'b'),
+      ),
+    ));
+    final startFollower = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final handleGesture = find
+        .descendant(
+          of: startFollower,
+          matching: find.byType(RawGestureDetector),
+        )
+        .first;
+    expect(handleGesture, findsOneWidget);
+    final drag = await tester.startGesture(
+      tester.getCenter(handleGesture),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    await drag.moveTo(beta);
+    await tester.pump();
+
+    expect(controller.selection!.anchor, document.positionAt(0, 5));
+    expect(controller.selection!.head, greaterThan(document.positionAt(0, 5)));
+    await drag.up();
+    await tester.pump();
+    expect(controller.selection!.anchor, document.positionAt(0, 5));
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('arrows use current descendant geometry and preserve direction',
       (tester) async {
     final document = _document('abc');

@@ -221,6 +221,178 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('Android long press selects and extends by visible words',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byType(HomericParagraph);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final origin = tester.getTopLeft(paragraph);
+    final alpha = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(0), const DocOffset(5)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final beta = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(6), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    expect(geometry.positionForPoint(beta - origin).value.value,
+        greaterThanOrEqualTo(6));
+    final gesture = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+
+    expect(
+      key.currentState!.selectionFragmentForBlock('block-0'),
+      const BlockTextSelection(anchor: 0, head: 5),
+    );
+    expect(key.currentState!.touchSelectionChromeVisible, isTrue);
+
+    await gesture.moveTo(beta);
+    await tester.pump();
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    final extended = key.currentState!.selectionFragmentForBlock('block-0')!;
+    expect((extended.start, extended.end), (0, 10));
+    await gesture.up();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('touch start handle crosses its stationary endpoint',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 5),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+    final paragraph = find.byType(HomericParagraph);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final origin = tester.getTopLeft(paragraph);
+    final beta = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(6), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final alpha = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(0), const DocOffset(5)),
+            )
+            .value
+            .first
+            .toRect()
+            .centerLeft;
+    final handles = find.byType(CompositedTransformFollower);
+    expect(handles, findsNWidgets(2));
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    expect(startHandle, findsOneWidget);
+    final startHandleGesture = find.descendant(
+      of: startHandle,
+      matching: find.byType(GestureDetector),
+    );
+    expect(startHandleGesture, findsOneWidget);
+    final drag = await tester.startGesture(
+      tester.getCenter(startHandleGesture),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    await drag.moveTo(beta);
+    await tester.pump();
+
+    var selection = key.currentState!.selectionFragmentForBlock('block-0')!;
+    expect(selection.anchor, 5);
+    expect(selection.head, greaterThan(5));
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+
+    await drag.moveTo(alpha);
+    await tester.pump();
+    selection = key.currentState!.selectionFragmentForBlock('block-0')!;
+    expect(selection.anchor, 5);
+    expect(selection.head, lessThan(5));
+    await drag.up();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+
+    controller.setSelection(HomericSelection(
+      anchor: controller.document.positionAt(0, 0),
+      head: controller.document.positionAt(0, 5),
+    ));
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+    final interrupted = await tester.startGesture(
+      tester.getCenter(startHandleGesture),
+      kind: PointerDeviceKind.touch,
+    );
+    await interrupted.moveBy(const Offset(0, 24));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchMovingEndpoint,
+        HomericSelectionEndpoint.start);
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    expect(controller.replaceSelection('X'), isTrue);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMovingEndpoint, isNull);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    await interrupted.up();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   for (final keyCase in <({String name, LogicalKeyboardKey key})>[
     (name: 'keyboard Enter', key: LogicalKeyboardKey.enter),
     (name: 'numpad Enter', key: LogicalKeyboardKey.numpadEnter),

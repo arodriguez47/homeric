@@ -467,6 +467,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   final LayerLink _touchToolbarLayerLink = LayerLink();
   final HomericSelectionOverlayCoordinator _touchOverlayCoordinator =
       HomericSelectionOverlayCoordinator();
+  final Object _touchHandleDragOwner = Object();
+  HomericSelectionEndpoint? _touchMovingEndpoint;
   bool _touchSelectionRequested = false;
   bool _touchSelectionSyncScheduled = false;
   late BlockHeightCache _heightCache;
@@ -483,6 +485,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   _BlockMoveWitness? _dragMoveWitness;
   int _selectionDragGeneration = 0;
   int? _selectionDragAnchor;
+  ({int start, int end})? _selectionDragWordAnchor;
   int? _selectionDragDocumentRevision;
   Object? _selectionDragOwner;
   Offset? _selectionDragPointer;
@@ -629,9 +632,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _selectionDragGeneration++;
     _focusLossCheckGeneration++;
     _selectionDragAnchor = anchor;
+    _selectionDragWordAnchor = null;
     _selectionDragDocumentRevision = widget.controller.documentRevision;
     _selectionDragOwner = owner;
     beginSelectionDrag();
+  }
+
+  /// Starts a word-granular touch drag with one immutable initial word.
+  void beginPointerWordSelectionDrag(
+    int start,
+    int end, {
+    Object? owner,
+  }) {
+    beginPointerSelectionDrag(start, owner: owner);
+    _selectionDragWordAnchor = (start: start, end: end);
   }
 
   /// Extends the current pointer selection through mounted row geometry.
@@ -645,13 +659,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   /// Ends the pointer generation and retargets platform input once.
   bool endPointerSelectionDrag({Object? owner}) {
     if (owner != null && !identical(owner, _selectionDragOwner)) return false;
+    final wasTouchHandleDrag =
+        identical(_selectionDragOwner, _touchHandleDragOwner);
     _stopSelectionAutoscroll();
     _selectionDragPointer = null;
     _selectionDragAnchor = null;
+    _selectionDragWordAnchor = null;
     _selectionDragDocumentRevision = null;
     _selectionDragOwner = null;
     _selectionDragGeneration++;
     _focusLossCheckGeneration++;
+    if (wasTouchHandleDrag) {
+      _touchMovingEndpoint = null;
+      _touchOverlayCoordinator.hideMagnifier();
+    }
     return endSelectionDrag();
   }
 
@@ -664,13 +685,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
 
   void _cancelPointerSelectionDragWithoutRetarget() {
     if (!_selectionDragActive && _selectionAutoScrollTimer == null) return;
+    final wasTouchHandleDrag =
+        identical(_selectionDragOwner, _touchHandleDragOwner);
     _stopSelectionAutoscroll();
     _selectionDragPointer = null;
     _selectionDragAnchor = null;
+    _selectionDragWordAnchor = null;
     _selectionDragDocumentRevision = null;
     _selectionDragOwner = null;
     _selectionDragGeneration++;
     _focusLossCheckGeneration++;
+    if (wasTouchHandleDrag) {
+      _touchMovingEndpoint = null;
+      _touchOverlayCoordinator.hideMagnifier();
+    }
     if (_selectionDragActive) {
       _selectionDragActive = false;
       widget.inputSession.resumeDeltas();
@@ -684,8 +712,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     required Object owner,
     required Rect? Function() globalRect,
     required HomericDocumentSelectionHitTest hitTest,
+    required BlockTextRange? Function(Offset globalPoint) wordRangeAt,
     required List<Rect>? Function(BlockTextRange range) globalRangeRects,
     required HomericActiveCaretGeometry? Function() activeCaretGeometry,
+    required MagnifierInfo? Function(Offset globalPoint) magnifierInfo,
     required ({
       Rect globalRect,
       int layoutGeneration,
@@ -702,8 +732,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       owner: owner,
       globalRect: globalRect,
       hitTest: hitTest,
+      wordRangeAt: wordRangeAt,
       globalRangeRects: globalRangeRects,
       activeCaretGeometry: activeCaretGeometry,
+      magnifierInfo: magnifierInfo,
       selectionEndpointGeometry: selectionEndpointGeometry,
     );
     if (_touchSelectionRequested) _scheduleTouchSelectionSync();
@@ -882,6 +914,16 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool get debugTouchEndHandleVisible =>
       _touchOverlayCoordinator.endHandleVisible;
 
+  /// Whether the adaptive touch magnifier currently has an overlay entry.
+  @visibleForTesting
+  bool get debugTouchMagnifierVisible =>
+      _touchOverlayCoordinator.magnifierVisible;
+
+  /// Logical endpoint currently owned by a touch-handle drag.
+  @visibleForTesting
+  HomericSelectionEndpoint? get debugTouchMovingEndpoint =>
+      _touchMovingEndpoint;
+
   /// Shows touch handles for the current canonical selection after layout.
   void showTouchSelectionChrome() {
     if (resolvedTouchSelectionConfiguration == null ||
@@ -897,6 +939,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   void hideTouchSelectionChrome() {
     _touchSelectionRequested = false;
     _touchSelectionSyncScheduled = false;
+    if (identical(_selectionDragOwner, _touchHandleDragOwner)) {
+      cancelPointerSelectionDrag(owner: _touchHandleDragOwner);
+    }
     _disposeTouchSelectionOverlay();
   }
 
@@ -937,7 +982,93 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       start: _touchOverlayEndpoint(start),
       end: _touchOverlayEndpoint(end),
       onSelectionHandleTapped: _showTouchToolbar,
+      onStartHandleDragStart: (details) => _beginTouchHandleDrag(
+        HomericSelectionEndpoint.start,
+        details.globalPosition,
+      ),
+      onStartHandleDragUpdate: (details) =>
+          _updateTouchHandleDrag(details.globalPosition),
+      onStartHandleDragEnd: (_) => _endTouchHandleDrag(),
+      onEndHandleDragStart: (details) => _beginTouchHandleDrag(
+        HomericSelectionEndpoint.end,
+        details.globalPosition,
+      ),
+      onEndHandleDragUpdate: (details) =>
+          _updateTouchHandleDrag(details.globalPosition),
+      onEndHandleDragEnd: (_) => _endTouchHandleDrag(),
     );
+  }
+
+  void _beginTouchHandleDrag(
+    HomericSelectionEndpoint endpoint,
+    Offset globalPosition,
+  ) {
+    final selection = widget.controller.selection;
+    if (selection == null || widget.controller.composing != null) {
+      _endTouchHandleDrag();
+      return;
+    }
+    _touchMovingEndpoint = endpoint;
+    final stationary = endpoint == HomericSelectionEndpoint.start
+        ? selection.end
+        : selection.start;
+    beginPointerSelectionDrag(stationary, owner: _touchHandleDragOwner);
+    _updateTouchMagnifier(globalPosition);
+  }
+
+  void _updateTouchHandleDrag(Offset globalPosition) {
+    if (_touchMovingEndpoint == null ||
+        !identical(_selectionDragOwner, _touchHandleDragOwner)) {
+      return;
+    }
+    updatePointerSelectionDrag(globalPosition);
+    _updateTouchMagnifier(globalPosition);
+  }
+
+  void _endTouchHandleDrag() {
+    endPointerSelectionDrag(owner: _touchHandleDragOwner);
+  }
+
+  /// Updates the document-owned magnifier from a current touch gesture.
+  void updateTouchSelectionMagnifier(Offset globalPosition) {
+    _updateTouchMagnifier(globalPosition);
+  }
+
+  /// Hides the document-owned magnifier without changing logical selection.
+  void hideTouchSelectionMagnifier() {
+    _touchOverlayCoordinator.hideMagnifier();
+  }
+
+  void _updateTouchMagnifier(Offset globalPosition) {
+    final info = _magnifierInfoAt(globalPosition);
+    if (info == null) {
+      _touchOverlayCoordinator.hideMagnifier();
+      return;
+    }
+    _touchOverlayCoordinator.showOrUpdateMagnifier(info);
+  }
+
+  MagnifierInfo? _magnifierInfoAt(Offset globalPosition) {
+    final candidates = <({Rect rect, _MountedSelectionHost host})>[];
+    for (final host in _selectionHosts.values) {
+      final rect = host.globalRect();
+      if (rect != null) candidates.add((rect: rect, host: host));
+    }
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) => a.rect.top.compareTo(b.rect.top));
+    var target = candidates.first;
+    for (final candidate in candidates) {
+      if (candidate.rect.contains(globalPosition)) {
+        target = candidate;
+        break;
+      }
+      if (globalPosition.dy >= candidate.rect.top) target = candidate;
+    }
+    final clamped = Offset(
+      globalPosition.dx.clamp(target.rect.left, target.rect.right),
+      globalPosition.dy.clamp(target.rect.top, target.rect.bottom),
+    );
+    return target.host.magnifierInfo(clamped);
   }
 
   HomericSelectionOverlayEndpoint? _touchOverlayEndpoint(
@@ -1425,6 +1556,28 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     );
     final hit = target.host.hitTest(clampedPoint);
     if (hit == null) return;
+    final wordAnchor = _selectionDragWordAnchor;
+    if (wordAnchor != null) {
+      final word = target.host.wordRangeAt(clampedPoint);
+      if (word == null) return;
+      final targetStart = widget.controller.globalPositionForBlockOffset(
+        target.blockId,
+        word.start,
+      );
+      final targetEnd = widget.controller.globalPositionForBlockOffset(
+        target.blockId,
+        word.end,
+      );
+      final before = targetEnd <= wordAnchor.start;
+      widget.controller.setSelection(HomericSelection(
+        anchor: before ? wordAnchor.end : wordAnchor.start,
+        head: before ? targetStart : targetEnd,
+        affinity: before
+            ? HomericCaretAffinity.upstream
+            : HomericCaretAffinity.downstream,
+      ));
+      return;
+    }
     final head = widget.controller.globalPositionForBlockOffset(
       target.blockId,
       hit.offset,
@@ -1991,16 +2144,20 @@ final class _MountedSelectionHost {
     required this.owner,
     required this.globalRect,
     required this.hitTest,
+    required this.wordRangeAt,
     required this.globalRangeRects,
     required this.activeCaretGeometry,
+    required this.magnifierInfo,
     required this.selectionEndpointGeometry,
   });
 
   final Object owner;
   final Rect? Function() globalRect;
   final HomericDocumentSelectionHitTest hitTest;
+  final BlockTextRange? Function(Offset globalPoint) wordRangeAt;
   final List<Rect>? Function(BlockTextRange range) globalRangeRects;
   final HomericActiveCaretGeometry? Function() activeCaretGeometry;
+  final MagnifierInfo? Function(Offset globalPoint) magnifierInfo;
   final ({
     Rect globalRect,
     int layoutGeneration,

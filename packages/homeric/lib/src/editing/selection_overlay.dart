@@ -30,10 +30,13 @@ final class HomericSelectionOverlayCoordinator {
   LayerLink? _endLayerLink;
   TextSelectionControls? _controls;
   TextMagnifierConfiguration? _magnifierConfiguration;
+  MagnifierInfo? _magnifierInfo;
+  bool _magnifierRequested = false;
 
   bool get visible => _overlay != null;
   bool get startHandleVisible => _startHandleVisible.value;
   bool get endHandleVisible => _endHandleVisible.value;
+  bool get magnifierVisible => _overlay?.magnifierExists ?? false;
 
   void sync({
     required BuildContext context,
@@ -45,6 +48,12 @@ final class HomericSelectionOverlayCoordinator {
     required HomericSelectionOverlayEndpoint? start,
     required HomericSelectionOverlayEndpoint? end,
     required VoidCallback onSelectionHandleTapped,
+    ValueChanged<DragStartDetails>? onStartHandleDragStart,
+    ValueChanged<DragUpdateDetails>? onStartHandleDragUpdate,
+    ValueChanged<DragEndDetails>? onStartHandleDragEnd,
+    ValueChanged<DragStartDetails>? onEndHandleDragStart,
+    ValueChanged<DragUpdateDetails>? onEndHandleDragUpdate,
+    ValueChanged<DragEndDetails>? onEndHandleDragEnd,
   }) {
     if ((start == null && end == null) ||
         Overlay.maybeOf(context, rootOverlay: true) == null) {
@@ -59,7 +68,7 @@ final class HomericSelectionOverlayCoordinator {
         !identical(_controls, controls) ||
         !identical(_magnifierConfiguration, magnifierConfiguration);
     if (recreate) {
-      hide();
+      _disposeOverlay();
       _startLayerLink = startLink;
       _endLayerLink = endLink;
       _controls = controls;
@@ -78,6 +87,9 @@ final class HomericSelectionOverlayCoordinator {
         lineHeightAtStart:
             start?.globalRect.height ?? end?.globalRect.height ?? 1,
         startHandlesVisible: _startHandleVisible,
+        onStartHandleDragStart: onStartHandleDragStart,
+        onStartHandleDragUpdate: onStartHandleDragUpdate,
+        onStartHandleDragEnd: onStartHandleDragEnd,
         endHandleType: _handleType(
           start: false,
           collapsed: collapsed,
@@ -87,6 +99,9 @@ final class HomericSelectionOverlayCoordinator {
         lineHeightAtEnd:
             end?.globalRect.height ?? start?.globalRect.height ?? 1,
         endHandlesVisible: _endHandleVisible,
+        onEndHandleDragStart: onEndHandleDragStart,
+        onEndHandleDragUpdate: onEndHandleDragUpdate,
+        onEndHandleDragEnd: onEndHandleDragEnd,
         selectionEndpoints: _selectionPoints(start, end),
         selectionControls: controls,
         selectionDelegate: null,
@@ -119,9 +134,36 @@ final class HomericSelectionOverlayCoordinator {
     }
     _startHandleVisible.value = start != null;
     _endHandleVisible.value = end != null && !collapsed;
+    final magnifierInfo = _magnifierInfo;
+    if (_magnifierRequested && magnifierInfo != null) {
+      showOrUpdateMagnifier(magnifierInfo);
+    }
+  }
+
+  void showOrUpdateMagnifier(MagnifierInfo info) {
+    _magnifierRequested = true;
+    _magnifierInfo = info;
+    final overlay = _overlay;
+    if (overlay == null) return;
+    if (overlay.magnifierExists) {
+      overlay.updateMagnifier(info);
+    } else {
+      overlay.showMagnifier(info);
+    }
+  }
+
+  void hideMagnifier() {
+    _magnifierRequested = false;
+    _magnifierInfo = null;
+    _overlay?.hideMagnifier();
   }
 
   void hide() {
+    hideMagnifier();
+    _disposeOverlay();
+  }
+
+  void _disposeOverlay() {
     _overlay?.dispose();
     _overlay = null;
     _startLayerLink = null;

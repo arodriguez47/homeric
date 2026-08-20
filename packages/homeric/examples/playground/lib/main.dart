@@ -12,10 +12,10 @@ import 'views/editor_page.dart';
 import 'views/transaction_panel.dart';
 
 void main() {
-  final document = buildFixtureDocument();
+  final document = buildTouchFixtureDocument();
   final viewModel = DocumentViewModel(
     document: document,
-    decorations: buildFixtureDecorations(document),
+    decorations: buildTouchFixtureDecorations(document),
   );
   runApp(PlaygroundApp(viewModel: viewModel));
 }
@@ -33,28 +33,35 @@ class PlaygroundApp extends StatelessWidget {
     return MaterialApp(
       title: 'Homeric Playground',
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
-      home: Scaffold(
-        appBar: AppBar(title: const Text('Homeric Playground')),
-        body: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(flex: 3, child: EditorPage(viewModel: viewModel)),
-            const VerticalDivider(width: 1),
-            SizedBox(
-              width: 380,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(12),
-                child: Column(
+      home: LayoutBuilder(
+        builder: (context, constraints) => Scaffold(
+          appBar: AppBar(title: const Text('Homeric Playground')),
+          body: constraints.maxWidth < 800
+              ? EditorPage(viewModel: viewModel)
+              : Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TransactionPanel(viewModel: viewModel),
-                    const Divider(height: 32),
-                    DecorationPanel(viewModel: viewModel),
+                    Expanded(
+                      flex: 3,
+                      child: EditorPage(viewModel: viewModel),
+                    ),
+                    const VerticalDivider(width: 1),
+                    SizedBox(
+                      width: 380,
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TransactionPanel(viewModel: viewModel),
+                            const Divider(height: 32),
+                            DecorationPanel(viewModel: viewModel),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              ),
-            ),
-          ],
         ),
       ),
     );

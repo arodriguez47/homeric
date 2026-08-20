@@ -35,7 +35,7 @@ enum PlaygroundDecorationKind {
 }
 
 /// The playground's [Decoration.spec] payload.
-class PlaygroundSpec {
+class PlaygroundSpec implements ReplacementContent {
   /// Creates a spec of [kind], with an optional display [label] (used by
   /// [chip] specs for the chip's text).
   const PlaygroundSpec(this.kind, {this.label});
@@ -49,6 +49,10 @@ class PlaygroundSpec {
 
   /// Display label, meaningful for [PlaygroundDecorationKind.chip].
   final String? label;
+
+  /// One object-replacement character for chip projections.
+  @override
+  String get text => kind == PlaygroundDecorationKind.chip ? '\uFFFC' : '';
 
   @override
   String toString() =>

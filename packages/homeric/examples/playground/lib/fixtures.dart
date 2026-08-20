@@ -29,6 +29,44 @@ Document buildFixtureDocument() {
   ]);
 }
 
+/// A deterministic long-form mobile fixture for touch and recycle testing.
+///
+/// It retains the debug panel's stable base IDs, then adds wrapping, Unicode,
+/// an empty paragraph, and enough rows to force the real lazy viewport to
+/// recycle children during device testing.
+Document buildTouchFixtureDocument() {
+  final base = buildFixtureDocument();
+  return Document(<Block>[
+    ...base.blocks,
+    Block(
+      id: 'touch-unicode',
+      type: 'paragraph',
+      runs: <InlineRun>[
+        InlineRun(
+          'Touch geometry: English مرحبا שלום 👨‍👩‍👧‍👦 e\u0301 [touch] '
+          'wraps across several visual lines without splitting a grapheme.',
+        ),
+      ],
+    ),
+    Block(
+      id: 'touch-empty',
+      type: 'paragraph',
+      runs: <InlineRun>[InlineRun('')],
+    ),
+    for (var index = 0; index < 48; index++)
+      Block(
+        id: 'touch-row-$index',
+        type: 'paragraph',
+        runs: <InlineRun>[
+          InlineRun(
+            'Recycled row ${index + 1}: drag a handle beyond the viewport '
+            'edge to exercise bounded autoscroll and stable block identity.',
+          ),
+        ],
+      ),
+  ]);
+}
+
 /// The decorations backing [buildFixtureDocument]'s baked-in bold/italic
 /// styling (the hide-delimiter, wash, underline, and chip decorations are
 /// all added live from the decoration panel instead — see
@@ -51,6 +89,35 @@ DecorationSet buildFixtureDecorations(Document document) {
 
     styleBetween('bold', PlaygroundDecorationKind.bold);
     styleBetween('hidden', PlaygroundDecorationKind.italic);
+  }
+  return DecorationSet.of(decorations);
+}
+
+/// Projection fixture paired with [buildTouchFixtureDocument].
+///
+/// The intro's markers provide folded caret edges, while `[touch]` becomes a
+/// widget slot so the same mobile trace covers both projection mechanisms.
+DecorationSet buildTouchFixtureDecorations(Document document) {
+  final decorations = <Decoration>[
+    ...buildFixtureDecorations(document).forBlock('intro'),
+  ];
+  final intro = document.blockById('intro');
+  if (intro != null) decorations.addAll(markerDecorationsFor(intro));
+  final unicode = document.blockById('touch-unicode');
+  if (unicode != null) {
+    final start = unicode.text.indexOf('[touch]');
+    if (start >= 0) {
+      decorations.add(Decoration.replace(
+        unicode.id,
+        start,
+        start + '[touch]'.length,
+        replacementLength: 1,
+        spec: const PlaygroundSpec(
+          PlaygroundDecorationKind.chip,
+          label: 'touch slot',
+        ),
+      ));
+    }
   }
   return DecorationSet.of(decorations);
 }

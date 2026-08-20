@@ -77,6 +77,8 @@ class _EditorPageState extends State<EditorPage> {
               cacheExtent: widget.cacheExtent,
               estimatedBlockHeight: 54,
               layoutRevision: (_darkText, _fontSize),
+              touchSelectionConfiguration:
+                  const HomericTouchSelectionConfiguration.adaptive(),
               blockBuilder: (context, block, focusNode) => Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _BlockView(

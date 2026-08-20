@@ -2,7 +2,18 @@
 // shared undo/decorations, and the lazy HomericEditableDocument viewport.
 
 import 'package:flutter/material.dart'
-    show ColoredBox, Colors, OutlinedButton, Size, Slider, SnackBar, Switch;
+    show
+        ColoredBox,
+        Colors,
+        CompositedTransformFollower,
+        OutlinedButton,
+        Size,
+        Slider,
+        SnackBar,
+        Switch;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, kLongPressTimeout;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 import 'package:homeric_playground/decoration_spec.dart';
@@ -42,6 +53,7 @@ void _placeCaret(DocumentViewModel vm, int position) {
 }
 
 void main() {
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
   group('builder commands mutate and notify exactly once per transaction', () {
     late Document document;
     late DocumentViewModel vm;
@@ -360,6 +372,62 @@ void main() {
   });
 
   group('HOM-18 public editing integration', () {
+    testWidgets('mobile touch fixture uses one virtualized adaptive editor',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(900, 700);
+      addTearDown(tester.view.reset);
+      final document = buildTouchFixtureDocument();
+      final vm = DocumentViewModel(
+        document: document,
+        decorations: buildTouchFixtureDecorations(document),
+      );
+      final controller = vm.editorController;
+      final inputSession = vm.inputSession;
+
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomericEditableDocument), findsOneWidget);
+      final documentHost = tester.widget<HomericEditableDocument>(
+        find.byType(HomericEditableDocument),
+      );
+      expect(
+        documentHost.touchSelectionConfiguration,
+        const HomericTouchSelectionConfiguration.adaptive(),
+      );
+      final mounted = tester.widgetList<HomericEditableParagraph>(
+        find.byType(HomericEditableParagraph),
+      );
+      expect(mounted.length, lessThan(document.blockCount));
+      expect(mounted, isNotEmpty);
+      expect(mounted.every((row) => identical(row.controller, controller)),
+          isTrue);
+      expect(mounted.every((row) => identical(row.inputSession, inputSession)),
+          isTrue);
+
+      final paragraph = find.byType(HomericParagraph).first;
+      final gesture = await tester.startGesture(
+        tester.getCenter(paragraph),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(controller.selection!.isCollapsed, isFalse);
+      expect(inputSession.isAttached, isTrue);
+      expect(find.byType(CompositedTransformFollower), findsWidgets);
+      await gesture.up();
+      await tester.pump();
+
+      await tester.tap(find.byType(Switch));
+      tester.view.physicalSize = const Size(700, 900);
+      await tester.pumpAndSettle();
+      expect(vm.editorController, same(controller));
+      expect(vm.inputSession, same(inputSession));
+      debugDefaultTargetPlatformOverride = null;
+    });
+
     testWidgets(
         'every paragraph uses the shared controller and one input session',
         (tester) async {

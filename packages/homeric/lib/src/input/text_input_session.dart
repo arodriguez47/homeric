@@ -20,6 +20,12 @@ abstract interface class HomericTextInputCommandDelegate {
   void showToolbar();
 }
 
+/// Requests a document-owned structural paragraph break.
+final class HomericInsertParagraphBreakIntent extends Intent {
+  /// Creates the structural break command.
+  const HomericInsertParagraphBreakIntent();
+}
+
 /// Connects one focused canonical block to Flutter's delta text-input model.
 ///
 /// This surface is experimental until a real Nexus consumer validates it. The
@@ -60,6 +66,8 @@ final class HomericTextInputSession {
   bool _applyingRemote = false;
   bool _deltasSuspended = false;
   bool _disposed = false;
+  String? _suppressedSelector;
+  Timer? _suppressedSelectorTimer;
 
   /// Whether this session currently owns Flutter's active input connection.
   bool get isAttached => _connection?.attached ?? false;
@@ -432,7 +440,37 @@ final class HomericTextInputSession {
   }
 
   void _performAction(int epoch, TextInputAction action) {
-    _resyncIfCurrent(epoch);
+    if (epoch != _currentEpoch || _disposed) return;
+    if (action == TextInputAction.newline &&
+        controller.composing == null &&
+        _commandDelegate?.invoke(
+              const HomericInsertParagraphBreakIntent(),
+            ) ==
+            true) {
+      _syncCanonical(force: true);
+      return;
+    }
+    _syncCanonical(force: true);
+  }
+
+  /// Suppresses the one AppKit selector that may follow a handled shortcut.
+  void suppressNextSelector(String selectorName) {
+    if (_disposed) return;
+    _suppressedSelector = selectorName;
+    _suppressedSelectorTimer?.cancel();
+    _suppressedSelectorTimer = Timer(const Duration(milliseconds: 100), () {
+      _suppressedSelector = null;
+      _suppressedSelectorTimer = null;
+    });
+  }
+
+  bool _consumeSuppressedSelector(String selectorName) {
+    final suppressed = _suppressedSelector;
+    if (suppressed != selectorName) return false;
+    _suppressedSelector = null;
+    _suppressedSelectorTimer?.cancel();
+    _suppressedSelectorTimer = null;
+    return true;
   }
 
   void _resyncIfCurrent(int epoch) {
@@ -463,6 +501,9 @@ final class HomericTextInputSession {
     _geometryGeneration = null;
     _commandDelegate = null;
     _deltasSuspended = false;
+    _suppressedSelector = null;
+    _suppressedSelectorTimer?.cancel();
+    _suppressedSelectorTimer = null;
     controller.interruptComposition(interruption);
     connection?.close();
   }
@@ -521,6 +562,7 @@ final class HomericTextInputSession {
     if (_disposed) return;
     _disposed = true;
     controller.removeListener(_controllerChanged);
+    _suppressedSelectorTimer?.cancel();
     _close(CompositionInterruption.disposal);
   }
 }
@@ -590,6 +632,7 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   @override
   void performSelector(String selectorName) {
     if (epoch != session._currentEpoch || session._disposed) return;
+    if (session._consumeSuppressedSelector(selectorName)) return;
     final intent = intentForMacOSSelector(selectorName);
     if (intent != null) session._commandDelegate?.invoke(intent);
   }

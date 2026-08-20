@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 
 import '../input/text_input_session.dart';
 import '../model/block.dart';
+import '../model/document.dart';
 import '../model/position.dart';
 import '../model/selection.dart';
 import '../render/paragraph_geometry.dart';
@@ -29,6 +30,13 @@ typedef HomericDocumentSelectionHitTest = HomericDocumentSelectionHit? Function(
     Offset globalPoint);
 
 enum HomericScrollToBlockResult { reached, missing, stale, notReached }
+
+const _documentSelectAllSemanticsAction =
+    CustomSemanticsAction(label: 'Select all document text');
+const _documentUndoSemanticsAction =
+    CustomSemanticsAction(label: 'Undo document edit');
+const _documentRedoSemanticsAction =
+    CustomSemanticsAction(label: 'Redo document edit');
 
 /// Coordinates one canonical controller and one platform input session.
 ///
@@ -96,7 +104,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   double _layoutWidth = 0;
   double _pendingAnchorCorrection = 0;
   bool _anchorCorrectionScheduled = false;
-  int _heightOrderRevision = -1;
+  int _heightOrderDocumentRevision = -1;
+  int _heightOrderContentRevision = -1;
+  int _heightOrderRebuildCount = 0;
+  Document? _heightOrderDocument;
   Object? _globalLayoutSignature;
   _BlockMoveWitness? _dragMoveWitness;
   int _selectionDragGeneration = 0;
@@ -105,6 +116,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   Object? _selectionDragOwner;
   Offset? _selectionDragPointer;
   Timer? _selectionAutoScrollTimer;
+  int _selectionAutoScrollDirection = 0;
+  int _focusRequestGeneration = 0;
+  int _focusLossCheckGeneration = 0;
+  HomericSelection? _semanticsSelection;
+  HomericTextRange? _semanticsComposing;
+  bool _semanticsCanUndo = false;
+  bool _semanticsCanRedo = false;
 
   @override
   void initState() {
@@ -115,7 +133,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     );
     _scrollController = widget.scrollController ?? ScrollController();
     _syncOrder(force: true);
+    _captureSemanticsState();
     widget.controller.addListener(_controllerChanged);
+    FocusManager.instance.addListener(_focusTreeChanged);
   }
 
   @override
@@ -130,7 +150,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     if (!identical(oldWidget.controller, widget.controller)) {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
+      _focusRequestGeneration++;
       _syncOrder(force: true);
+      _captureSemanticsState();
     }
     if (!identical(oldWidget.inputSession, widget.inputSession)) {
       oldWidget.inputSession.resumeDeltas();
@@ -152,6 +174,35 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool get pointerSelectionDragActive =>
       _selectionDragActive && _selectionDragAnchor != null;
 
+  /// Number of full stable-ID order rebuilds performed by this viewport.
+  ///
+  /// Exposed for performance-contract tests; ordinary block-local text edits
+  /// must not advance it.
+  int get debugHeightOrderRebuildCount => _heightOrderRebuildCount;
+
+  /// Cancels a pointer drag if focus remains outside every editor row.
+  ///
+  /// The deferred check lets a recycled row transfer focus within the same
+  /// frame without terminating the document-owned drag.
+  void schedulePointerDragFocusLossCheck() {
+    if (!pointerSelectionDragActive) return;
+    final generation = ++_focusLossCheckGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _focusLossCheckGeneration ||
+          !pointerSelectionDragActive ||
+          hasEditingFocus) {
+        return;
+      }
+      _cancelPointerSelectionDragWithoutRetarget();
+      widget.inputSession.blur();
+    });
+  }
+
+  void _focusTreeChanged() {
+    if (pointerSelectionDragActive) schedulePointerDragFocusLossCheck();
+  }
+
   /// Suspends platform deltas while a document-global drag moves its head.
   void beginSelectionDrag() {
     if (_selectionDragActive) return;
@@ -163,6 +214,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   void beginPointerSelectionDrag(int anchor, {Object? owner}) {
     cancelPointerSelectionDrag();
     _selectionDragGeneration++;
+    _focusLossCheckGeneration++;
     _selectionDragAnchor = anchor;
     _selectionDragDocumentRevision = widget.controller.documentRevision;
     _selectionDragOwner = owner;
@@ -186,6 +238,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _selectionDragDocumentRevision = null;
     _selectionDragOwner = null;
     _selectionDragGeneration++;
+    _focusLossCheckGeneration++;
     return endSelectionDrag();
   }
 
@@ -194,6 +247,22 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     if (owner != null && !identical(owner, _selectionDragOwner)) return;
     if (!_selectionDragActive && _selectionAutoScrollTimer == null) return;
     endPointerSelectionDrag(owner: owner);
+  }
+
+  void _cancelPointerSelectionDragWithoutRetarget() {
+    if (!_selectionDragActive && _selectionAutoScrollTimer == null) return;
+    _stopSelectionAutoscroll();
+    _selectionDragPointer = null;
+    _selectionDragAnchor = null;
+    _selectionDragDocumentRevision = null;
+    _selectionDragOwner = null;
+    _selectionDragGeneration++;
+    _focusLossCheckGeneration++;
+    if (_selectionDragActive) {
+      _selectionDragActive = false;
+      widget.inputSession.resumeDeltas();
+    }
+    if (mounted) setState(() {});
   }
 
   /// Registers current mounted hit-test geometry for [blockId].
@@ -497,13 +566,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   }
 
   void _focusBlock(String blockId) {
+    final generation = ++_focusRequestGeneration;
     final focusNode = _mountedFocusNodes[blockId];
     if (focusNode != null) {
       focusNode.requestFocus();
       return;
     }
     unawaited(scrollToBlock(blockId).then((result) {
-      if (!mounted || result != HomericScrollToBlockResult.reached) return;
+      if (!mounted ||
+          generation != _focusRequestGeneration ||
+          widget.controller.activeBlockId != blockId ||
+          result != HomericScrollToBlockResult.reached) {
+        return;
+      }
       _mountedFocusNodes[blockId]?.requestFocus();
     }));
   }
@@ -562,8 +637,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
         widget.controller.documentRevision != _selectionDragDocumentRevision) {
       cancelPointerSelectionDrag();
     }
-    final documentChanged = _syncOrder();
-    if (documentChanged && mounted) setState(() {});
+    final documentChanged =
+        widget.controller.documentRevision != _heightOrderDocumentRevision;
+    _syncOrder();
+    final semanticsChanged = _captureSemanticsState();
+    if ((documentChanged || semanticsChanged) && mounted) setState(() {});
     if (_selectionDragActive || !widget.inputSession.isAttached) return;
     final activeBlockId = widget.controller.activeBlockId;
     if (activeBlockId == widget.inputSession.activeBlockId) return;
@@ -572,7 +650,43 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       widget.inputSession.blur();
       return;
     }
-    _retargetActiveHost();
+    if (!_retargetActiveHost()) _scheduleActiveHostSettlement(activeBlockId);
+  }
+
+  void _scheduleActiveHostSettlement(String blockId) {
+    final generation = ++_focusRequestGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted ||
+          generation != _focusRequestGeneration ||
+          widget.controller.activeBlockId != blockId) {
+        return;
+      }
+      if (_retargetActiveHost()) return;
+      final result = await scrollToBlock(blockId);
+      if (!mounted ||
+          generation != _focusRequestGeneration ||
+          widget.controller.activeBlockId != blockId ||
+          result != HomericScrollToBlockResult.reached) {
+        return;
+      }
+      _retargetActiveHost();
+    });
+  }
+
+  bool _captureSemanticsState() {
+    final selection = widget.controller.selection;
+    final composing = widget.controller.composing;
+    final canUndo = widget.controller.canUndo;
+    final canRedo = widget.controller.canRedo;
+    final changed = selection != _semanticsSelection ||
+        composing != _semanticsComposing ||
+        canUndo != _semanticsCanUndo ||
+        canRedo != _semanticsCanRedo;
+    _semanticsSelection = selection;
+    _semanticsComposing = composing;
+    _semanticsCanUndo = canUndo;
+    _semanticsCanRedo = canRedo;
+    return changed;
   }
 
   void _updatePointerSelectionHead(Offset globalPoint) {
@@ -628,8 +742,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       _stopSelectionAutoscroll();
       return;
     }
-    if (_selectionAutoScrollTimer != null) return;
+    if (_selectionAutoScrollTimer != null &&
+        direction == _selectionAutoScrollDirection) {
+      return;
+    }
+    _stopSelectionAutoscroll();
     final generation = _selectionDragGeneration;
+    _selectionAutoScrollDirection = direction;
     _selectionAutoScrollTimer = Timer.periodic(
       const Duration(milliseconds: 16),
       (_) => _selectionAutoscrollTick(generation, direction),
@@ -667,6 +786,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   void _stopSelectionAutoscroll() {
     _selectionAutoScrollTimer?.cancel();
     _selectionAutoScrollTimer = null;
+    _selectionAutoScrollDirection = 0;
   }
 
   bool _retargetActiveHost() {
@@ -800,12 +920,54 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   }
 
   bool _syncOrder({bool force = false}) {
-    final revision = widget.controller.documentRevision;
-    if (!force && revision == _heightOrderRevision) return false;
+    final documentRevision = widget.controller.documentRevision;
+    if (!force && documentRevision == _heightOrderDocumentRevision) {
+      return false;
+    }
+    final contentRevision = widget.controller.contentRevision;
+    final document = widget.controller.document;
+    final previousDocument = _heightOrderDocument;
+    final activeBlockId = widget.controller.activeBlockId;
+    final expectedActiveIndex =
+        activeBlockId == null ? null : _heightCache.indexOf(activeBlockId);
+    final blockLocalContentChange = !force &&
+        contentRevision != _heightOrderContentRevision &&
+        previousDocument != null &&
+        document.blockCount == _heightCache.length &&
+        expectedActiveIndex != null &&
+        document.blocks[expectedActiveIndex].id == activeBlockId &&
+        _onlyActiveBlockChanged(
+          previousDocument,
+          document,
+          expectedActiveIndex,
+        );
+    _heightOrderDocumentRevision = documentRevision;
+    _heightOrderContentRevision = contentRevision;
+    _heightOrderDocument = document;
+    if (blockLocalContentChange) return false;
     _heightCache.replaceOrder(
-      widget.controller.document.blocks.map((block) => block.id).toList(),
+      document.blocks.map((block) => block.id).toList(),
     );
-    _heightOrderRevision = revision;
+    _heightOrderRebuildCount++;
+    return true;
+  }
+
+  bool _onlyActiveBlockChanged(
+    Document before,
+    Document after,
+    int activeIndex,
+  ) {
+    if (before.blockCount != after.blockCount ||
+        identical(before.blocks[activeIndex], after.blocks[activeIndex]) ||
+        before.blocks[activeIndex].id != after.blocks[activeIndex].id) {
+      return false;
+    }
+    for (var index = 0; index < after.blockCount; index++) {
+      if (index != activeIndex &&
+          !identical(before.blocks[index], after.blocks[index])) {
+        return false;
+      }
+    }
     return true;
   }
 
@@ -845,6 +1007,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   @override
   void dispose() {
     _stopSelectionAutoscroll();
+    FocusManager.instance.removeListener(_focusTreeChanged);
     widget.controller.removeListener(_controllerChanged);
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
     _commandHosts.clear();
@@ -874,78 +1037,93 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       _heightCache.invalidateAll();
     }
     final document = widget.controller.document;
-    return CustomScrollView(
-      controller: _scrollController,
-      // Flutter 3.24 minimum predates scrollCacheExtent.
-      // ignore: deprecated_member_use
-      cacheExtent: widget.cacheExtent,
-      slivers: <Widget>[
-        SliverPadding(
-          padding: widget.padding,
-          sliver: SliverReorderableList(
-            itemCount: document.blockCount,
-            findChildIndexCallback: (key) {
-              final stableKey = key is GlobalObjectKey && key.value is Key
-                  ? key.value as Key
-                  : key;
-              final blockId = stableKey is GlobalKey
-                  ? _blockIdsByRowKey[stableKey]
-                  : stableKey is ValueKey<String>
-                      ? stableKey.value
-                      : null;
-              return blockId == null
-                  ? null
-                  : widget.controller.document.indexOfBlockId(blockId);
-            },
-            // Flutter 3.24 exposes only this callback.
-            // ignore: deprecated_member_use
-            onReorder: _reorder,
-            onReorderStart: _reorderStarted,
-            onReorderEnd: _reorderEnded,
-            proxyDecorator: (child, _, __) => MouseRegion(
-              cursor: SystemMouseCursors.grabbing,
-              child: child,
+    final documentActions = <CustomSemanticsAction, VoidCallback>{
+      if (widget.controller.selection != null &&
+          widget.controller.composing == null)
+        _documentSelectAllSemanticsAction: selectAll,
+      if (widget.controller.canUndo)
+        _documentUndoSemanticsAction: widget.controller.undo,
+      if (widget.controller.canRedo)
+        _documentRedoSemanticsAction: widget.controller.redo,
+    };
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: 'Document editor, ${document.blockCount} blocks',
+      customSemanticsActions: documentActions,
+      child: CustomScrollView(
+        controller: _scrollController,
+        // Flutter 3.24 minimum predates scrollCacheExtent.
+        // ignore: deprecated_member_use
+        cacheExtent: widget.cacheExtent,
+        slivers: <Widget>[
+          SliverPadding(
+            padding: widget.padding,
+            sliver: SliverReorderableList(
+              itemCount: document.blockCount,
+              findChildIndexCallback: (key) {
+                final stableKey = key is GlobalObjectKey && key.value is Key
+                    ? key.value as Key
+                    : key;
+                final blockId = stableKey is GlobalKey
+                    ? _blockIdsByRowKey[stableKey]
+                    : stableKey is ValueKey<String>
+                        ? stableKey.value
+                        : null;
+                return blockId == null
+                    ? null
+                    : widget.controller.document.indexOfBlockId(blockId);
+              },
+              // Flutter 3.24 exposes only this callback.
+              // ignore: deprecated_member_use
+              onReorder: _reorder,
+              onReorderStart: _reorderStarted,
+              onReorderEnd: _reorderEnded,
+              proxyDecorator: (child, _, __) => MouseRegion(
+                cursor: SystemMouseCursors.grabbing,
+                child: child,
+              ),
+              itemBuilder: (context, index) {
+                final block = document.blocks[index];
+                final witness = _heightCache.prepareMeasurement(
+                  blockId: block.id,
+                  documentRevision: widget.controller.documentRevision,
+                  layoutSignature: (block, _layoutWidth, widget.layoutRevision),
+                );
+                return _DocumentBlockRow(
+                  key: _rowKeyFor(block.id),
+                  controller: widget.controller,
+                  block: block,
+                  index: index,
+                  totalCount: document.blockCount,
+                  builder: widget.blockBuilder!,
+                  witness: witness,
+                  keepAlive: () =>
+                      widget.controller.activeBlockId == block.id ||
+                      (_selectionDragActive &&
+                          widget.inputSession.activeBlockId == block.id),
+                  canReorder: () => canReorderBlock(block.id),
+                  onMove: (delta) => moveBlockBy(block.id, delta),
+                  onHeight: _recordHeight,
+                  onMount: (context, focusNode) {
+                    _mountedRows[block.id] = context;
+                    _mountedFocusNodes[block.id] = focusNode;
+                  },
+                  onUnmount: (context, focusNode) {
+                    if (identical(_mountedRows[block.id], context)) {
+                      _mountedRows.remove(block.id);
+                    }
+                    if (identical(_mountedFocusNodes[block.id], focusNode)) {
+                      _mountedFocusNodes.remove(block.id);
+                    }
+                    _releaseRowKeyWhenUnused(block.id);
+                  },
+                );
+              },
             ),
-            itemBuilder: (context, index) {
-              final block = document.blocks[index];
-              final witness = _heightCache.prepareMeasurement(
-                blockId: block.id,
-                documentRevision: widget.controller.documentRevision,
-                layoutSignature: (block, _layoutWidth, widget.layoutRevision),
-              );
-              return _DocumentBlockRow(
-                key: _rowKeyFor(block.id),
-                controller: widget.controller,
-                block: block,
-                index: index,
-                totalCount: document.blockCount,
-                builder: widget.blockBuilder!,
-                witness: witness,
-                keepAlive: () =>
-                    widget.controller.activeBlockId == block.id ||
-                    (_selectionDragActive &&
-                        widget.inputSession.activeBlockId == block.id),
-                canReorder: () => canReorderBlock(block.id),
-                onMove: (delta) => moveBlockBy(block.id, delta),
-                onHeight: _recordHeight,
-                onMount: (context, focusNode) {
-                  _mountedRows[block.id] = context;
-                  _mountedFocusNodes[block.id] = focusNode;
-                },
-                onUnmount: (context, focusNode) {
-                  if (identical(_mountedRows[block.id], context)) {
-                    _mountedRows.remove(block.id);
-                  }
-                  if (identical(_mountedFocusNodes[block.id], focusNode)) {
-                    _mountedFocusNodes.remove(block.id);
-                  }
-                  _releaseRowKeyWhenUnused(block.id);
-                },
-              );
-            },
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

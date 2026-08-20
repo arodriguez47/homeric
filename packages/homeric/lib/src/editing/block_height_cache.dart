@@ -63,6 +63,9 @@ final class BlockHeightCache {
 
   double? heightFor(String blockId) => _heights[blockId];
 
+  /// Returns the current stable-order index for [blockId], if retained.
+  int? indexOf(String blockId) => _indices[blockId];
+
   void replaceOrder(List<String> blockIds) {
     final retained = blockIds.toSet();
     _heights.removeWhere((blockId, _) => !retained.contains(blockId));

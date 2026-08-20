@@ -599,6 +599,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
+      if (_documentHost != null)
+        const SingleActivator(LogicalKeyboardKey.enter):
+            const HomericInsertParagraphBreakIntent(),
+      if (_documentHost != null)
+        const SingleActivator(LogicalKeyboardKey.numpadEnter):
+            const HomericInsertParagraphBreakIntent(),
       const SingleActivator(LogicalKeyboardKey.tab):
           const _TraverseIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true):
@@ -630,7 +636,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         // Keep the exact chord at this nearest command boundary even when
         // composition or a cross-block selection makes the move a no-op.
         enabled: (_) => _ownsEditingFocus && _documentHost != null,
-        invoke: (intent) => _documentHost?.moveActiveBlock(intent.delta),
+        invoke: (intent) {
+          widget.inputSession.suppressNextSelector(intent.delta < 0
+              ? 'moveUpAndModifySelection:'
+              : 'moveDownAndModifySelection:');
+          return _documentHost?.moveActiveBlock(intent.delta);
+        },
+      ),
+      HomericInsertParagraphBreakIntent:
+          _HostAction<HomericInsertParagraphBreakIntent>(
+        enabled: (_) => _canUseActions && _documentHost != null,
+        invoke: (_) => _controller.insertParagraphBreak(),
       ),
       DismissIntent: _HostAction<DismissIntent>(
         enabled: (_) => _contextMenuController?.isShown ?? false,
@@ -754,6 +770,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       value: block.text,
       selection: semanticsSelection,
       focused: _focusNode.hasFocus,
+      editable:
+          _documentHost == null || _controller.activeBlockId == widget.blockId,
       textDirection: widget.paragraphSpec.direction == ParagraphDirection.rtl
           ? TextDirection.rtl
           : TextDirection.ltr,
@@ -768,9 +786,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
           ? _semanticsSelectAll
           : null,
       child: ExcludeSemantics(
-        child: Shortcuts(
-          shortcuts: shortcuts,
-          child: DefaultTextEditingShortcuts(
+        child: DefaultTextEditingShortcuts(
+          child: Shortcuts(
+            shortcuts: shortcuts,
             child: Actions(
               actions: actions,
               child: Builder(
@@ -1646,6 +1664,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     } else if (_documentHost?.pointerSelectionDragActive ?? false) {
       // Recycling may temporarily remove focus from the anchor row while the
       // document coordinator owns the drag and preserves its input epoch.
+      _documentHost?.schedulePointerDragFocusLossCheck();
     } else {
       _cancelSelectionPointer();
       _clearTransientState();
@@ -1883,6 +1902,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
     required this.value,
     required this.selection,
     required this.focused,
+    required this.editable,
     required this.textDirection,
     required this.onFocus,
     required this.onTap,
@@ -1898,6 +1918,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
   final String value;
   final TextSelection? selection;
   final bool focused;
+  final bool editable;
   final TextDirection textDirection;
   final VoidCallback onFocus;
   final VoidCallback onTap;
@@ -1914,6 +1935,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
         value: value,
         selection: selection,
         focused: focused,
+        editable: editable,
         textDirection: textDirection,
         onFocus: onFocus,
         onTap: onTap,
@@ -1932,6 +1954,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
       ..value = value
       ..selection = selection
       ..focused = focused
+      ..editable = editable
       ..textDirection = textDirection
       ..onFocus = onFocus
       ..onTap = onTap
@@ -1949,6 +1972,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     required String value,
     required TextSelection? selection,
     required bool focused,
+    required bool editable,
     required TextDirection textDirection,
     required VoidCallback onFocus,
     required VoidCallback onTap,
@@ -1961,6 +1985,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   })  : _value = value,
         _selection = selection,
         _focused = focused,
+        _editable = editable,
         _textDirection = textDirection,
         _onFocus = onFocus,
         _onTap = onTap,
@@ -1974,6 +1999,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   String _value;
   TextSelection? _selection;
   bool _focused;
+  bool _editable;
   TextDirection _textDirection;
   VoidCallback _onFocus;
   VoidCallback _onTap;
@@ -1999,6 +2025,12 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   set focused(bool value) {
     if (_focused == value) return;
     _focused = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  set editable(bool value) {
+    if (_editable == value) return;
+    _editable = value;
     markNeedsSemanticsUpdate();
   }
 
@@ -2061,14 +2093,16 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     super.describeSemanticsConfiguration(config);
     config
       ..isSemanticBoundary = true
+      ..value = _value
+      ..textDirection = _textDirection
+      ..onFocus = _onFocus
+      ..onTap = _onTap;
+    if (!_editable) return;
+    config
       ..isTextField = true
       ..isReadOnly = false
       ..isMultiline = false
       ..isFocused = _focused
-      ..value = _value
-      ..textDirection = _textDirection
-      ..onFocus = _onFocus
-      ..onTap = _onTap
       ..onSetText = _onSetText
       ..onSetSelection = _onSetSelection;
     if (_onCopy case final callback?) config.onCopy = callback;

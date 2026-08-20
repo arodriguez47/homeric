@@ -1178,6 +1178,137 @@ void main() {
     );
   });
 
+  testWidgets('edge grabber can apply one consumer-prepared grouped move',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma', 'delta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(1, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    var handlerCalls = 0;
+    var commits = 0;
+    final subscription = controller.committedChanges.listen((_) => commits++);
+    addTearDown(subscription.cancel);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      onMoveBlock: (context) {
+        handlerCalls++;
+        expect(context.blockId, 'block-1');
+        expect(context.isCurrent, isTrue);
+        final transaction = Transaction(context.document)
+          ..moveBlock('block-1', 3)
+          ..moveBlock('block-2', 3);
+        return HomericDocumentCommandResult.prepared(HomericPreparedCommand(
+          stages: <Transaction>[transaction],
+          selection: context.selection?.map(transaction.mapping),
+        ));
+      },
+    ));
+    await tester.pump();
+    final handle = find.text('⋮').at(1);
+    await tester.drag(handle, const Offset(0, 80));
+    await tester.pumpAndSettle();
+
+    expect(handlerCalls, 1);
+    expect(commits, 1);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-0', 'block-3', 'block-1', 'block-2'],
+    );
+    expect(controller.activeBlockId, 'block-1');
+    expect(controller.undo(), isTrue);
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-0', 'block-1', 'block-2', 'block-3'],
+    );
+  });
+
+  testWidgets('reorder handler cannot mutate the controller before returning',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      key: key,
+      onMoveBlock: (_) {
+        controller.setSelection(
+          HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+        );
+        return HomericDocumentCommandResult.handled;
+      },
+    ));
+    await tester.pump();
+
+    expect(
+      () => key.currentState!.moveBlockBy('block-0', 1),
+      throwsA(isA<StateError>()),
+    );
+    expect(controller.document, same(document));
+  });
+
+  testWidgets('rejected reorder reports and announces without a host epoch',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    final rejections = <HomericBlockMoveRejection>[];
+    final announcements = <Map<dynamic, dynamic>>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockDecodedMessageHandler<dynamic>(
+      SystemChannels.accessibility,
+      (message) async {
+        announcements.add(message as Map<dynamic, dynamic>);
+      },
+    );
+    addTearDown(() => TestDefaultBinaryMessengerBinding
+        .instance.defaultBinaryMessenger
+        .setMockDecodedMessageHandler<dynamic>(
+            SystemChannels.accessibility, null));
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      key: key,
+      onMoveBlock: (_) => HomericDocumentCommandResult.rejected(
+        #privateGroup,
+        announcement: 'This group cannot move there',
+      ),
+      onMoveRejected: rejections.add,
+    ));
+    await tester.pump();
+
+    expect(key.currentState!.moveBlockBy('block-0', 1), isFalse);
+    await tester.pump();
+
+    expect(rejections, hasLength(1));
+    expect(rejections.single.documentRevision, 0);
+    expect(rejections.single.reason, #privateGroup);
+    expect(
+      announcements.where((message) => message['type'] == 'announce').map(
+            (message) => (message['data'] as Map<dynamic, dynamic>)['message'],
+          ),
+      contains('This group cannot move there'),
+    );
+  });
+
   testWidgets('Cmd Shift arrows move a focused block once and edge is a no-op',
       (tester) async {
     final document = _document(<String>['alpha', 'beta', 'gamma']);
@@ -2047,6 +2178,8 @@ Widget _editableDocument(
   Key? key,
   List<HomericDocumentCommandBinding> commandBindings =
       const <HomericDocumentCommandBinding>[],
+  HomericBlockMoveHandler? onMoveBlock,
+  ValueChanged<HomericBlockMoveRejection>? onMoveRejected,
   ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
 }) =>
     _withOverlay(SizedBox(
@@ -2057,6 +2190,8 @@ Widget _editableDocument(
         controller: controller,
         inputSession: session,
         commandBindings: commandBindings,
+        onMoveBlock: onMoveBlock,
+        onMoveRejected: onMoveRejected,
         onCommandRejected: onCommandRejected,
         cacheExtent: 0,
         estimatedBlockHeight: 44,

@@ -129,6 +129,37 @@ typedef HomericDocumentCommandHandler = HomericDocumentCommandResult Function(
   HomericDocumentCommandContext context,
 );
 
+/// Epoch-bound context supplied before any block-reorder mutation.
+final class HomericBlockMoveContext {
+  const HomericBlockMoveContext._({
+    required this.document,
+    required this.selection,
+    required this.composing,
+    required this.stateRevision,
+    required this.documentRevision,
+    required this.blockId,
+    required this.targetIndex,
+    required bool Function() isCurrent,
+  }) : _isCurrent = isCurrent;
+
+  final Document document;
+  final HomericSelection? selection;
+  final HomericTextRange? composing;
+  final int stateRevision;
+  final int documentRevision;
+  final String blockId;
+  final int targetIndex;
+  final bool Function() _isCurrent;
+
+  /// Whether the originating reorder capability still owns current state.
+  bool get isCurrent => _isCurrent();
+}
+
+/// Consumer hook for grouping or rejecting one block-reorder request.
+typedef HomericBlockMoveHandler = HomericDocumentCommandResult Function(
+  HomericBlockMoveContext context,
+);
+
 /// One ordered document-level shortcut/action registration.
 final class HomericDocumentCommandBinding {
   const HomericDocumentCommandBinding({
@@ -155,7 +186,23 @@ final class HomericDocumentCommandRejection {
   final Object reason;
   final String announcement;
   final String blockId;
+
   final int hostEpoch;
+}
+
+/// Observable rejection from a document-owned reorder surface.
+final class HomericBlockMoveRejection {
+  const HomericBlockMoveRejection({
+    required this.reason,
+    required this.announcement,
+    required this.blockId,
+    required this.documentRevision,
+  });
+
+  final Object reason;
+  final String announcement;
+  final String blockId;
+  final int documentRevision;
 }
 
 typedef HomericDocumentSelectionHit = ({
@@ -213,6 +260,8 @@ class HomericEditableDocument extends StatefulWidget {
     required this.inputSession,
     required this.child,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
+    this.onMoveBlock,
+    this.onMoveRejected,
     this.onCommandRejected,
   })  : blockBuilder = null,
         scrollController = null,
@@ -234,6 +283,8 @@ class HomericEditableDocument extends StatefulWidget {
     this.estimatedBlockHeight = 48,
     this.layoutRevision,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
+    this.onMoveBlock,
+    this.onMoveRejected,
     this.onCommandRejected,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
@@ -258,6 +309,13 @@ class HomericEditableDocument extends StatefulWidget {
   /// As with other Flutter widget collections, treat this list as immutable
   /// and replace it with a new instance when registrations change.
   final List<HomericDocumentCommandBinding> commandBindings;
+
+  /// Optional consumer policy shared by drag, semantics, and programmatic
+  /// reorder surfaces. Ignored results retain Homeric's built-in move.
+  final HomericBlockMoveHandler? onMoveBlock;
+
+  /// Receives typed feedback when a document-owned reorder is rejected.
+  final ValueChanged<HomericBlockMoveRejection>? onMoveRejected;
 
   /// Receives typed rejected-command feedback.
   final ValueChanged<HomericDocumentCommandRejection>? onCommandRejected;
@@ -1127,13 +1185,68 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool _moveBlock(_BlockMoveWitness witness, int targetIndex) {
     if (!canReorderBlock(witness.blockId)) return false;
     final anchor = _captureViewportAnchor(witness.blockId);
-    final moved = widget.controller.moveBlock(BlockMoveRequest(
+    final request = BlockMoveRequest(
       blockId: witness.blockId,
       targetIndex: targetIndex,
       documentRevision: witness.documentRevision,
       previousBlockId: witness.previousBlockId,
       nextBlockId: witness.nextBlockId,
-    ));
+    );
+    final handler = widget.onMoveBlock;
+    var moved = false;
+    if (handler == null) {
+      moved = widget.controller.moveBlock(request);
+    } else {
+      final stateRevision = widget.controller.stateRevision;
+      bool isCurrent() =>
+          mounted &&
+          widget.controller.stateRevision == stateRevision &&
+          widget.controller.documentRevision == witness.documentRevision &&
+          canReorderBlock(witness.blockId);
+      final result = handler(HomericBlockMoveContext._(
+        document: widget.controller.document,
+        selection: widget.controller.selection,
+        composing: widget.controller.composing,
+        stateRevision: stateRevision,
+        documentRevision: witness.documentRevision,
+        blockId: witness.blockId,
+        targetIndex: targetIndex,
+        isCurrent: isCurrent,
+      ));
+      if (widget.controller.stateRevision != stateRevision) {
+        throw StateError(
+          'A Homeric block move handler must return before editor state '
+          'changes.',
+        );
+      }
+      if (!isCurrent()) {
+        return false;
+      }
+      switch (result) {
+        case HomericDocumentCommandIgnored():
+          moved = widget.controller.moveBlock(request);
+        case HomericDocumentCommandPrepared(:final command):
+          moved = widget.controller.applyPreparedCommand(command);
+        case HomericDocumentCommandHandled():
+          moved = false;
+        case HomericDocumentCommandRejected(
+            :final reason,
+            :final announcement,
+          ):
+          widget.onMoveRejected?.call(HomericBlockMoveRejection(
+            reason: reason,
+            announcement: announcement,
+            blockId: witness.blockId,
+            documentRevision: witness.documentRevision,
+          ));
+          // Flutter 3.24 does not yet expose the multi-view announcement API.
+          // ignore: deprecated_member_use
+          SemanticsService.announce(
+            announcement,
+            Directionality.of(context),
+          );
+      }
+    }
     if (!moved) return false;
     _restoreViewportAnchor(anchor);
     final nextIndex =

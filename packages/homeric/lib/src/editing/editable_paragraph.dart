@@ -337,7 +337,7 @@ class HomericEditableParagraph extends StatefulWidget {
 }
 
 class _HomericEditableParagraphState extends State<HomericEditableParagraph>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const _caretBlinkHalfPeriod = Duration(milliseconds: 500);
   static const _floatingCursorResetDuration = Duration(milliseconds: 75);
 
@@ -413,6 +413,33 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _renewHostBindings();
     _captureCaretState();
     _controller.addListener(_controllerChanged);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) return;
+    _cancelPlatformTransientInput();
+    _hideLocalTouchSelectionChrome();
+    _dismissContextMenu();
+    _stopCaretBlink();
+    if (_controller.activeBlockId == widget.blockId) {
+      final documentHost = _documentHost;
+      if (documentHost != null) {
+        documentHost.blurEditingFocus();
+      } else {
+        widget.inputSession.blur();
+        _focusNode.unfocus();
+      }
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    _cancelFloatingCursor();
+    if (!_localTouchSelectionRequested) return;
+    _disposeLocalTouchSelectionOverlay();
+    _scheduleLocalTouchSelectionSync();
   }
 
   @override
@@ -515,6 +542,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _localTouchOverlayCoordinator.dispose();
     _floatingCursorResetController?.dispose();
     _floatingCursorResetController = null;
+    WidgetsBinding.instance.removeObserver(this);
     _stopCaretBlink();
     _caretVisibility.dispose();
     _clipboard.dispose();
@@ -2390,6 +2418,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (notify && mounted) setState(() {});
   }
 
+  void _cancelPlatformTransientInput() {
+    _cancelFloatingCursor();
+    _endLocalTouchHandleDrag();
+    _documentHost?.cancelPointerSelectionDrag(owner: this);
+    _resetPointerState();
+  }
+
   Iterable<_ResolvedSpellingSuggestion> get _currentSpellingSuggestions =>
       _spellingSuggestions.where(
         (suggestion) =>
@@ -3068,6 +3103,12 @@ final class _EditableHostCommandDelegate
   @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {
     state._updateFloatingCursor(point, epoch);
+  }
+
+  @override
+  void cancelTransientInput() {
+    if (!state.mounted || epoch != state._hostEpoch) return;
+    state._cancelPlatformTransientInput();
   }
 }
 

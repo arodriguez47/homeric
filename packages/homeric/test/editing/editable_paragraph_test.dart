@@ -350,6 +350,30 @@ void main() {
         reason: 'platform-expanded selection wins over floating collapse');
     expect(controller.selection, isNot(collapsed));
     expect(notifications, notificationsBeforeEnd);
+
+    controller.setSelection(HomericSelection.collapsed(
+      document.positionAt(0, 3),
+    ));
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Start,
+      offset: Offset.zero,
+    ));
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Update,
+      offset: const Offset(40, 0),
+    ));
+    await tester.pump();
+    expect(
+        find.byKey(const ValueKey('homeric-floating-caret-b')), findsOneWidget);
+    final selectionBeforeClose = controller.selection;
+    session.blur();
+    await tester.pump();
+    expect(
+        find.byKey(const ValueKey('homeric-floating-caret-b')), findsNothing);
+    callback(RawFloatingCursorPoint(state: FloatingCursorDragState.End));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.selection, selectionBeforeClose,
+        reason: 'a retained callback from the closed epoch is inert');
     debugDefaultTargetPlatformOverride = null;
   });
 

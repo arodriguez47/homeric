@@ -279,6 +279,38 @@ void main() {
     await tester.pump();
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+
+    final interrupted = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await interrupted.moveTo(beta);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    expect(session.isAttached, isTrue);
+    final retainedSelection = controller.selection;
+
+    tester.binding.handleAppLifecycleStateChanged(
+      AppLifecycleState.inactive,
+    );
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    expect(key.currentState!.touchSelectionChromeVisible, isFalse);
+    expect(key.currentState!.hasEditingFocus, isFalse);
+    expect(session.isAttached, isFalse);
+
+    tester.binding.handleAppLifecycleStateChanged(
+      AppLifecycleState.resumed,
+    );
+    await interrupted.moveTo(alpha);
+    await interrupted.up();
+    await tester.pump();
+    expect(controller.selection, retainedSelection);
+    expect(session.isAttached, isFalse,
+        reason: 'resume requires a fresh focus action');
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -2993,4 +3025,7 @@ final class _CommandDelegate implements HomericTextInputCommandDelegate {
 
   @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {}
+
+  @override
+  void cancelTransientInput() {}
 }

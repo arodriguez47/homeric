@@ -21,6 +21,9 @@ abstract interface class HomericTextInputCommandDelegate {
 
   /// Forwards one ordered platform floating-cursor callback.
   void updateFloatingCursor(RawFloatingCursorPoint point);
+
+  /// Revokes host-owned transient input state before this epoch closes.
+  void cancelTransientInput();
 }
 
 /// Requests a document-owned structural paragraph break.
@@ -501,6 +504,7 @@ final class HomericTextInputSession {
 
   void _platformClosed(int epoch) {
     if (_disposed || epoch != _currentEpoch) return;
+    _commandDelegate?.cancelTransientInput();
     _invalidateEpoch();
     _connection?.connectionClosedReceived();
     _connection = null;
@@ -514,6 +518,7 @@ final class HomericTextInputSession {
 
   void _close(CompositionInterruption interruption) {
     final connection = _connection;
+    _commandDelegate?.cancelTransientInput();
     _invalidateEpoch();
     _connection = null;
     _client = null;

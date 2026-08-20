@@ -456,7 +456,8 @@ class HomericEditableDocument extends StatefulWidget {
       HomericEditableDocumentState();
 }
 
-class HomericEditableDocumentState extends State<HomericEditableDocument> {
+class HomericEditableDocumentState extends State<HomericEditableDocument>
+    with WidgetsBindingObserver {
   bool _selectionDragActive = false;
   final Map<String, HomericTextInputCommandDelegate> _commandHosts = {};
   final Map<String, BuildContext> _mountedRows = <String, BuildContext>{};
@@ -539,6 +540,21 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _captureSemanticsState();
     widget.controller.addListener(_controllerChanged);
     FocusManager.instance.addListener(_focusTreeChanged);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) return;
+    blurEditingFocus();
+  }
+
+  @override
+  void didChangeMetrics() {
+    cancelPointerSelectionDrag();
+    if (!_touchSelectionRequested) return;
+    _disposeTouchSelectionOverlay();
+    _scheduleTouchSelectionSync();
   }
 
   @override
@@ -1932,6 +1948,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   void dispose() {
     _stopSelectionAutoscroll();
     _touchOverlayCoordinator.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeListener(_focusTreeChanged);
     widget.controller.removeListener(_controllerChanged);
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
@@ -2108,6 +2125,9 @@ final class _PendingRowCommandDelegate
 
   @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {}
+
+  @override
+  void cancelTransientInput() {}
 }
 
 class _HomericEditableDocumentScope extends InheritedWidget {

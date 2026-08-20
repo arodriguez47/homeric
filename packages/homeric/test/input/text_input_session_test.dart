@@ -73,6 +73,7 @@ void main() {
     session.attach(blockId: 'a', commandDelegate: oldDelegate);
     final stale = session.debugFloatingCursorCallback!;
     session.attach(blockId: 'a', commandDelegate: currentDelegate);
+    expect(oldDelegate.transientCancelCount, 1);
     stale(RawFloatingCursorPoint(state: FloatingCursorDragState.Start));
     expect(oldDelegate.floatingCursorPoints, isEmpty);
 
@@ -93,6 +94,7 @@ void main() {
     );
 
     session.blur();
+    expect(currentDelegate.transientCancelCount, 1);
     current(RawFloatingCursorPoint(state: FloatingCursorDragState.Start));
     expect(currentDelegate.floatingCursorPoints, hasLength(3));
     session.dispose();
@@ -902,6 +904,7 @@ final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
   final List<RawFloatingCursorPoint> floatingCursorPoints =
       <RawFloatingCursorPoint>[];
   int toolbarCount = 0;
+  int transientCancelCount = 0;
 
   @override
   Object? invoke(Intent intent) {
@@ -916,4 +919,7 @@ final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
   void updateFloatingCursor(RawFloatingCursorPoint point) {
     floatingCursorPoints.add(point);
   }
+
+  @override
+  void cancelTransientInput() => transientCancelCount++;
 }

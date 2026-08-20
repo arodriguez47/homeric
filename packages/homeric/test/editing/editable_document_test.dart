@@ -323,6 +323,49 @@ void main() {
     expect(find.byKey(const ValueKey('content-block-0')), findsNothing);
   });
 
+  testWidgets('newer and cancelled block scrolls invalidate older requests',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(1000, (index) => 'row $index'),
+    );
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        cacheExtent: 100,
+        estimatedBlockHeight: 30,
+        blockBuilder: (context, block, focusNode) => SizedBox(
+          key: ValueKey('content-${block.id}'),
+          height: 30,
+        ),
+      ),
+    )));
+
+    final older = key.currentState!.scrollToBlockLatest('block-900');
+    final newer = key.currentState!.scrollToBlockLatest('block-100');
+    for (var frame = 0; frame < 10; frame++) {
+      await tester.pump();
+    }
+    expect(await older, HomericScrollToBlockResult.stale);
+    expect(await newer, HomericScrollToBlockResult.reached);
+
+    final cancelled = key.currentState!.scrollToBlockLatest('block-800');
+    key.currentState!.cancelPendingScrollToBlock();
+    for (var frame = 0; frame < 3; frame++) {
+      await tester.pump();
+    }
+    expect(await cancelled, HomericScrollToBlockResult.stale);
+  });
+
   testWidgets('newer off-screen selection wins overlapping focus requests',
       (tester) async {
     final document = _document(

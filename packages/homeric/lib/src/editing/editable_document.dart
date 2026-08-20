@@ -359,6 +359,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   Timer? _selectionAutoScrollTimer;
   int _selectionAutoScrollDirection = 0;
   int _focusRequestGeneration = 0;
+  int _consumerScrollGeneration = 0;
   int _focusLossCheckGeneration = 0;
   HomericSelection? _semanticsSelection;
   HomericTextRange? _semanticsComposing;
@@ -945,7 +946,22 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     );
   }
 
-  Future<HomericScrollToBlockResult> scrollToBlock(String blockId) async {
+  Future<HomericScrollToBlockResult> scrollToBlock(String blockId) =>
+      _scrollToBlock(blockId);
+
+  /// Scrolls to [blockId] while superseding any prior consumer request.
+  Future<HomericScrollToBlockResult> scrollToBlockLatest(String blockId) {
+    final generation = ++_consumerScrollGeneration;
+    return _scrollToBlock(
+      blockId,
+      isCurrent: () => generation == _consumerScrollGeneration,
+    );
+  }
+
+  Future<HomericScrollToBlockResult> _scrollToBlock(
+    String blockId, {
+    bool Function()? isCurrent,
+  }) async {
     final revision = widget.controller.documentRevision;
     final index = widget.controller.document.indexOfBlockId(blockId);
     if (index == null) return HomericScrollToBlockResult.missing;
@@ -953,7 +969,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       return HomericScrollToBlockResult.notReached;
     }
     for (var attempt = 0; attempt < 8; attempt++) {
-      if (revision != widget.controller.documentRevision) {
+      if ((isCurrent != null && !isCurrent()) ||
+          revision != widget.controller.documentRevision) {
         return HomericScrollToBlockResult.stale;
       }
       final position = _scrollController.position;
@@ -962,16 +979,26 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
           .clamp(position.minScrollExtent, position.maxScrollExtent);
       _scrollController.jumpTo(target);
       await WidgetsBinding.instance.endOfFrame;
-      if (!mounted || revision != widget.controller.documentRevision) {
+      if (!mounted ||
+          (isCurrent != null && !isCurrent()) ||
+          revision != widget.controller.documentRevision) {
         return HomericScrollToBlockResult.stale;
       }
       final rowContext = _mountedRows[blockId];
       if (rowContext != null && rowContext.mounted) {
         await Scrollable.ensureVisible(rowContext, alignment: 0.5);
+        if (!mounted || (isCurrent != null && !isCurrent())) {
+          return HomericScrollToBlockResult.stale;
+        }
         return HomericScrollToBlockResult.reached;
       }
     }
     return HomericScrollToBlockResult.notReached;
+  }
+
+  /// Invalidates an in-flight [scrollToBlockLatest] request.
+  void cancelPendingScrollToBlock() {
+    _consumerScrollGeneration++;
   }
 
   void _controllerChanged() {

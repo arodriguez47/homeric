@@ -2,6 +2,28 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-20 — Capture a commit before awaiting its normalization
+
+**What:** A consumer session facade may need two distinct post-mutation
+boundaries: a synchronous lossless capture for durability and one settled event
+after compatibility normalization. Nexus's temporary AppFlowy host stages a
+detached canonical snapshot into its existing save buffer during the engine's
+after-transaction dispatch, then awaits structural repair. The repair stays in
+the triggering undo group and its tagged nested transaction is folded into the
+single settled event.
+
+**Why it mattered:** If the only change event waits on asynchronous
+normalization, the controller mutation can return before any durable owner has
+seen it. Immediate teardown then correctly invalidates the delayed callback but
+silently drops the latest edit. Conversely, publishing repair as a second user
+commit exposes transient structure and creates duplicate autosave semantics.
+
+**Rule going forward:** A host adapter transfers a detached lossless snapshot
+to its durability owner synchronously at the canonical commit boundary, before
+awaiting normalization. It publishes one settled consumer event afterward.
+Session/input generations guard both paths, and disposal may cancel delayed
+observation but never erase content that was already committed by the core.
+
 ## editor-architect — 2026-08-19 — Height reuse and glyph-layout reuse are separate caches
 
 **What:** Natural-height virtualization retained scalar row measurements by

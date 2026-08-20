@@ -644,6 +644,22 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
             );
             return (offset: hit.position, affinity: hit.affinity);
           },
+          globalRangeRects: (range) {
+            if (geometryDocumentRevision != _controller.documentRevision ||
+                !_isCurrentGeometry(geometry)) {
+              return null;
+            }
+            final render = overlayContext.findRenderObject();
+            if (render is! RenderBox || !render.attached || !render.hasSize) {
+              return null;
+            }
+            final localRects = consumerGeometry.rectsForRange(range);
+            if (localRects == null) return null;
+            return <Rect>[
+              for (final rect in localRects)
+                render.localToGlobal(rect.topLeft) & rect.size,
+            ];
+          },
           activeCaretGeometry: () {
             if (geometryDocumentRevision != _controller.documentRevision ||
                 !_isCurrentGeometry(geometry) ||

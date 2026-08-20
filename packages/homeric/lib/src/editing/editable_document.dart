@@ -316,12 +316,14 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     required Object owner,
     required Rect? Function() globalRect,
     required HomericDocumentSelectionHitTest hitTest,
+    required List<Rect>? Function(BlockTextRange range) globalRangeRects,
     required HomericActiveCaretGeometry? Function() activeCaretGeometry,
   }) {
     _selectionHosts[blockId] = _MountedSelectionHost(
       owner: owner,
       globalRect: globalRect,
       hitTest: hitTest,
+      globalRangeRects: globalRangeRects,
       activeCaretGeometry: activeCaretGeometry,
     );
   }
@@ -411,6 +413,30 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     return blockId == null
         ? null
         : _selectionHosts[blockId]?.activeCaretGeometry();
+  }
+
+  /// Current mounted selection rectangles in global coordinates.
+  ///
+  /// Returns an empty list while any selected mounted fragment has stale
+  /// layout geometry. Recycled off-screen blocks do not contribute until they
+  /// are mounted; callers must treat this as an ephemeral viewport capability,
+  /// not a complete document measurement.
+  List<Rect> get globalSelectionRects {
+    final selection = widget.controller.selection;
+    if (selection == null || selection.isCollapsed) return const <Rect>[];
+    final rects = <Rect>[];
+    for (final block in widget.controller.document.blocks) {
+      final host = _selectionHosts[block.id];
+      if (host == null) continue;
+      final fragment = selectionFragmentForBlock(block.id);
+      if (fragment == null || fragment.isCollapsed) continue;
+      final current = host.globalRangeRects(
+        BlockTextRange(fragment.start, fragment.end),
+      );
+      if (current == null) return const <Rect>[];
+      rects.addAll(current);
+    }
+    return List<Rect>.unmodifiable(rects);
   }
 
   /// Whether both directional endpoints resolve inside one block.
@@ -1266,12 +1292,14 @@ final class _MountedSelectionHost {
     required this.owner,
     required this.globalRect,
     required this.hitTest,
+    required this.globalRangeRects,
     required this.activeCaretGeometry,
   });
 
   final Object owner;
   final Rect? Function() globalRect;
   final HomericDocumentSelectionHitTest hitTest;
+  final List<Rect>? Function(BlockTextRange range) globalRangeRects;
   final HomericActiveCaretGeometry? Function() activeCaretGeometry;
 }
 

@@ -1631,6 +1631,45 @@ void main() {
     expect(key.currentState!.activeCaretGeometry, isNotNull);
   });
 
+  testWidgets('document host exposes mounted global selection rectangles',
+      (tester) async {
+    final document = _document(const ['alpha beta', 'gamma delta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 2),
+        head: document.positionAt(1, 5),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+
+    final rects = key.currentState!.globalSelectionRects;
+    expect(rects, hasLength(greaterThanOrEqualTo(2)));
+    expect(rects.every((rect) => rect.width >= 0 && rect.height > 0), isTrue);
+    expect(
+      rects.first.top,
+      lessThan(rects.last.top),
+      reason: 'each mounted block contributes its global painted selection',
+    );
+
+    expect(
+      controller.applyBlockEditBatch(
+        blockId: 'block-0',
+        edits: const <CanonicalTextEdit>[CanonicalTextEdit(0, 0, 'X')],
+        selection: const BlockTextSelection.collapsed(1),
+      ),
+      isTrue,
+    );
+    expect(key.currentState!.globalSelectionRects, isEmpty,
+        reason: 'stale layout generations must fail closed before relayout');
+  });
+
   testWidgets('public focus settlement reaches an off-screen stable block',
       (tester) async {
     final document = _document(List<String>.generate(40, (index) => '$index'));

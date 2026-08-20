@@ -1688,7 +1688,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(await pending, HomericFocusSettlementResult.focused);
     expect(key.currentState!.focusedBlockId, 'block-30');
+    expect(key.currentState!.hasEditingFocus, isTrue);
     expect(controller.activeBlockId, 'block-30');
+    key.currentState!.blurEditingFocus();
+    await tester.pump();
+    expect(key.currentState!.hasEditingFocus, isFalse);
+    expect(session.isAttached, isFalse);
     expect(
       await key.currentState!.settleFocusOnBlock('missing'),
       HomericFocusSettlementResult.missing,

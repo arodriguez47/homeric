@@ -399,6 +399,15 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool get hasEditingFocus =>
       _mountedFocusNodes.values.any((focusNode) => focusNode.hasFocus);
 
+  /// Ends the current platform epoch and removes focus from every mounted row.
+  void blurEditingFocus() {
+    cancelPointerSelectionDrag();
+    widget.inputSession.blur();
+    for (final focusNode in _mountedFocusNodes.values) {
+      focusNode.unfocus();
+    }
+  }
+
   /// Stable id of the mounted paragraph that currently owns focus.
   String? get focusedBlockId {
     for (final entry in _mountedFocusNodes.entries) {

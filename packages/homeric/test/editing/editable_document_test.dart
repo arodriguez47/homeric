@@ -1834,11 +1834,7 @@ void main() {
       if (data.hasFlag(SemanticsFlag.isTextField)) editableCount++;
     }
     expect(editableCount, 1);
-    final activeData = tester
-        .getSemantics(
-          find.byKey(const ValueKey('homeric-editable-block-1')),
-        )
-        .getSemanticsData();
+    final activeData = tester.getSemantics(paragraphs.at(1)).getSemanticsData();
     // ignore: deprecated_member_use
     expect(activeData.hasFlag(SemanticsFlag.isTextField), isTrue);
     semantics.dispose();

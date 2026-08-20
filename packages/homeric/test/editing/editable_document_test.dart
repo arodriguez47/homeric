@@ -1550,6 +1550,111 @@ void main() {
     );
     expect(controller.document.blocks[1].text, 'bXeta');
   });
+
+  testWidgets(
+      'consumer geometry, active caret, and live scroll padding stay current',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    final padding = ValueNotifier<EdgeInsetsGeometry>(EdgeInsets.zero);
+    HomericEditableBlockGeometry? firstGeometry;
+    HomericEditableBlockGeometry? latestGeometry;
+    addTearDown(padding.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    Widget build(double width) => _withOverlay(SizedBox(
+          width: width,
+          height: 240,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: controller,
+            inputSession: session,
+            scrollPadding: padding,
+            cacheExtent: 0,
+            blockBuilder: (context, block, focusNode) =>
+                HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+              overlayBuilder: (context, geometry) {
+                if (block.id != 'block-0') return const <Widget>[];
+                firstGeometry ??= geometry;
+                latestGeometry = geometry;
+                final caret = geometry.caretRect(1);
+                return <Widget>[
+                  if (caret != null)
+                    Positioned.fromRect(
+                      rect: caret,
+                      child: const SizedBox(
+                        key: ValueKey('consumer-caret-overlay'),
+                      ),
+                    ),
+                ];
+              },
+            ),
+          ),
+        ));
+
+    await tester.pumpWidget(build(320));
+    await tester.pump();
+    final initial = key.currentState!.activeCaretGeometry;
+    expect(initial, isNotNull);
+    expect(firstGeometry!.isCurrent, isTrue);
+    expect(firstGeometry!.documentRevision, controller.documentRevision);
+    expect(
+        find.byKey(const ValueKey('consumer-caret-overlay')), findsOneWidget);
+
+    padding.value = const EdgeInsets.only(top: 48);
+    await tester.pump();
+    final padded = key.currentState!.activeCaretGeometry;
+    expect(padded, isNotNull);
+    expect(padded!.globalRect.top, closeTo(initial!.globalRect.top + 48, 0.01));
+    expect(identical(session.controller, controller), isTrue);
+
+    expect(controller.replaceSelection('X'), isTrue);
+    expect(firstGeometry!.isCurrent, isFalse,
+        reason: 'document revision invalidates geometry before the next frame');
+    expect(key.currentState!.activeCaretGeometry, isNull);
+    await tester.pumpWidget(build(180));
+    await tester.pump();
+    expect(firstGeometry!.isCurrent, isFalse);
+    expect(latestGeometry!.layoutGeneration,
+        greaterThan(firstGeometry!.layoutGeneration));
+    expect(key.currentState!.activeCaretGeometry, isNotNull);
+  });
+
+  testWidgets('public focus settlement reaches an off-screen stable block',
+      (tester) async {
+    final document = _document(List<String>.generate(40, (index) => '$index'));
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+
+    final pending = key.currentState!.settleFocusOnBlock('block-30');
+    await tester.pumpAndSettle();
+    expect(await pending, HomericFocusSettlementResult.focused);
+    expect(key.currentState!.focusedBlockId, 'block-30');
+    expect(controller.activeBlockId, 'block-30');
+    expect(
+      await key.currentState!.settleFocusOnBlock('missing'),
+      HomericFocusSettlementResult.missing,
+    );
+  });
 }
 
 Widget _editableDocument(

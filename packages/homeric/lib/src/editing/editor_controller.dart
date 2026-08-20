@@ -1,6 +1,8 @@
 /// Experimental canonical editing state and transaction ownership.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -13,8 +15,184 @@ import '../model/inline_run.dart';
 import '../model/position.dart';
 import '../model/selection.dart';
 import '../transform/builders.dart';
+import '../transform/change_list.dart';
+import '../transform/mapping.dart';
 import '../transform/replace_step.dart';
 import '../transform/transaction.dart';
+
+/// Identifies the canonical command that produced a committed document change.
+enum HomericCommitOrigin {
+  /// Platform text input or a canonical text-editing intent.
+  textInput,
+
+  /// A structural editor command such as split, join, or block movement.
+  structural,
+
+  /// A transaction supplied by an embedding consumer.
+  externalTransaction,
+
+  /// Restoration of the previous history snapshot.
+  undo,
+
+  /// Reapplication of an undone history snapshot.
+  redo,
+}
+
+/// Consumer interception points before built-in editor commands run.
+enum HomericCommandKind {
+  /// Canonical text will be inserted or replace selected text.
+  preInsert,
+
+  /// Canonical text or a structural boundary will be deleted.
+  preDelete,
+
+  /// A paragraph break will split the active block.
+  preBreak,
+
+  /// A whole-block command such as reorder will run.
+  block,
+}
+
+/// One typed command presented to registered consumer interceptors.
+final class HomericEditorCommand {
+  /// Creates a command description.
+  const HomericEditorCommand({
+    required this.kind,
+    required this.controller,
+    required this.selection,
+    this.blockId,
+    this.text,
+    this.forward,
+    this.blockMove,
+  });
+
+  /// Interception point for this command.
+  final HomericCommandKind kind;
+
+  /// Sole canonical mutation owner.
+  ///
+  /// A handling interceptor may invoke one atomic controller intent. Nested
+  /// command interception is suppressed while that interceptor runs.
+  final HomericEditorController controller;
+
+  /// Directional selection captured before the command.
+  final HomericSelection? selection;
+
+  /// Stable active or explicitly targeted block ID, when applicable.
+  final String? blockId;
+
+  /// Canonical inserted text for [HomericCommandKind.preInsert].
+  final String? text;
+
+  /// Delete direction for [HomericCommandKind.preDelete], when directional.
+  final bool? forward;
+
+  /// Captured move request for [HomericCommandKind.block].
+  final BlockMoveRequest? blockMove;
+}
+
+/// The outcome returned by a [HomericCommandInterceptor].
+sealed class HomericCommandInterception {
+  const HomericCommandInterception();
+
+  /// Continues to the next interceptor and then the built-in command.
+  static const ignored = HomericCommandIgnored();
+
+  /// Stops interception because the consumer handled the command atomically.
+  static const handled = HomericCommandHandled();
+
+  /// Stops the command without mutating canonical state.
+  static HomericCommandRejected rejected(Object reason) =>
+      HomericCommandRejected(reason);
+}
+
+/// The interceptor did not claim the command.
+final class HomericCommandIgnored extends HomericCommandInterception {
+  const HomericCommandIgnored();
+}
+
+/// The interceptor handled the command through one controller intent.
+final class HomericCommandHandled extends HomericCommandInterception {
+  const HomericCommandHandled();
+}
+
+/// The interceptor rejected the command for a typed consumer reason.
+final class HomericCommandRejected extends HomericCommandInterception {
+  /// Creates a rejection carrying [reason] without presentation semantics.
+  const HomericCommandRejected(this.reason);
+
+  /// Consumer-defined typed rejection reason.
+  final Object reason;
+}
+
+/// Intercepts one typed command before the built-in editor behavior.
+typedef HomericCommandInterceptor = HomericCommandInterception Function(
+  HomericEditorCommand command,
+);
+
+/// Describes a proposed canonical mutation before the controller accepts it.
+final class HomericMutationRequest {
+  /// Creates a mutation-policy request.
+  const HomericMutationRequest({
+    required this.origin,
+    required this.before,
+    required this.after,
+    required this.changes,
+  });
+
+  /// Command family proposing the mutation.
+  final HomericCommitOrigin origin;
+
+  /// Canonical document before the proposed mutation.
+  final Document before;
+
+  /// Canonical document after the proposed mutation.
+  final Document after;
+
+  /// Stable block identities touched by the proposed mutation.
+  final ChangeList changes;
+
+  /// IDs of every block touched, created, or removed by the mutation.
+  Iterable<String> get touchedBlockIds => changes.touchedBlockIds;
+}
+
+/// Returns whether a proposed canonical mutation may commit.
+typedef HomericMutationPolicy = bool Function(HomericMutationRequest request);
+
+/// One post-commit canonical document event.
+final class HomericCommittedChange {
+  /// Creates an immutable committed-change event.
+  const HomericCommittedChange({
+    required this.before,
+    required this.after,
+    required this.mapping,
+    required this.changes,
+    required this.contentRevision,
+    required this.documentRevision,
+    required this.origin,
+  });
+
+  /// Canonical document before the commit.
+  final Document before;
+
+  /// Canonical document after the commit.
+  final Document after;
+
+  /// Position mapping from [before] into [after].
+  final Mapping mapping;
+
+  /// Stable block identities affected by the commit.
+  final ChangeList changes;
+
+  /// Controller content revision after the commit.
+  final int contentRevision;
+
+  /// Controller document revision after the commit.
+  final int documentRevision;
+
+  /// Command family that committed the change.
+  final HomericCommitOrigin origin;
+}
 
 /// A normalized UTF-16 range inside one block's canonical text.
 final class BlockTextRange {
@@ -183,6 +361,8 @@ enum CompositionInterruption {
   staleEpoch,
 }
 
+enum _CommandDispatch { proceed, handled, rejected }
+
 final class _EditorSnapshot {
   const _EditorSnapshot(
     this.document,
@@ -199,6 +379,18 @@ final class _EditorSnapshot {
   final double? preferredX;
 }
 
+final class _HistoryEntry {
+  const _HistoryEntry({
+    required this.snapshot,
+    required this.mapping,
+    required this.changes,
+  });
+
+  final _EditorSnapshot snapshot;
+  final Mapping mapping;
+  final ChangeList changes;
+}
+
 /// Owns Homeric's canonical document editing state.
 ///
 /// This surface is experimental until a real Nexus consumer validates it.
@@ -212,13 +404,16 @@ class HomericEditorController extends ChangeNotifier {
     HomericSelection? selection,
     HomericTextRange? composing,
     double? preferredX,
+    bool readOnly = false,
+    this.mutationPolicy,
     this.maxUndoDepth = 100,
     this.onBeforeCanonicalMutation,
   })  : _document = document,
         _decorations = decorations,
         _selection = selection,
         _composing = composing,
-        _preferredX = preferredX {
+        _preferredX = preferredX,
+        _readOnly = readOnly {
     if (maxUndoDepth < 1) {
       throw ArgumentError.value(
         maxUndoDepth,
@@ -244,14 +439,23 @@ class HomericEditorController extends ChangeNotifier {
   HomericSelection? _selection;
   HomericTextRange? _composing;
   double? _preferredX;
+  bool _readOnly;
 
-  final List<_EditorSnapshot> _undoStack = <_EditorSnapshot>[];
-  final List<_EditorSnapshot> _redoStack = <_EditorSnapshot>[];
+  final List<_HistoryEntry> _undoStack = <_HistoryEntry>[];
+  final List<_HistoryEntry> _redoStack = <_HistoryEntry>[];
+  final StreamController<HomericCommittedChange> _committedChanges =
+      StreamController<HomericCommittedChange>.broadcast(sync: true);
+  final List<HomericCommandInterceptor> _commandInterceptors =
+      <HomericCommandInterceptor>[];
   _EditorSnapshot? _compositionStart;
+  Mapping? _compositionMapping;
+  final List<StructuralChange> _compositionStructural = <StructuralChange>[];
   bool _compositionDidEdit = false;
   int _stateRevision = 0;
   int _contentRevision = 0;
   int _documentRevision = 0;
+  bool _dispatchingCommandInterceptor = false;
+  HomericCommandRejected? _lastCommandRejection;
 
   /// Called synchronously before a mutation touching hidden canonical text.
   ///
@@ -259,6 +463,9 @@ class HomericEditorController extends ChangeNotifier {
   /// grapheme being removed. A host can therefore reveal the projection
   /// before accepting the canonical mutation.
   final ValueChanged<CanonicalEditTarget>? onBeforeCanonicalMutation;
+
+  /// Optional consumer policy evaluated before every canonical mutation.
+  final HomericMutationPolicy? mutationPolicy;
 
   /// Maximum number of committed editor snapshots retained for undo.
   final int maxUndoDepth;
@@ -284,6 +491,33 @@ class HomericEditorController extends ChangeNotifier {
   /// Whether an undone editor snapshot can be restored.
   bool get canRedo => _redoStack.isNotEmpty;
 
+  /// Whether canonical mutations and history commands are disabled.
+  bool get isReadOnly => _readOnly;
+
+  /// Synchronous post-commit events for canonical document changes.
+  ///
+  /// Selection, focus, composition lifecycle, and presentation-only changes
+  /// do not emit events on this stream.
+  Stream<HomericCommittedChange> get committedChanges =>
+      _committedChanges.stream;
+
+  /// Most recent typed command rejection, cleared by the next dispatch.
+  HomericCommandRejected? get lastCommandRejection => _lastCommandRejection;
+
+  /// Registers [interceptor] after every currently registered interceptor.
+  ///
+  /// The returned callback removes only this registration. Interceptors run in
+  /// registration order and stop at the first handled or rejected outcome.
+  VoidCallback addCommandInterceptor(HomericCommandInterceptor interceptor) {
+    _commandInterceptors.add(interceptor);
+    var registered = true;
+    return () {
+      if (!registered) return;
+      registered = false;
+      _commandInterceptors.remove(interceptor);
+    };
+  }
+
   /// Monotonic witness for every listener-visible state transition.
   int get stateRevision => _stateRevision;
 
@@ -302,6 +536,18 @@ class HomericEditorController extends ChangeNotifier {
     if (current == null) return null;
     final resolved = _document.resolve(current.head);
     return resolved is InlinePosition ? resolved.block.id : null;
+  }
+
+  /// Enables or disables canonical mutation while preserving navigation.
+  ///
+  /// Entering read-only mode commits an accepted platform composition as its
+  /// existing single history unit before input is disabled.
+  bool setReadOnly(bool value) {
+    if (_readOnly == value) return false;
+    if (value) _finishComposition(notify: false);
+    _readOnly = value;
+    _notifyTransition();
+    return true;
   }
 
   /// Converts [offset] in [blockId] to a global canonical position.
@@ -455,7 +701,9 @@ class HomericEditorController extends ChangeNotifier {
     BlockTextSelection? replacementSelection,
     BlockTextRange? replacementComposing,
   }) {
-    if (_compositionStart != null || _composing != null) return false;
+    if (_readOnly || _compositionStart != null || _composing != null) {
+      return false;
+    }
     final current = _selection;
     if (current == null || !_isValidSelection(_document, current)) {
       return false;
@@ -468,6 +716,19 @@ class HomericEditorController extends ChangeNotifier {
     if (segments.length == 1 && start.blockIndex == end.blockIndex) {
       return replaceSelection(segments.single);
     }
+
+    final interception = _interceptedResult(HomericEditorCommand(
+      kind: segments.length > 1
+          ? HomericCommandKind.preBreak
+          : normalized.isEmpty
+              ? HomericCommandKind.preDelete
+              : HomericCommandKind.preInsert,
+      controller: this,
+      selection: current,
+      blockId: start.block.id,
+      text: normalized,
+    ));
+    if (interception != null) return interception;
 
     final tx = Transaction(_document);
     String? lastInsertedId;
@@ -574,7 +835,8 @@ class HomericEditorController extends ChangeNotifier {
   /// the model preserves endpoints and affinity, not a non-contiguous set of
   /// content when a moved block crosses the other endpoint.
   bool moveBlock(BlockMoveRequest request) {
-    if (_compositionStart != null ||
+    if (_readOnly ||
+        _compositionStart != null ||
         _composing != null ||
         _selectionHost(_document, _selection) == null ||
         request.documentRevision != _documentRevision) {
@@ -595,6 +857,14 @@ class HomericEditorController extends ChangeNotifier {
     if (previous != request.previousBlockId || next != request.nextBlockId) {
       return false;
     }
+    final interception = _interceptedResult(HomericEditorCommand(
+      kind: HomericCommandKind.block,
+      controller: this,
+      selection: _selection,
+      blockId: request.blockId,
+      blockMove: request,
+    ));
+    if (interception != null) return interception;
     final tx = Transaction(_document);
     try {
       tx.moveBlock(request.blockId, request.targetIndex);
@@ -620,7 +890,9 @@ class HomericEditorController extends ChangeNotifier {
   bool deleteForward() => _deleteCanonical(backward: false);
 
   bool _deleteCanonical({required bool backward}) {
-    if (_compositionStart != null || _composing != null) return false;
+    if (_readOnly || _compositionStart != null || _composing != null) {
+      return false;
+    }
     final current = _selection;
     final host = _selectionHost(_document, current);
     if (current == null || !_isValidSelection(_document, current)) return false;
@@ -662,6 +934,13 @@ class HomericEditorController extends ChangeNotifier {
     if (leadingIndex < 0 || insertionIndex >= _document.blockCount) {
       return false;
     }
+    final interception = _interceptedResult(HomericEditorCommand(
+      kind: HomericCommandKind.preDelete,
+      controller: this,
+      selection: _selection,
+      blockId: _document.blocks[insertionIndex].id,
+    ));
+    if (interception != null) return interception;
     final tx = Transaction(_document);
     try {
       tx.joinBlocks(_document.positionBeforeBlock(insertionIndex));
@@ -685,11 +964,20 @@ class HomericEditorController extends ChangeNotifier {
     TransactionResult result,
     HomericSelection? nextSelection, {
     HomericTextRange? nextComposing,
+    HomericCommitOrigin origin = HomericCommitOrigin.structural,
     Iterable<CanonicalEditTarget> revealTargets = const <CanonicalEditTarget>[],
   }) {
     if (!identical(transaction.before, _document) ||
         !transaction.docChanged ||
         !_isValidSelection(result.doc, nextSelection)) {
+      return false;
+    }
+    if (!_allowsMutation(
+      origin: origin,
+      before: _document,
+      after: result.doc,
+      changes: result.changes,
+    )) {
       return false;
     }
     final before = _snapshot();
@@ -705,15 +993,27 @@ class HomericEditorController extends ChangeNotifier {
     _composing = nextComposing;
     _preferredX = null;
     if (nextComposing == null) {
-      _pushUndo(before);
+      _pushUndo(
+        before,
+        mapping: result.mapping,
+        changes: result.changes,
+      );
     } else {
       _compositionStart = before;
       _compositionDidEdit = true;
+      _compositionMapping = Mapping()..appendMapping(result.mapping);
+      _compositionStructural
+        ..clear()
+        ..addAll(result.changes.structural);
     }
     _redoStack.clear();
     _notifyTransition(
       documentChanged: true,
       contentChanged: _canonicalTextDiffers(before.document, _document),
+      committedBefore: before.document,
+      committedMapping: result.mapping,
+      committedChanges: result.changes,
+      committedOrigin: origin,
     );
     return true;
   }
@@ -755,6 +1055,7 @@ class HomericEditorController extends ChangeNotifier {
     required BlockTextSelection selection,
     BlockTextRange? composing,
   }) {
+    if (_readOnly) return false;
     final index = _document.indexOfBlockId(blockId);
     if (index == null) return false;
     if (!_validBlockSelection(
@@ -767,6 +1068,19 @@ class HomericEditorController extends ChangeNotifier {
     if (edits
         .any((edit) => edit.text.contains('\n') || edit.text.contains('\r'))) {
       return false;
+    }
+    if (edits.isNotEmpty) {
+      final inserts = edits.where((edit) => edit.text.isNotEmpty).toList();
+      final interception = _interceptedResult(HomericEditorCommand(
+        kind: inserts.isEmpty
+            ? HomericCommandKind.preDelete
+            : HomericCommandKind.preInsert,
+        controller: this,
+        selection: _selection,
+        blockId: blockId,
+        text: inserts.map((edit) => edit.text).join(),
+      ));
+      if (interception != null) return interception;
     }
 
     final tx = Transaction(_document);
@@ -799,6 +1113,15 @@ class HomericEditorController extends ChangeNotifier {
         (composing != null && !_validBlockRange(composing, finalLength))) {
       return false;
     }
+    if (tx.docChanged &&
+        !_allowsMutation(
+          origin: HomericCommitOrigin.textInput,
+          before: _document,
+          after: result.doc,
+          changes: result.changes,
+        )) {
+      return false;
+    }
 
     final switchingComposition = _compositionStart != null &&
         activeBlockId != null &&
@@ -808,6 +1131,8 @@ class HomericEditorController extends ChangeNotifier {
     if (composing != null && _compositionStart == null) {
       _compositionStart = before;
       _compositionDidEdit = false;
+      _compositionMapping = Mapping();
+      _compositionStructural.clear();
     }
     final callback = onBeforeCanonicalMutation;
     if (callback != null) {
@@ -842,14 +1167,26 @@ class HomericEditorController extends ChangeNotifier {
 
     if (_compositionStart != null) {
       _compositionDidEdit = _compositionDidEdit || tx.docChanged;
+      if (tx.docChanged) {
+        _compositionMapping?.appendMapping(result.mapping);
+        _compositionStructural.addAll(result.changes.structural);
+      }
       if (composing == null) _finishComposition(notify: false);
     } else if (tx.docChanged) {
-      _pushUndo(before);
+      _pushUndo(
+        before,
+        mapping: result.mapping,
+        changes: result.changes,
+      );
     }
     if (tx.docChanged) _redoStack.clear();
     _notifyTransition(
       documentChanged: tx.docChanged,
       contentChanged: _canonicalTextDiffers(before.document, _document),
+      committedBefore: tx.docChanged ? before.document : null,
+      committedMapping: tx.docChanged ? result.mapping : null,
+      committedChanges: tx.docChanged ? result.changes : null,
+      committedOrigin: tx.docChanged ? HomericCommitOrigin.textInput : null,
     );
     return true;
   }
@@ -857,13 +1194,22 @@ class HomericEditorController extends ChangeNotifier {
   /// Applies a prebuilt external transaction and maps editor state through it.
   bool applyTransaction(Transaction transaction) {
     if (!identical(transaction.before, _document)) return false;
-    final compositionChanged = _finishComposition(notify: false);
     if (!transaction.docChanged) {
+      final compositionChanged = _finishComposition(notify: false);
       if (compositionChanged) _notifyTransition();
       return compositionChanged;
     }
-    final before = _snapshot();
     final result = transaction.finish();
+    if (!_allowsMutation(
+      origin: HomericCommitOrigin.externalTransaction,
+      before: _document,
+      after: result.doc,
+      changes: result.changes,
+    )) {
+      return false;
+    }
+    _finishComposition(notify: false);
+    final before = _snapshot();
     final mappedSelection = _selection?.map(result.mapping);
     final mappedComposing = _composing?.map(result.mapping);
     _document = result.doc;
@@ -877,11 +1223,19 @@ class HomericEditorController extends ChangeNotifier {
     )
         ? mappedComposing
         : null;
-    _pushUndo(before);
+    _pushUndo(
+      before,
+      mapping: result.mapping,
+      changes: result.changes,
+    );
     _redoStack.clear();
     _notifyTransition(
       documentChanged: true,
       contentChanged: _canonicalTextDiffers(before.document, _document),
+      committedBefore: before.document,
+      committedMapping: result.mapping,
+      committedChanges: result.changes,
+      committedOrigin: HomericCommitOrigin.externalTransaction,
     );
     return true;
   }
@@ -892,6 +1246,7 @@ class HomericEditorController extends ChangeNotifier {
   /// parallel decoration set beside the controller. An active composition is
   /// committed first, and [undo] restores the exact prior editor snapshot.
   bool replaceDecorations(DecorationSet value) {
+    if (_readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (identical(value, _decorations)) {
       if (compositionChanged) _notifyTransition();
@@ -899,7 +1254,15 @@ class HomericEditorController extends ChangeNotifier {
     }
     final before = _snapshot();
     _decorations = value;
-    _pushUndo(before);
+    _pushUndo(
+      before,
+      mapping: Mapping(),
+      changes: ChangeList.compute(
+        before.document,
+        before.document,
+        const <StructuralChange>[],
+      ),
+    );
     _redoStack.clear();
     _notifyTransition();
     return true;
@@ -913,14 +1276,38 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Restores the exact state before the latest committed edit group.
   bool undo() {
+    if (_readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (_undoStack.isEmpty) {
       if (compositionChanged) _notifyTransition();
       return compositionChanged;
     }
     final current = _snapshot();
-    final snapshot = _undoStack.removeLast();
-    _pushHistory(_redoStack, current);
+    final entry = _undoStack.last;
+    final snapshot = entry.snapshot;
+    final changes = ChangeList.compute(
+      current.document,
+      snapshot.document,
+      const <StructuralChange>[],
+    );
+    if (!_allowsMutation(
+      origin: HomericCommitOrigin.undo,
+      before: current.document,
+      after: snapshot.document,
+      changes: changes,
+    )) {
+      if (compositionChanged) _notifyTransition();
+      return compositionChanged;
+    }
+    _undoStack.removeLast();
+    _pushHistory(
+      _redoStack,
+      _HistoryEntry(
+        snapshot: current,
+        mapping: entry.mapping,
+        changes: entry.changes,
+      ),
+    );
     final contentChanged = _canonicalTextDiffers(
       current.document,
       snapshot.document,
@@ -930,20 +1317,45 @@ class HomericEditorController extends ChangeNotifier {
     _notifyTransition(
       documentChanged: documentChanged,
       contentChanged: contentChanged,
+      committedBefore: documentChanged ? current.document : null,
+      committedMapping: documentChanged ? entry.mapping.invert() : null,
+      committedChanges: documentChanged ? changes : null,
+      committedOrigin: documentChanged ? HomericCommitOrigin.undo : null,
     );
     return true;
   }
 
   /// Restores the exact state most recently displaced by [undo].
   bool redo() {
+    if (_readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (_redoStack.isEmpty) {
       if (compositionChanged) _notifyTransition();
       return compositionChanged;
     }
     final current = _snapshot();
-    final snapshot = _redoStack.removeLast();
-    _pushUndo(current);
+    final entry = _redoStack.last;
+    final snapshot = entry.snapshot;
+    final changes = ChangeList.compute(
+      current.document,
+      snapshot.document,
+      const <StructuralChange>[],
+    );
+    if (!_allowsMutation(
+      origin: HomericCommitOrigin.redo,
+      before: current.document,
+      after: snapshot.document,
+      changes: changes,
+    )) {
+      if (compositionChanged) _notifyTransition();
+      return compositionChanged;
+    }
+    _redoStack.removeLast();
+    _pushUndo(
+      current,
+      mapping: entry.mapping,
+      changes: changes,
+    );
     final contentChanged = _canonicalTextDiffers(
       current.document,
       snapshot.document,
@@ -953,6 +1365,10 @@ class HomericEditorController extends ChangeNotifier {
     _notifyTransition(
       documentChanged: documentChanged,
       contentChanged: contentChanged,
+      committedBefore: documentChanged ? current.document : null,
+      committedMapping: documentChanged ? entry.mapping : null,
+      committedChanges: documentChanged ? changes : null,
+      committedOrigin: documentChanged ? HomericCommitOrigin.redo : null,
     );
     return true;
   }
@@ -960,8 +1376,20 @@ class HomericEditorController extends ChangeNotifier {
   bool _finishComposition({required bool notify}) {
     final start = _compositionStart;
     if (start == null && _composing == null) return false;
-    if (start != null && _compositionDidEdit) _pushUndo(start);
+    if (start != null && _compositionDidEdit) {
+      _pushUndo(
+        start,
+        mapping: _compositionMapping ?? Mapping(),
+        changes: ChangeList.compute(
+          start.document,
+          _document,
+          List<StructuralChange>.of(_compositionStructural),
+        ),
+      );
+    }
     _compositionStart = null;
+    _compositionMapping = null;
+    _compositionStructural.clear();
     _compositionDidEdit = false;
     _composing = null;
     if (notify) _notifyTransition();
@@ -1029,28 +1457,126 @@ class HomericEditorController extends ChangeNotifier {
     return block.runs.last.attributes;
   }
 
-  void _pushUndo(_EditorSnapshot snapshot) {
-    _pushHistory(_undoStack, snapshot);
+  void _pushUndo(
+    _EditorSnapshot snapshot, {
+    required Mapping mapping,
+    required ChangeList changes,
+  }) {
+    _pushHistory(
+      _undoStack,
+      _HistoryEntry(
+        snapshot: snapshot,
+        mapping: mapping,
+        changes: changes,
+      ),
+    );
   }
 
   void _pushHistory(
-    List<_EditorSnapshot> stack,
-    _EditorSnapshot snapshot,
+    List<_HistoryEntry> stack,
+    _HistoryEntry entry,
   ) {
-    stack.add(snapshot);
+    stack.add(entry);
     final overflow = stack.length - maxUndoDepth;
     if (overflow > 0) {
       stack.removeRange(0, overflow);
     }
   }
 
+  bool _allowsMutation({
+    required HomericCommitOrigin origin,
+    required Document before,
+    required Document after,
+    required ChangeList changes,
+  }) {
+    if (_readOnly) return false;
+    final policy = mutationPolicy;
+    if (policy == null) return true;
+    return policy(HomericMutationRequest(
+      origin: origin,
+      before: before,
+      after: after,
+      changes: changes,
+    ));
+  }
+
+  _CommandDispatch _intercept(HomericEditorCommand command) {
+    if (_dispatchingCommandInterceptor || _commandInterceptors.isEmpty) {
+      return _CommandDispatch.proceed;
+    }
+    _lastCommandRejection = null;
+    final revisionBefore = _stateRevision;
+    _dispatchingCommandInterceptor = true;
+    try {
+      for (final interceptor
+          in List<HomericCommandInterceptor>.of(_commandInterceptors)) {
+        final outcome = interceptor(command);
+        switch (outcome) {
+          case HomericCommandIgnored():
+            if (_stateRevision != revisionBefore) {
+              throw StateError(
+                'An ignored Homeric command interceptor must not mutate '
+                'editor state.',
+              );
+            }
+            continue;
+          case HomericCommandRejected():
+            if (_stateRevision != revisionBefore) {
+              throw StateError(
+                'A rejected Homeric command interceptor must not mutate '
+                'editor state.',
+              );
+            }
+            _lastCommandRejection = outcome;
+            return _CommandDispatch.rejected;
+          case HomericCommandHandled():
+            if (_stateRevision - revisionBefore > 1) {
+              throw StateError(
+                'A Homeric command interceptor may commit at most one '
+                'canonical document change.',
+              );
+            }
+            return _CommandDispatch.handled;
+        }
+      }
+      return _CommandDispatch.proceed;
+    } finally {
+      _dispatchingCommandInterceptor = false;
+    }
+  }
+
+  bool? _interceptedResult(HomericEditorCommand command) =>
+      switch (_intercept(command)) {
+        _CommandDispatch.proceed => null,
+        _CommandDispatch.handled => true,
+        _CommandDispatch.rejected => false,
+      };
+
   void _notifyTransition({
     bool documentChanged = false,
     bool contentChanged = false,
+    Document? committedBefore,
+    Mapping? committedMapping,
+    ChangeList? committedChanges,
+    HomericCommitOrigin? committedOrigin,
   }) {
     _stateRevision++;
     if (documentChanged) _documentRevision++;
     if (contentChanged) _contentRevision++;
+    if (committedBefore != null &&
+        committedMapping != null &&
+        committedChanges != null &&
+        committedOrigin != null) {
+      _committedChanges.add(HomericCommittedChange(
+        before: committedBefore,
+        after: _document,
+        mapping: committedMapping,
+        changes: committedChanges,
+        contentRevision: _contentRevision,
+        documentRevision: _documentRevision,
+        origin: committedOrigin,
+      ));
+    }
     notifyListeners();
   }
 
@@ -1095,6 +1621,7 @@ class HomericEditorController extends ChangeNotifier {
   @override
   void dispose() {
     _finishComposition(notify: false);
+    _committedChanges.close();
     super.dispose();
   }
 

@@ -24,6 +24,88 @@ import 'editor_clipboard.dart';
 import 'editor_controller.dart';
 import 'spell_check.dart';
 
+/// Builds layout-neutral consumer overlays from current paragraph geometry.
+typedef HomericEditableOverlayBuilder = List<Widget> Function(
+  BuildContext context,
+  HomericEditableBlockGeometry geometry,
+);
+
+/// A generation-stamped geometry capability for one editable block.
+///
+/// Query methods return `null` after the render generation becomes stale.
+/// Consumers should derive widgets during [HomericEditableOverlayBuilder]
+/// rather than retaining this capability as model state.
+final class HomericEditableBlockGeometry {
+  const HomericEditableBlockGeometry._({
+    required this.blockId,
+    required this.documentRevision,
+    required this.layoutGeneration,
+    required ParagraphGeometry geometry,
+    required bool Function() isCurrent,
+  })  : _geometry = geometry,
+        _isCurrent = isCurrent;
+
+  /// Stable canonical block ID.
+  final String blockId;
+
+  /// Controller document revision used by this layout.
+  final int documentRevision;
+
+  /// Render generation used by this layout.
+  final int layoutGeneration;
+
+  final ParagraphGeometry _geometry;
+  final bool Function() _isCurrent;
+
+  /// Whether queries still address the mounted current generation.
+  bool get isCurrent => _isCurrent();
+
+  /// Paragraph-local layout bounds, or `null` after invalidation.
+  Rect? get blockRect => isCurrent ? _geometry.blockRect.value : null;
+
+  /// Returns a paragraph-local caret rectangle for a canonical block offset.
+  Rect? caretRect(
+    int offset, {
+    HomericCaretAffinity affinity = HomericCaretAffinity.downstream,
+  }) =>
+      isCurrent
+          ? _geometry
+              .caretRect(
+                DocOffset(offset),
+                assoc: affinity == HomericCaretAffinity.upstream ? -1 : 1,
+              )
+              .value
+          : null;
+
+  /// Returns paragraph-local rectangles for one canonical block range.
+  List<Rect>? rectsForRange(BlockTextRange range) => isCurrent
+      ? List<Rect>.unmodifiable(
+          _geometry
+              .rectsForRange(DocRange(
+                DocOffset(range.start),
+                DocOffset(range.end),
+              ))
+              .value
+              .map((box) => box.toRect()),
+        )
+      : null;
+
+  /// Hit-tests [localPoint] into canonical block coordinates.
+  HomericDocumentSelectionHit? positionForPoint(Offset localPoint) {
+    if (!isCurrent) return null;
+    final position = _geometry.positionForPoint(localPoint).value.value;
+    final upstream = _geometry.caretRect(DocOffset(position), assoc: -1).value;
+    final downstream = _geometry.caretRect(DocOffset(position), assoc: 1).value;
+    return (
+      offset: position,
+      affinity: (localPoint - upstream.centerLeft).distanceSquared <
+              (localPoint - downstream.centerLeft).distanceSquared
+          ? HomericCaretAffinity.upstream
+          : HomericCaretAffinity.downstream,
+    );
+  }
+}
+
 /// A directly editable Homeric paragraph backed by canonical editor state.
 ///
 /// This surface is experimental until a real Nexus consumer validates it.
@@ -65,6 +147,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.onShowToolbar,
     this.spellCheckProvider,
     this.spellingColor,
+    this.overlayBuilder,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -146,6 +229,9 @@ class HomericEditableParagraph extends StatefulWidget {
 
   /// Color of transient spelling squiggles.
   final Color? spellingColor;
+
+  /// Builds consumer overlays from the current paragraph generation.
+  final HomericEditableOverlayBuilder? overlayBuilder;
 
   @override
   State<HomericEditableParagraph> createState() =>
@@ -331,20 +417,22 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       epoch == _hostEpoch &&
       _ownsEditingFocus &&
       _controller.activeBlockId == widget.blockId &&
-      widget.inputSession.activeBlockId == widget.blockId;
+      (_controller.isReadOnly ||
+          widget.inputSession.activeBlockId == widget.blockId);
 
   bool get _ownsEditingFocus =>
       _focusNode.hasFocus || (_contextMenuController?.isShown ?? false);
 
   bool _attachInput() =>
-      _documentHost?.attachCommandHost(
-        widget.blockId,
-        _commandDelegate,
-      ) ??
-      widget.inputSession.attach(
-        blockId: widget.blockId,
-        commandDelegate: _commandDelegate,
-      );
+      !_controller.isReadOnly &&
+      (_documentHost?.attachCommandHost(
+            widget.blockId,
+            _commandDelegate,
+          ) ??
+          widget.inputSession.attach(
+            blockId: widget.blockId,
+            commandDelegate: _commandDelegate,
+          ));
 
   void _validateSession() {
     if (!identical(widget.controller, widget.inputSession.controller)) {
@@ -354,6 +442,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
 
   void _controllerChanged() {
     if (!mounted) return;
+    if (_controller.isReadOnly) {
+      if (widget.inputSession.activeBlockId == widget.blockId) {
+        widget.inputSession.blur();
+      }
+    } else if (_focusNode.hasFocus &&
+        _controller.activeBlockId == widget.blockId &&
+        !widget.inputSession.isAttached) {
+      _attachInput();
+    }
     if (_spellingSuggestions.isNotEmpty &&
         _spellingSuggestions.first.contentRevision !=
             _controller.contentRevision) {
@@ -380,6 +477,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
   bool get _canBlinkCaret {
     final selection = _localSelection();
     return _ownsEditingFocus &&
+        !_controller.isReadOnly &&
         selection != null &&
         selection.isCollapsed &&
         _controller.composing == null;
@@ -509,6 +607,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       slotLayoutRevision: widget.slotLayoutRevision,
       overlayBuilder: (overlayContext, geometry) {
         _overlayContext = overlayContext;
+        final geometryDocumentRevision = _controller.documentRevision;
+        final consumerGeometry = HomericEditableBlockGeometry._(
+          blockId: widget.blockId,
+          documentRevision: geometryDocumentRevision,
+          layoutGeneration: geometry.generation,
+          geometry: geometry,
+          isCurrent: () =>
+              geometryDocumentRevision == _controller.documentRevision &&
+              _isCurrentGeometry(geometry),
+        );
         _documentHost?.registerSelectionHost(
           widget.blockId,
           owner: this,
@@ -535,6 +643,34 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
               ),
             );
             return (offset: hit.position, affinity: hit.affinity);
+          },
+          activeCaretGeometry: () {
+            if (geometryDocumentRevision != _controller.documentRevision ||
+                !_isCurrentGeometry(geometry) ||
+                _controller.activeBlockId != widget.blockId) {
+              return null;
+            }
+            final selection = _localSelection();
+            final render = overlayContext.findRenderObject();
+            if (selection == null ||
+                !selection.isCollapsed ||
+                render is! RenderBox ||
+                !render.attached ||
+                !render.hasSize) {
+              return null;
+            }
+            final localRect = consumerGeometry.caretRect(
+              selection.head,
+              affinity: selection.affinity,
+            );
+            if (localRect == null) return null;
+            final globalOrigin = render.localToGlobal(localRect.topLeft);
+            return HomericActiveCaretGeometry(
+              blockId: widget.blockId,
+              documentRevision: geometryDocumentRevision,
+              layoutGeneration: geometry.generation,
+              globalRect: globalOrigin & localRect.size,
+            );
           },
         );
         _scheduleGeometryPublication(overlayContext, geometry);
@@ -576,6 +712,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
               onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
               child: const SizedBox.expand(),
             ),
+          ),
+          ...?widget.overlayBuilder?.call(
+            overlayContext,
+            consumerGeometry,
           ),
           if (caret != null)
             Positioned.fromRect(
@@ -624,7 +764,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       DoNothingAndStopPropagationTextIntent:
           DoNothingAction(consumesKey: false),
       _MoveCaretIntent: _HostAction<_MoveCaretIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: _moveCaret,
       ),
       _TraverseIntent: _HostAction<_TraverseIntent>(
@@ -635,7 +775,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       _MoveDocumentBlockIntent: _HostAction<_MoveDocumentBlockIntent>(
         // Keep the exact chord at this nearest command boundary even when
         // composition or a cross-block selection makes the move a no-op.
-        enabled: (_) => _ownsEditingFocus && _documentHost != null,
+        enabled: (_) => _canMutateActions && _documentHost != null,
         invoke: (intent) {
           widget.inputSession.suppressNextSelector(intent.delta < 0
               ? 'moveUpAndModifySelection:'
@@ -645,7 +785,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       HomericInsertParagraphBreakIntent:
           _HostAction<HomericInsertParagraphBreakIntent>(
-        enabled: (_) => _canUseActions && _documentHost != null,
+        enabled: (_) => _canMutateActions && _documentHost != null,
         invoke: (_) => _controller.insertParagraphBreak(),
       ),
       DismissIntent: _HostAction<DismissIntent>(
@@ -653,14 +793,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         invoke: (_) => _dismissContextMenu(),
       ),
       DeleteCharacterIntent: _HostAction<DeleteCharacterIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canMutateActions,
         invoke: (intent) => intent.forward
             ? _controller.deleteForward()
             : _controller.deleteBackward(),
       ),
       ExtendSelectionByCharacterIntent:
           _HostAction<ExtendSelectionByCharacterIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: (intent) => _moveCaret(_MoveCaretIntent(
           intent.forward
               ? CaretMovementDirection.right
@@ -670,7 +810,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExtendSelectionVerticallyToAdjacentLineIntent:
           _HostAction<ExtendSelectionVerticallyToAdjacentLineIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: (intent) => _moveCaret(_MoveCaretIntent(
           intent.forward
               ? CaretMovementDirection.down
@@ -680,7 +820,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExtendSelectionToLineBreakIntent:
           _HostAction<ExtendSelectionToLineBreakIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: (intent) => _moveToLineBoundary(
           forward: intent.forward,
           extend: !intent.collapseSelection,
@@ -688,7 +828,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExpandSelectionToLineBreakIntent:
           _HostAction<ExpandSelectionToLineBreakIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: (intent) => _moveToLineBoundary(
           forward: intent.forward,
           extend: true,
@@ -696,7 +836,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExtendSelectionToDocumentBoundaryIntent:
           _HostAction<ExtendSelectionToDocumentBoundaryIntent>(
-        enabled: (_) => _canUseActions && _documentHost != null,
+        enabled: (_) => _canUseSelectionActions && _documentHost != null,
         invoke: (intent) => _documentHost?.moveToDocumentBoundary(
           forward: intent.forward,
           extend: !intent.collapseSelection,
@@ -704,7 +844,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExpandSelectionToDocumentBoundaryIntent:
           _HostAction<ExpandSelectionToDocumentBoundaryIntent>(
-        enabled: (_) => _canUseActions && _documentHost != null,
+        enabled: (_) => _canUseSelectionActions && _documentHost != null,
         invoke: (intent) => _documentHost?.moveToDocumentBoundary(
           forward: intent.forward,
           extend: true,
@@ -712,7 +852,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExtendSelectionToNextWordBoundaryIntent:
           _HostAction<ExtendSelectionToNextWordBoundaryIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: (intent) => _moveByWord(
           forward: intent.forward,
           collapseSelection: intent.collapseSelection,
@@ -720,7 +860,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ExtendSelectionToNextWordBoundaryOrCaretLocationIntent:
           _HostAction<ExtendSelectionToNextWordBoundaryOrCaretLocationIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canUseSelectionActions,
         invoke: (intent) => _moveByWord(
           forward: intent.forward,
           collapseSelection: intent.collapseSelection,
@@ -729,30 +869,31 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       DeleteToNextWordBoundaryIntent:
           _HostAction<DeleteToNextWordBoundaryIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canMutateActions,
         invoke: (intent) => _deleteByWord(forward: intent.forward),
       ),
       CopySelectionTextIntent: _HostAction<CopySelectionTextIntent>(
-        enabled: (_) => _canCopyOrCut,
+        enabled: (intent) =>
+            _canCopy && (!intent.collapseSelection || _canMutateActions),
         invoke: (intent) =>
             intent.collapseSelection ? _clipboard.cut() : _clipboard.copy(),
       ),
       PasteTextIntent: _HostAction<PasteTextIntent>(
-        enabled: (_) => _canUseActions,
+        enabled: (_) => _canMutateActions,
         invoke: (_) => _clipboard.paste(),
       ),
       SelectAllTextIntent: _HostAction<SelectAllTextIntent>(
         enabled: (_) =>
-            _canUseActions &&
+            _canUseSelectionActions &&
             (_documentHost != null || block.contentLength > 0),
         invoke: (_) => _documentHost?.selectAll() ?? _selectAll(),
       ),
       UndoTextIntent: _HostAction<UndoTextIntent>(
-        enabled: (_) => _canUseActions && _controller.canUndo,
+        enabled: (_) => _canMutateActions && _controller.canUndo,
         invoke: (_) => _controller.undo(),
       ),
       RedoTextIntent: _HostAction<RedoTextIntent>(
-        enabled: (_) => _canUseActions && _controller.canRedo,
+        enabled: (_) => _canMutateActions && _controller.canRedo,
         invoke: (_) => _controller.redo(),
       ),
     };
@@ -772,17 +913,18 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       focused: _focusNode.hasFocus,
       editable:
           _documentHost == null || _controller.activeBlockId == widget.blockId,
+      readOnly: _controller.isReadOnly,
       textDirection: widget.paragraphSpec.direction == ParagraphDirection.rtl
           ? TextDirection.rtl
           : TextDirection.ltr,
       onFocus: _focusNode.requestFocus,
       onTap: _focusNode.requestFocus,
-      onSetText: _setSemanticsText,
+      onSetText: _controller.isReadOnly ? null : _setSemanticsText,
       onSetSelection: _setSemanticsSelection,
-      onCopy: _canCopyOrCut ? _semanticsCopy : null,
-      onCut: _canCopyOrCut ? _semanticsCut : null,
-      onPaste: _canUseActions ? _semanticsPaste : null,
-      onSelectAll: _canUseActions && block.contentLength > 0
+      onCopy: _canCopy ? _semanticsCopy : null,
+      onCut: _canCopy && _canMutateActions ? _semanticsCut : null,
+      onPaste: _canMutateActions ? _semanticsPaste : null,
+      onSelectAll: _canUseSelectionActions && block.contentLength > 0
           ? _semanticsSelectAll
           : null,
       child: ExcludeSemantics(
@@ -808,14 +950,19 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     );
   }
 
-  bool get _canUseActions =>
+  bool get _canUseSelectionActions =>
       _ownsEditingFocus &&
       _controller.activeBlockId == widget.blockId &&
       _controller.composing == null;
 
-  bool get _canCopyOrCut {
+  bool get _canMutateActions =>
+      _canUseSelectionActions && !_controller.isReadOnly;
+
+  bool get _canCopy {
     final selection = _controller.selection;
-    return _canUseActions && selection != null && !selection.isCollapsed;
+    return _canUseSelectionActions &&
+        selection != null &&
+        !selection.isCollapsed;
   }
 
   Object? _dispatchIntent(Intent intent) {
@@ -1074,7 +1221,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final context = _overlayContext;
     final point =
         useSecondaryAnchor ? _secondaryLocalPosition : _selectionMenuAnchor();
-    if (context == null || point == null || !_canUseActions) return;
+    if (context == null || point == null || !_canUseSelectionActions) return;
     if (!useSecondaryAnchor) {
       final geometry = _currentGeometry();
       final selection = _localSelection();
@@ -1196,15 +1343,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         for (final replacement in suggestion.replacements)
           ContextMenuButtonItem(
             label: replacement,
-            onPressed: () => _applySpellingSuggestion(
-              witness,
-              suggestion,
-              replacement,
-            ),
+            onPressed: _controller.isReadOnly
+                ? null
+                : () => _applySpellingSuggestion(
+                      witness,
+                      suggestion,
+                      replacement,
+                    ),
           ),
       ContextMenuButtonItem(
         type: ContextMenuButtonType.cut,
-        onPressed: canCopy
+        onPressed: canCopy && !_controller.isReadOnly
             ? () => _invokeMenuIntent(
                   witness,
                   const CopySelectionTextIntent.cut(
@@ -1221,10 +1370,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ContextMenuButtonItem(
         type: ContextMenuButtonType.paste,
-        onPressed: () => _invokeMenuIntent(
-          witness,
-          const PasteTextIntent(SelectionChangedCause.toolbar),
-        ),
+        onPressed: _controller.isReadOnly
+            ? null
+            : () => _invokeMenuIntent(
+                  witness,
+                  const PasteTextIntent(SelectionChangedCause.toolbar),
+                ),
       ),
       ContextMenuButtonItem(
         type: ContextMenuButtonType.selectAll,
@@ -1239,7 +1390,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         // Flutter exposes localized button types for Cut through Select All,
         // but no public Undo/Redo context-menu label in the supported SDKs.
         label: 'Undo',
-        onPressed: _controller.canUndo
+        onPressed: !_controller.isReadOnly && _controller.canUndo
             ? () => _invokeMenuIntent(
                   witness,
                   const UndoTextIntent(SelectionChangedCause.toolbar),
@@ -1248,7 +1399,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       ),
       ContextMenuButtonItem(
         label: 'Redo',
-        onPressed: _controller.canRedo
+        onPressed: !_controller.isReadOnly && _controller.canRedo
             ? () => _invokeMenuIntent(
                   witness,
                   const RedoTextIntent(SelectionChangedCause.toolbar),
@@ -1903,6 +2054,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
     required this.selection,
     required this.focused,
     required this.editable,
+    required this.readOnly,
     required this.textDirection,
     required this.onFocus,
     required this.onTap,
@@ -1919,10 +2071,11 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
   final TextSelection? selection;
   final bool focused;
   final bool editable;
+  final bool readOnly;
   final TextDirection textDirection;
   final VoidCallback onFocus;
   final VoidCallback onTap;
-  final ValueChanged<String> onSetText;
+  final ValueChanged<String>? onSetText;
   final ValueChanged<TextSelection> onSetSelection;
   final VoidCallback? onCopy;
   final VoidCallback? onCut;
@@ -1936,6 +2089,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
         selection: selection,
         focused: focused,
         editable: editable,
+        readOnly: readOnly,
         textDirection: textDirection,
         onFocus: onFocus,
         onTap: onTap,
@@ -1955,6 +2109,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
       ..selection = selection
       ..focused = focused
       ..editable = editable
+      ..readOnly = readOnly
       ..textDirection = textDirection
       ..onFocus = onFocus
       ..onTap = onTap
@@ -1973,10 +2128,11 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     required TextSelection? selection,
     required bool focused,
     required bool editable,
+    required bool readOnly,
     required TextDirection textDirection,
     required VoidCallback onFocus,
     required VoidCallback onTap,
-    required ValueChanged<String> onSetText,
+    required ValueChanged<String>? onSetText,
     required ValueChanged<TextSelection> onSetSelection,
     required VoidCallback? onCopy,
     required VoidCallback? onCut,
@@ -1986,6 +2142,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
         _selection = selection,
         _focused = focused,
         _editable = editable,
+        _readOnly = readOnly,
         _textDirection = textDirection,
         _onFocus = onFocus,
         _onTap = onTap,
@@ -2000,10 +2157,11 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   TextSelection? _selection;
   bool _focused;
   bool _editable;
+  bool _readOnly;
   TextDirection _textDirection;
   VoidCallback _onFocus;
   VoidCallback _onTap;
-  ValueChanged<String> _onSetText;
+  ValueChanged<String>? _onSetText;
   ValueChanged<TextSelection> _onSetSelection;
   VoidCallback? _onCopy;
   VoidCallback? _onCut;
@@ -2034,6 +2192,12 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     markNeedsSemanticsUpdate();
   }
 
+  set readOnly(bool value) {
+    if (_readOnly == value) return;
+    _readOnly = value;
+    markNeedsSemanticsUpdate();
+  }
+
   set textDirection(TextDirection value) {
     if (_textDirection == value) return;
     _textDirection = value;
@@ -2052,7 +2216,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     markNeedsSemanticsUpdate();
   }
 
-  set onSetText(ValueChanged<String> value) {
+  set onSetText(ValueChanged<String>? value) {
     if (identical(_onSetText, value)) return;
     _onSetText = value;
     markNeedsSemanticsUpdate();
@@ -2100,11 +2264,11 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     if (!_editable) return;
     config
       ..isTextField = true
-      ..isReadOnly = false
+      ..isReadOnly = _readOnly
       ..isMultiline = false
       ..isFocused = _focused
-      ..onSetText = _onSetText
       ..onSetSelection = _onSetSelection;
+    if (_onSetText case final callback?) config.onSetText = callback;
     if (_onCopy case final callback?) config.onCopy = callback;
     if (_onCut case final callback?) config.onCut = callback;
     if (_onPaste case final callback?) config.onPaste = callback;

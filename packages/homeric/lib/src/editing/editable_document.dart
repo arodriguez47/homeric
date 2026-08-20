@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
@@ -32,6 +33,32 @@ typedef HomericDocumentSelectionHitTest = HomericDocumentSelectionHit? Function(
 
 enum HomericScrollToBlockResult { reached, missing, stale, notReached }
 
+/// Outcome of settling keyboard focus on a stable block.
+enum HomericFocusSettlementResult { focused, missing, stale, notReached }
+
+/// Current active-caret geometry in global coordinates.
+final class HomericActiveCaretGeometry {
+  /// Creates a generation-stamped active-caret snapshot.
+  const HomericActiveCaretGeometry({
+    required this.blockId,
+    required this.documentRevision,
+    required this.layoutGeneration,
+    required this.globalRect,
+  });
+
+  /// Stable active block ID.
+  final String blockId;
+
+  /// Controller document revision used to shape the paragraph.
+  final int documentRevision;
+
+  /// Render generation used to query the caret.
+  final int layoutGeneration;
+
+  /// Caret rectangle in global coordinates.
+  final Rect globalRect;
+}
+
 const _documentSelectAllSemanticsAction =
     CustomSemanticsAction(label: 'Select all document text');
 const _documentUndoSemanticsAction =
@@ -53,6 +80,7 @@ class HomericEditableDocument extends StatefulWidget {
   })  : blockBuilder = null,
         scrollController = null,
         padding = EdgeInsets.zero,
+        scrollPadding = null,
         cacheExtent = 250,
         estimatedBlockHeight = 48,
         layoutRevision = null;
@@ -64,6 +92,7 @@ class HomericEditableDocument extends StatefulWidget {
     required this.blockBuilder,
     this.scrollController,
     this.padding = EdgeInsets.zero,
+    this.scrollPadding,
     this.cacheExtent = 250,
     this.estimatedBlockHeight = 48,
     this.layoutRevision,
@@ -77,6 +106,10 @@ class HomericEditableDocument extends StatefulWidget {
   final HomericEditableBlockBuilder? blockBuilder;
   final ScrollController? scrollController;
   final EdgeInsetsGeometry padding;
+
+  /// Optional live scroll padding, overriding [padding] without replacing the
+  /// controller or input session.
+  final ValueListenable<EdgeInsetsGeometry>? scrollPadding;
   final double cacheExtent;
   final double estimatedBlockHeight;
   final Object? layoutRevision;
@@ -125,6 +158,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   HomericTextRange? _semanticsComposing;
   bool _semanticsCanUndo = false;
   bool _semanticsCanRedo = false;
+  bool _semanticsReadOnly = false;
 
   @override
   void initState() {
@@ -282,11 +316,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     required Object owner,
     required Rect? Function() globalRect,
     required HomericDocumentSelectionHitTest hitTest,
+    required HomericActiveCaretGeometry? Function() activeCaretGeometry,
   }) {
     _selectionHosts[blockId] = _MountedSelectionHost(
       owner: owner,
       globalRect: globalRect,
       hitTest: hitTest,
+      activeCaretGeometry: activeCaretGeometry,
     );
   }
 
@@ -333,6 +369,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     HomericTextInputCommandDelegate delegate,
   ) {
     registerCommandHost(blockId, delegate);
+    if (widget.controller.isReadOnly) return false;
     return widget.inputSession.attach(
       blockId: blockId,
       commandDelegate: delegate,
@@ -342,7 +379,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   /// Whether [blockId] can move through any reorder surface right now.
   bool canReorderBlock(String blockId) {
     final document = widget.controller.document;
-    if (document.indexOfBlockId(blockId) == null ||
+    if (widget.controller.isReadOnly ||
+        document.indexOfBlockId(blockId) == null ||
         widget.controller.composing != null) {
       return false;
     }
@@ -365,6 +403,14 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       if (entry.value.hasFocus) return entry.key;
     }
     return null;
+  }
+
+  /// Current generation-stamped active caret, or `null` while unavailable.
+  HomericActiveCaretGeometry? get activeCaretGeometry {
+    final blockId = widget.controller.activeBlockId;
+    return blockId == null
+        ? null
+        : _selectionHosts[blockId]?.activeCaretGeometry();
   }
 
   /// Whether both directional endpoints resolve inside one block.
@@ -577,21 +623,40 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   }
 
   void _focusBlock(String blockId) {
-    final generation = ++_focusRequestGeneration;
-    final focusNode = _mountedFocusNodes[blockId];
-    if (focusNode != null) {
-      focusNode.requestFocus();
-      return;
+    unawaited(settleFocusOnBlock(blockId));
+  }
+
+  /// Scrolls and settles focus on [blockId] without replacing editor state.
+  Future<HomericFocusSettlementResult> settleFocusOnBlock(
+    String blockId,
+  ) async {
+    if (widget.controller.document.indexOfBlockId(blockId) == null) {
+      return HomericFocusSettlementResult.missing;
     }
-    unawaited(scrollToBlock(blockId).then((result) {
-      if (!mounted ||
-          generation != _focusRequestGeneration ||
-          widget.controller.activeBlockId != blockId ||
-          result != HomericScrollToBlockResult.reached) {
-        return;
-      }
-      _mountedFocusNodes[blockId]?.requestFocus();
-    }));
+    final generation = ++_focusRequestGeneration;
+    final mountedFocus = _mountedFocusNodes[blockId];
+    if (mountedFocus != null) {
+      mountedFocus.requestFocus();
+      return HomericFocusSettlementResult.focused;
+    }
+    final result = await scrollToBlock(blockId);
+    if (!mounted ||
+        generation != _focusRequestGeneration ||
+        widget.controller.document.indexOfBlockId(blockId) == null) {
+      return HomericFocusSettlementResult.stale;
+    }
+    if (result != HomericScrollToBlockResult.reached) {
+      return switch (result) {
+        HomericScrollToBlockResult.missing =>
+          HomericFocusSettlementResult.missing,
+        HomericScrollToBlockResult.stale => HomericFocusSettlementResult.stale,
+        _ => HomericFocusSettlementResult.notReached,
+      };
+    }
+    final focusNode = _mountedFocusNodes[blockId];
+    if (focusNode == null) return HomericFocusSettlementResult.notReached;
+    focusNode.requestFocus();
+    return HomericFocusSettlementResult.focused;
   }
 
   /// Moves the active selection block by [delta] through the shared command.
@@ -653,6 +718,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _syncOrder();
     final semanticsChanged = _captureSemanticsState();
     if ((documentChanged || semanticsChanged) && mounted) setState(() {});
+    if (widget.controller.isReadOnly) {
+      widget.inputSession.blur();
+      return;
+    }
     if (_selectionDragActive || !widget.inputSession.isAttached) return;
     final activeBlockId = widget.controller.activeBlockId;
     if (activeBlockId == widget.inputSession.activeBlockId) return;
@@ -689,14 +758,17 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     final composing = widget.controller.composing;
     final canUndo = widget.controller.canUndo;
     final canRedo = widget.controller.canRedo;
+    final readOnly = widget.controller.isReadOnly;
     final changed = selection != _semanticsSelection ||
         composing != _semanticsComposing ||
         canUndo != _semanticsCanUndo ||
-        canRedo != _semanticsCanRedo;
+        canRedo != _semanticsCanRedo ||
+        readOnly != _semanticsReadOnly;
     _semanticsSelection = selection;
     _semanticsComposing = composing;
     _semanticsCanUndo = canUndo;
     _semanticsCanRedo = canRedo;
+    _semanticsReadOnly = readOnly;
     return changed;
   }
 
@@ -1037,11 +1109,32 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     final child = widget.child;
     return _HomericEditableDocumentScope(
       state: this,
-      child: child ?? LayoutBuilder(builder: _buildViewport),
+      child: child ??
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final listenable = widget.scrollPadding;
+              if (listenable == null) {
+                return _buildViewport(
+                  context,
+                  constraints,
+                  widget.padding,
+                );
+              }
+              return ValueListenableBuilder<EdgeInsetsGeometry>(
+                valueListenable: listenable,
+                builder: (context, padding, _) =>
+                    _buildViewport(context, constraints, padding),
+              );
+            },
+          ),
     );
   }
 
-  Widget _buildViewport(BuildContext context, BoxConstraints constraints) {
+  Widget _buildViewport(
+    BuildContext context,
+    BoxConstraints constraints,
+    EdgeInsetsGeometry padding,
+  ) {
     _layoutWidth = constraints.maxWidth;
     final globalLayoutSignature = (_layoutWidth, widget.layoutRevision);
     if (_globalLayoutSignature != globalLayoutSignature) {
@@ -1053,9 +1146,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       if (widget.controller.selection != null &&
           widget.controller.composing == null)
         _documentSelectAllSemanticsAction: selectAll,
-      if (widget.controller.canUndo)
+      if (!widget.controller.isReadOnly && widget.controller.canUndo)
         _documentUndoSemanticsAction: widget.controller.undo,
-      if (widget.controller.canRedo)
+      if (!widget.controller.isReadOnly && widget.controller.canRedo)
         _documentRedoSemanticsAction: widget.controller.redo,
     };
     return Semantics(
@@ -1070,7 +1163,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
         cacheExtent: widget.cacheExtent,
         slivers: <Widget>[
           SliverPadding(
-            padding: widget.padding,
+            padding: padding,
             sliver: SliverReorderableList(
               itemCount: document.blockCount,
               findChildIndexCallback: (key) {
@@ -1173,11 +1266,13 @@ final class _MountedSelectionHost {
     required this.owner,
     required this.globalRect,
     required this.hitTest,
+    required this.activeCaretGeometry,
   });
 
   final Object owner;
   final Rect? Function() globalRect;
   final HomericDocumentSelectionHitTest hitTest;
+  final HomericActiveCaretGeometry? Function() activeCaretGeometry;
 }
 
 final class _ViewportAnchor {

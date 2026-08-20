@@ -102,6 +102,7 @@ final class HomericTextInputSession {
     HomericTextInputCommandDelegate? commandDelegate,
   }) {
     if (_disposed ||
+        controller.isReadOnly ||
         controller.activeBlockId != blockId ||
         controller.document.indexOfBlockId(blockId) == null) {
       return false;
@@ -153,7 +154,11 @@ final class HomericTextInputSession {
     required String blockId,
     HomericTextInputCommandDelegate? commandDelegate,
   }) {
-    if (_disposed || controller.activeBlockId != blockId) return false;
+    if (_disposed ||
+        controller.isReadOnly ||
+        controller.activeBlockId != blockId) {
+      return false;
+    }
     if (!isAttached) {
       return attach(blockId: blockId, commandDelegate: commandDelegate);
     }
@@ -201,6 +206,10 @@ final class HomericTextInputSession {
 
   void _controllerChanged() {
     if (_disposed || _applyingRemote || _deltasSuspended || !isAttached) {
+      return;
+    }
+    if (controller.isReadOnly) {
+      _close(CompositionInterruption.platformClose);
       return;
     }
     if (controller.activeBlockId != _blockId) {

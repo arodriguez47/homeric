@@ -303,6 +303,84 @@ void main() {
     handle.dispose();
   });
 
+  testWidgets('read-only detaches input and keeps selection and copy semantics',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    final document = _document('abcd');
+    final controller = HomericEditorController(
+      document: document,
+      selection: const HomericSelection(anchor: 2, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    final clipboard = _FakeClipboard(readValue: 'Q');
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      clipboard: clipboard,
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    final staleDelta = session.debugDeltaCallback!;
+
+    expect(controller.setReadOnly(true), isTrue);
+    await tester.pump();
+
+    expect(session.isAttached, isFalse);
+    final node = tester.getSemantics(find.byType(HomericEditableParagraph));
+    final data = node.getSemanticsData();
+    // ignore: deprecated_member_use
+    expect(data.hasFlag(ui.SemanticsFlag.isTextField), isTrue);
+    // ignore: deprecated_member_use
+    expect(data.hasFlag(ui.SemanticsFlag.isReadOnly), isTrue);
+    expect(data.hasAction(ui.SemanticsAction.copy), isTrue);
+    expect(data.hasAction(ui.SemanticsAction.cut), isFalse);
+    expect(data.hasAction(ui.SemanticsAction.paste), isFalse);
+    expect(data.hasAction(ui.SemanticsAction.setText), isFalse);
+    expect(data.hasAction(ui.SemanticsAction.setSelection), isTrue);
+
+    // `rootPipelineOwner` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    tester.binding.pipelineOwner.semanticsOwner!
+        .performAction(node.id, ui.SemanticsAction.copy);
+    await tester.pump();
+    expect(clipboard.writes, <String>['bc']);
+
+    staleDelta(const <TextEditingDelta>[
+      TextEditingDeltaInsertion(
+        oldText: 'abcd',
+        textInserted: 'X',
+        insertionOffset: 2,
+        selection: TextSelection.collapsed(offset: 3),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+    expect(controller.document, same(document));
+
+    tester.semantics.setSelection(
+      find.semantics.byValue('abcd'),
+      base: 0,
+      extent: 4,
+    );
+    await tester.pump();
+    expect(controller.selection, const HomericSelection(anchor: 1, head: 5));
+
+    expect(controller.setReadOnly(false), isTrue);
+    await tester.pump();
+    expect(session.isAttached, isTrue,
+        reason: 'the still-focused host binds one fresh input epoch');
+    handle.dispose();
+  });
+
   testWidgets('paste started before blur stays stale after refocus',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

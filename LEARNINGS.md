@@ -204,3 +204,34 @@ Process-global counters cannot provide stable editor block identity: unrelated d
 **Why it mattered:** A consumer-side guard on key events cannot cover platform deltas, clipboard completion, semantics actions, drag reorder, undo/redo, or a custom command that calls back into the controller. Likewise, a retained `ParagraphGeometry` can be internally current for the last layout while already referring to the wrong canonical document. Both gaps create split ownership: one path silently bypasses opaque/read-only policy, while another paints a valid answer for stale input.
 
 **Rule going forward:** Enforce editability and block/range policy at the canonical controller boundary, before callbacks, reveal hooks, history, or state mutation. An interceptor may ignore without mutation, reject without mutation, or handle through at most one observable controller intent. Publish post-commit mappings from the actual transaction—including exact inverse/forward mappings for undo and redo. Expose layout to consumers as a revocable, generation-stamped query capability and publish only flat global geometry outside its synchronous overlay callback.
+
+## editor-architect — 2026-08-20 — A writer capability must carry identity through lifecycle gaps
+
+**What:** The first real Homeric Journal host exposed several gaps that a
+widget-mounted controller can cross before Flutter replaces its element. A
+commit can arrive while the provider already describes the next entry as
+loading; a platform callback can arrive after a delete cascade but before the
+old host unmounts; and a seal can publish `settledAt` while its durable metadata
+ack is still pending. The final integration gives every committed event its
+own entry identity, advances the provider content capability synchronously on
+successful deletion, and revokes input before capturing the seal snapshot.
+
+**Why it mattered:** Session identity alone answers which controller emitted an
+event, not which persisted entry owns it. Provider state alone is temporarily
+ambiguous during loading, deletion, conflict replacement, and sealing.
+Inferring identity from whichever session is currently visible can drop an
+outgoing edit or route a stale callback into a deleted or newly opened entry.
+Freezing after an await is equally late: the save/hash proof may already
+describe an older snapshot. Even a timestamp is not sufficient action
+identity: concurrent seal gestures can share a millisecond, while a later
+unlock must invalidate and serialize behind any already-issued seal write.
+
+**Rule going forward:** A canonical editor commit carries its stable consumer
+identity through the persistence boundary. Lifecycle invalidation advances
+synchronously before the old widget can emit again. Any action that declares a
+snapshot final—seal, export, submit, or share—first settles composition and
+revokes mutation, then captures and persists; if the action fails, restore the
+same retained session's authority only after rechecking its generation and
+current product state. Serialize conflicting per-entry lifecycle actions under
+explicit attempt ownership; never use wall-clock equality as the authority to
+roll back or complete them.

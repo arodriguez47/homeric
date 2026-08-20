@@ -30,6 +30,14 @@ typedef HomericEditableOverlayBuilder = List<Widget> Function(
   HomericEditableBlockGeometry geometry,
 );
 
+/// Observes one tap after Homeric has arbitrated it against drag and
+/// multi-click selection gestures.
+typedef HomericEditableSingleTapCallback = void Function(
+  HomericEditableBlockGeometry geometry,
+  Offset localPosition,
+  Offset globalPosition,
+);
+
 /// Projects transient consumer decorations from the current immutable block.
 ///
 /// The callback runs inside each paragraph rebuild, after the controller has
@@ -167,6 +175,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.spellCheckProvider,
     this.spellingColor,
     this.overlayBuilder,
+    this.onSingleTap,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -266,6 +275,13 @@ class HomericEditableParagraph extends StatefulWidget {
 
   /// Builds consumer overlays from the current paragraph generation.
   final HomericEditableOverlayBuilder? overlayBuilder;
+
+  /// Observes a completed single tap after Homeric updates the caret.
+  ///
+  /// Drag, double-click, and triple-click sequences do not invoke this
+  /// callback. Consumers may use current [HomericEditableBlockGeometry] for
+  /// additive interactions without installing a competing gesture detector.
+  final HomericEditableSingleTapCallback? onSingleTap;
 
   @override
   State<HomericEditableParagraph> createState() =>
@@ -648,6 +664,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     final body = ParagraphOverlay(
       paragraph: paragraph,
       slotLayoutRevision: widget.slotLayoutRevision,
+      excludeParagraphSemantics: true,
       overlayBuilder: (overlayContext, geometry) {
         _overlayContext = overlayContext;
         final geometryDocumentRevision = _controller.documentRevision;
@@ -757,6 +774,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
             child: TextSelectionGestureDetector(
               behavior: HitTestBehavior.translucent,
               onTapDown: (details) => _tapDown(geometry, details),
+              onSingleTapUp: (details) {
+                if (!consumerGeometry.isCurrent) return;
+                widget.onSingleTap?.call(
+                  consumerGeometry,
+                  details.localPosition,
+                  details.globalPosition,
+                );
+              },
               onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
               onTripleTapDown: (details) => _tripleTapDown(geometry, details),
               onDragSelectionStart: (details) =>
@@ -1008,22 +1033,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
       onSelectAll: _canUseSelectionActions && block.contentLength > 0
           ? _semanticsSelectAll
           : null,
-      child: ExcludeSemantics(
-        child: DefaultTextEditingShortcuts(
-          child: Shortcuts(
-            shortcuts: shortcuts,
-            child: Actions(
-              actions: actions,
-              child: Builder(
-                builder: (commandContext) {
-                  _commandContext = commandContext;
-                  return Focus(
-                    focusNode: _focusNode,
-                    onFocusChange: _focusChanged,
-                    child: body,
-                  );
-                },
-              ),
+      child: DefaultTextEditingShortcuts(
+        child: Shortcuts(
+          shortcuts: shortcuts,
+          child: Actions(
+            actions: actions,
+            child: Builder(
+              builder: (commandContext) {
+                _commandContext = commandContext;
+                return Focus(
+                  focusNode: _focusNode,
+                  onFocusChange: _focusChanged,
+                  child: body,
+                );
+              },
             ),
           ),
         ),

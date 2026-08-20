@@ -1297,6 +1297,45 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('single-tap observer excludes drag and multi-click sequences',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(document: _document('one two'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    var calls = 0;
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+      onSingleTap: (geometry, localPosition, globalPosition) {
+        expect(geometry.isCurrent, isTrue);
+        expect(localPosition.dx, greaterThanOrEqualTo(0));
+        expect(globalPosition.dx, greaterThan(0));
+        calls++;
+      },
+    )));
+    await tester.pump();
+    final point = tester.getTopLeft(find.byType(HomericEditableParagraph)) +
+        const Offset(12, 7);
+
+    await tester.tapAt(point);
+    expect(calls, 1);
+    await tester.tapAt(point);
+    await tester.tapAt(point);
+    expect(calls, 1, reason: 'double and triple click stay owned by selection');
+
+    await tester.pump(const Duration(milliseconds: 500));
+    final gesture = await tester.startGesture(point);
+    await gesture.moveBy(const Offset(40, 0));
+    await tester.pump();
+    await gesture.up();
+    expect(calls, 1, reason: 'drag selection cannot become an additive tap');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('word drag expands by words and pointer cancel clears its anchor',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

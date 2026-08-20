@@ -40,6 +40,7 @@ class ParagraphOverlay extends StatefulWidget {
     required this.slotLayoutRevision,
     required this.overlayBuilder,
     this.clipBehavior = Clip.none,
+    this.excludeParagraphSemantics = false,
   });
 
   /// The paragraph this widget observes and places overlays over.
@@ -68,6 +69,13 @@ class ParagraphOverlay extends StatefulWidget {
   /// [Clip.none] permits visual overflow; it does not expand the hit-test
   /// bounds described on this class.
   final Clip clipBehavior;
+
+  /// Whether the paragraph's own semantics are replaced by an owning host.
+  ///
+  /// Geometry-derived overlay semantics remain visible. Editable hosts use
+  /// this to expose one text-field node plus consumer actions without also
+  /// exposing the read-only paragraph text a second time.
+  final bool excludeParagraphSemantics;
 
   @override
   State<ParagraphOverlay> createState() => _ParagraphOverlayState();
@@ -132,7 +140,12 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
           fit: StackFit.passthrough,
           clipBehavior: widget.clipBehavior,
           children: <Widget>[
-            paragraphWidget._observedBy(_handleGeometryChanged),
+            if (widget.excludeParagraphSemantics)
+              ExcludeSemantics(
+                child: paragraphWidget._observedBy(_handleGeometryChanged),
+              )
+            else
+              paragraphWidget._observedBy(_handleGeometryChanged),
             if (geometry != null)
               Positioned.fill(
                 child: Stack(

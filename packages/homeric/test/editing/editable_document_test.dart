@@ -192,6 +192,99 @@ void main() {
     expect(find.byType(SizedBox).evaluate().length, lessThan(40));
   });
 
+  testWidgets(
+      'recycled unchanged paragraphs reuse layout while changed content misses',
+      (tester) async {
+    final document = _document(List<String>.generate(
+      40,
+      (index) => 'row $index with enough text to exercise paragraph layout',
+    ));
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final scrollController = ScrollController();
+    addTearDown(scrollController.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 180,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        scrollController: scrollController,
+        cacheExtent: 0,
+        estimatedBlockHeight: 44,
+        layoutRevision: const ('test-style', 14.0),
+        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: block.id,
+          focusNode: focusNode,
+          resolveStyle: (_) => _style,
+        ),
+      ),
+    )));
+    await tester.pump();
+
+    scrollController.jumpTo(scrollController.position.maxScrollExtent);
+    await tester.pump();
+    final unchangedProbe = HomericParagraphLayoutProbe.start();
+    scrollController.jumpTo(0);
+    await tester.pump();
+    final unchanged = unchangedProbe.stop();
+    expect(unchanged.countFor(HomericParagraphLayoutCategory.live), 0,
+        reason: 'unchanged recycled rows should reclaim shaped paragraphs');
+
+    scrollController.jumpTo(scrollController.position.maxScrollExtent);
+    await tester.pump();
+    expect(
+      controller.applyBlockEditBatch(
+        blockId: 'block-0',
+        edits: const <CanonicalTextEdit>[CanonicalTextEdit(0, 0, 'changed ')],
+        selection: const BlockTextSelection.collapsed(8),
+        composing: null,
+      ),
+      isTrue,
+    );
+    final changedProbe = HomericParagraphLayoutProbe.start();
+    scrollController.jumpTo(0);
+    await tester.pump();
+    final changed = changedProbe.stop();
+    expect(changed.countFor(HomericParagraphLayoutCategory.live), 1,
+        reason: 'the changed block must not reuse its stale paragraph');
+  });
+
+  testWidgets('deleting a mounted block cannot reinsert its detached shape',
+      (tester) async {
+    final document = _document(<String>['first', 'removed', 'last']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('homeric-editable-block-1')),
+      findsOneWidget,
+    );
+    expect(key.currentState!.debugParagraphLayoutCacheEntries, 0);
+
+    final transaction = Transaction(controller.document)
+      ..joinBlocks(controller.document.positionAfterBlock(0));
+    expect(controller.applyTransaction(transaction), isTrue);
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('homeric-editable-block-1')),
+      findsNothing,
+    );
+    expect(key.currentState!.debugParagraphLayoutCacheEntries, 0,
+        reason: 'a deleted mounted row is no longer an allowed cache key');
+  });
+
   testWidgets('far scroll reaches a stable block without eager mounting',
       (tester) async {
     final document = _document(

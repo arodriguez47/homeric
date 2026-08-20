@@ -11,8 +11,15 @@
     "valid": true
   },
   "homeric": {
+    "fixture": "large.md",
+    "scenario": "generated",
+    "fixture_words": 100000,
+    "fixture_fnv1a32": "7a87f8d5",
+    "blocks": 1120,
     "cold_load_first_frame_us": 500000,
     "max_mounted_rows": 500,
+    "paragraph_cache_entries": 2049,
+    "paragraph_cache_text_code_units": 1000001,
     "layout_median_sample_us": 200000
   }
 }

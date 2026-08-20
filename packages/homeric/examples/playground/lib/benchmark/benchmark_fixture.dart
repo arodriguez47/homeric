@@ -1,7 +1,26 @@
 /// Deterministic adapter from generated Markdown fixtures to Homeric blocks.
 library;
 
+import 'dart:convert';
+
 import 'package:homeric/homeric.dart';
+
+/// Exact corpus identity used by the benchmark gate.
+({int words, String fnv1a32}) benchmarkFixtureIdentity(String markdown) {
+  final trimmed = markdown.trim();
+  final words = trimmed.isEmpty ? 0 : trimmed.split(RegExp(r'\s+')).length;
+  const mask = 0xffffffff;
+  const prime = 16777619;
+  var hash = 2166136261;
+  for (final byte in utf8.encode(markdown)) {
+    hash ^= byte;
+    hash = (hash * prime) & mask;
+  }
+  return (
+    words: words,
+    fnv1a32: hash.toRadixString(16).padLeft(8, '0'),
+  );
+}
 
 /// Parses the generated benchmark Markdown into stable top-level blocks.
 ///

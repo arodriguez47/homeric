@@ -29,6 +29,7 @@ void main() {
 
     final coldLoad = Stopwatch()..start();
     final markdown = await rootBundle.loadString('benchmark_assets/current.md');
+    final fixtureIdentity = benchmarkFixtureIdentity(markdown);
     final document = _scenarioDocument(markdown, _scenario);
     final viewModel = DocumentViewModel(document: document);
     addTearDown(viewModel.dispose);
@@ -40,6 +41,8 @@ void main() {
     coldLoad.stop();
 
     var maxMounted = _mountedRows();
+    var maxParagraphCacheEntries = 0;
+    var maxParagraphCacheTextCodeUnits = 0;
     final initialMounted = maxMounted;
     expect(initialMounted, lessThan(500));
     if (document.blockCount > 1) {
@@ -56,43 +59,37 @@ void main() {
     final layoutElapsed = <HomericParagraphLayoutCategory, Duration>{};
     final layoutSampleTotalsUs = <int>[];
     for (var sample = 0; sample < 3; sample++) {
-      final disabled = await _runSample(
+      final pair = await _runSamplePair(
         binding,
         tester,
         viewModel,
-        instrumented: false,
+        instrumentedFirst: sample.isOdd,
         onMountedRows: (count) {
           if (count > maxMounted) maxMounted = count;
         },
       );
-      disabledSamples.add(disabled.frames);
-      coldMountSamples.add(disabled.coldFrames);
-      final instrumented = await _runSample(
-        binding,
-        tester,
-        viewModel,
-        instrumented: true,
-        onMountedRows: (count) {
-          if (count > maxMounted) maxMounted = count;
-        },
-      );
-      instrumentedSamples.add(instrumented.frames);
-      coldMountSamples.add(instrumented.coldFrames);
+      disabledSamples.add(pair.disabledFrames);
+      instrumentedSamples.add(pair.instrumentedFrames);
+      coldMountSamples.addAll(pair.coldFrames);
+      if (pair.paragraphCacheEntries > maxParagraphCacheEntries) {
+        maxParagraphCacheEntries = pair.paragraphCacheEntries;
+      }
+      if (pair.paragraphCacheTextCodeUnits > maxParagraphCacheTextCodeUnits) {
+        maxParagraphCacheTextCodeUnits = pair.paragraphCacheTextCodeUnits;
+      }
       layoutSampleTotalsUs.add(
-        instrumented.layout!.totalElapsed.inMicroseconds,
+        pair.layout.totalElapsed.inMicroseconds,
       );
       for (final category in HomericParagraphLayoutCategory.values) {
         layoutCounts.update(
           category,
-          (value) => value + instrumented.layout!.countFor(category),
-          ifAbsent: () => instrumented.layout!.countFor(category),
+          (value) => value + pair.layout.countFor(category),
+          ifAbsent: () => pair.layout.countFor(category),
         );
         layoutElapsed.update(
           category,
-          (value) =>
-              value + (instrumented.layout!.elapsed[category] ?? Duration.zero),
-          ifAbsent: () =>
-              instrumented.layout!.elapsed[category] ?? Duration.zero,
+          (value) => value + (pair.layout.elapsed[category] ?? Duration.zero),
+          ifAbsent: () => pair.layout.elapsed[category] ?? Duration.zero,
         );
       }
     }
@@ -115,6 +112,8 @@ void main() {
     binding.reportData!['homeric'] = <String, dynamic>{
       'fixture': _fixtureName,
       'scenario': _scenario,
+      'fixture_words': fixtureIdentity.words,
+      'fixture_fnv1a32': fixtureIdentity.fnv1a32,
       'blocks': document.blockCount,
       'viewport': <String, Object>{
         'logical_width': 1440,
@@ -127,6 +126,8 @@ void main() {
       'cold_load_first_frame_us': coldLoad.elapsedMicroseconds,
       'initial_mounted_rows': initialMounted,
       'max_mounted_rows': maxMounted,
+      'paragraph_cache_entries': maxParagraphCacheEntries,
+      'paragraph_cache_text_code_units': maxParagraphCacheTextCodeUnits,
       'layout_total_count':
           layoutCounts.values.fold(0, (sum, value) => sum + value),
       'layout_total_us': layoutElapsed.values.fold(
@@ -147,9 +148,9 @@ void main() {
       'trace': <String, Object>{
         'duration_ms': 5000,
         'steps': 100,
-        'warmup_round_trips': 1,
+        'warmup_outward_traversals': 1,
         'samples_per_mode': 3,
-        'order': 'disabled, instrumented, repeated',
+        'order': 'paired alternating disabled/instrumented',
         'height_churn_changes': _scenario == 'height_churn' ? 3 : 0,
       },
     };
@@ -168,42 +169,97 @@ Widget _surface(DocumentViewModel viewModel, ScrollController controller) =>
       ),
     );
 
-Future<_BenchmarkSample> _runSample(
+Future<_BenchmarkSamplePair> _runSamplePair(
   IntegrationTestWidgetsFlutterBinding binding,
   WidgetTester tester,
   DocumentViewModel viewModel, {
-  required bool instrumented,
+  required bool instrumentedFirst,
   required ValueChanged<int> onMountedRows,
 }) async {
+  final controlController = ScrollController();
+  final controlColdFrames = await _watchFrames(
+    binding,
+    () => tester.pumpWidget(_surface(viewModel, controlController)),
+  );
+  onMountedRows(_mountedRows());
+  await tester.pumpWidget(const SizedBox.shrink());
+  controlController.dispose();
+
   final controller = ScrollController();
-  final coldFrames = await _watchFrames(
+  final pairedColdFrames = await _watchFrames(
     binding,
     () => tester.pumpWidget(_surface(viewModel, controller)),
   );
   onMountedRows(_mountedRows());
   await _warmUp(tester, controller);
-  final probe = instrumented ? HomericParagraphLayoutProbe.start() : null;
-  late final Map<String, Object> frames;
-  HomericParagraphLayoutReport? layout;
+  late final Map<String, Object> disabledFrames;
+  late final Map<String, Object> instrumentedFrames;
+  late final HomericParagraphLayoutReport layout;
+  late final int paragraphCacheEntries;
+  late final int paragraphCacheTextCodeUnits;
   try {
-    frames = await _watchFrames(
-      binding,
-      () => _trace(tester, controller, onMountedRows),
+    Future<void> runDisabled() async {
+      disabledFrames = await _watchFrames(
+        binding,
+        () => _trace(tester, controller, onMountedRows),
+      );
+    }
+
+    Future<void> runInstrumented() async {
+      final probe = HomericParagraphLayoutProbe.start();
+      try {
+        instrumentedFrames = await _watchFrames(
+          binding,
+          () => _trace(tester, controller, onMountedRows),
+        );
+      } finally {
+        layout = probe.stop();
+      }
+    }
+
+    if (instrumentedFirst) {
+      await runInstrumented();
+      await runDisabled();
+    } else {
+      await runDisabled();
+      await runInstrumented();
+    }
+    final documentState = tester.state<HomericEditableDocumentState>(
+      find.byType(HomericEditableDocument),
     );
+    paragraphCacheEntries = documentState.debugParagraphLayoutCacheEntries;
+    paragraphCacheTextCodeUnits =
+        documentState.debugParagraphLayoutCacheTextCodeUnits;
   } finally {
-    layout = probe?.stop();
     await tester.pumpWidget(const SizedBox.shrink());
     controller.dispose();
   }
-  return _BenchmarkSample(frames, coldFrames, layout);
+  return _BenchmarkSamplePair(
+    disabledFrames,
+    instrumentedFrames,
+    <Map<String, Object>>[controlColdFrames, pairedColdFrames],
+    layout,
+    paragraphCacheEntries,
+    paragraphCacheTextCodeUnits,
+  );
 }
 
-final class _BenchmarkSample {
-  const _BenchmarkSample(this.frames, this.coldFrames, this.layout);
+final class _BenchmarkSamplePair {
+  const _BenchmarkSamplePair(
+    this.disabledFrames,
+    this.instrumentedFrames,
+    this.coldFrames,
+    this.layout,
+    this.paragraphCacheEntries,
+    this.paragraphCacheTextCodeUnits,
+  );
 
-  final Map<String, Object> frames;
-  final Map<String, Object> coldFrames;
-  final HomericParagraphLayoutReport? layout;
+  final Map<String, Object> disabledFrames;
+  final Map<String, Object> instrumentedFrames;
+  final List<Map<String, Object>> coldFrames;
+  final HomericParagraphLayoutReport layout;
+  final int paragraphCacheEntries;
+  final int paragraphCacheTextCodeUnits;
 }
 
 Map<String, Object> _aggregate(List<Map<String, Object>> samples) {
@@ -311,9 +367,11 @@ Future<void> _warmUp(
   WidgetTester tester,
   ScrollController controller,
 ) async {
-  final end = controller.position.maxScrollExtent.clamp(0.0, 1200.0);
-  controller.jumpTo(end);
-  await tester.pump();
+  final max = controller.position.maxScrollExtent;
+  for (var step = 0; step < 50; step++) {
+    controller.jumpTo(max * step / 49);
+    await tester.pump();
+  }
   controller.jumpTo(0);
   await tester.pump();
 }
@@ -321,14 +379,17 @@ Future<void> _warmUp(
 Future<void> _trace(
   WidgetTester tester,
   ScrollController controller,
-  ValueChanged<int> onMountedRows,
-) async {
+  ValueChanged<int> onMountedRows, {
+  Duration stepDuration = const Duration(milliseconds: 50),
+  bool applyScenarioChanges = true,
+}) async {
   final max = controller.position.maxScrollExtent;
   for (var step = 0; step < 100; step++) {
     final progress = step < 50 ? step / 49 : (99 - step) / 49;
     controller.jumpTo(max * progress);
-    await tester.pump(const Duration(milliseconds: 50));
-    if (_scenario == 'height_churn' &&
+    await tester.pump(stepDuration);
+    if (applyScenarioChanges &&
+        _scenario == 'height_churn' &&
         (step == 25 || step == 50 || step == 75)) {
       await tester.drag(
         find.byType(Slider),

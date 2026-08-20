@@ -115,6 +115,7 @@ import 'paragraph_geometry.dart';
 import 'paragraph_source.dart';
 
 part 'paragraph_overlay.dart';
+part 'paragraph_layout_cache.dart';
 
 /// A paint-only per-run style adjustment — U5's repaint band.
 ///
@@ -579,6 +580,9 @@ class RenderHomericParagraph extends RenderBox
   bool _geometryReady = false;
   bool _geometryNotificationScheduled = false;
   bool _disposed = false;
+  HomericParagraphLayoutCache? _paragraphLayoutCache;
+  Object? _paragraphLayoutCacheKey;
+  double? _lastLayoutMaxWidth;
 
   /// Content equality for a [ParagraphSource] of any style-handle type
   /// (view text, spec, [ViewMap], segments) — shared by [source] and
@@ -671,6 +675,41 @@ class RenderHomericParagraph extends RenderBox
     _lineTemplate?.dispose();
     _lineTemplate = null;
     _rebuildForPaint = false;
+    _lastLayoutMaxWidth = null;
+  }
+
+  void _releaseLiveParagraphToCache() {
+    final cache = _paragraphLayoutCache;
+    final key = _paragraphLayoutCacheKey;
+    final paragraph = _paragraph;
+    final dimensions = _liveDimensions;
+    final maxWidth = _lastLayoutMaxWidth;
+    if (cache == null ||
+        key == null ||
+        paragraph == null ||
+        dimensions == null ||
+        maxWidth == null ||
+        _rebuildForPaint) {
+      return;
+    }
+    _paragraph = null;
+    _liveDimensions = null;
+    _lastLayoutMaxWidth = null;
+    cache._release(
+      key,
+      _CachedHomericParagraph(
+        paragraph: paragraph,
+        source: _source,
+        baseStyle: _baseStyle,
+        textAlign: _textAlign,
+        textScaler: _textScaler,
+        slotAlignment: _slotAlignment,
+        slotBaseline: _slotBaseline,
+        paintStyler: _paintStyler,
+        dimensions: dimensions,
+        maxWidth: maxWidth,
+      ),
+    );
   }
 
   ui.ParagraphStyle _paragraphStyle() {
@@ -978,18 +1017,43 @@ class RenderHomericParagraph extends RenderBox
       // A slot changed size: content-level change, rebuild.
       paragraph.dispose();
       _paragraph = paragraph = null;
+      _lastLayoutMaxWidth = null;
     }
     if (paragraph == null) {
-      _paragraph = paragraph = _buildParagraph(dimensions);
-      // A fresh build already reflects the current paintStyler.
-      _rebuildForPaint = false;
+      final cache = _paragraphLayoutCache;
+      final key = _paragraphLayoutCacheKey;
+      final cached = cache == null || key == null
+          ? null
+          : cache._take(
+              key,
+              source: _source,
+              baseStyle: _baseStyle,
+              textAlign: _textAlign,
+              textScaler: _textScaler,
+              slotAlignment: _slotAlignment,
+              slotBaseline: _slotBaseline,
+              paintStyler: _paintStyler,
+              dimensions: dimensions,
+              maxWidth: constraints.maxWidth,
+            );
+      if (cached == null) {
+        _paragraph = paragraph = _buildParagraph(dimensions);
+        // A fresh build already reflects the current paintStyler.
+        _rebuildForPaint = false;
+      } else {
+        _paragraph = paragraph = cached.paragraph;
+        _lastLayoutMaxWidth = cached.maxWidth;
+      }
     }
     _liveDimensions = dimensions;
-    final natural = _layoutAt(
-      paragraph,
-      constraints.maxWidth,
-      HomericParagraphLayoutCategory.live,
-    );
+    final natural = _lastLayoutMaxWidth == constraints.maxWidth
+        ? Size(paragraph.width, paragraph.height)
+        : _layoutAt(
+            paragraph,
+            constraints.maxWidth,
+            HomericParagraphLayoutCategory.live,
+          );
+    _lastLayoutMaxWidth = constraints.maxWidth;
     _layoutGeneration += 1;
     size = constraints.constrain(natural);
     _positionChildren(paragraph);
@@ -1336,6 +1400,7 @@ class RenderHomericParagraph extends RenderBox
     // The mixin marks needs-layout (deferring while detached); glyph
     // metrics may all have changed, so every cached paragraph is stale.
     super.systemFontsDidChange();
+    _paragraphLayoutCache?.clear();
     _dropParagraphs();
   }
 
@@ -1343,6 +1408,7 @@ class RenderHomericParagraph extends RenderBox
   void dispose() {
     _disposed = true;
     _onGeometryChanged = null;
+    _releaseLiveParagraphToCache();
     _dropParagraphs();
     super.dispose();
   }
@@ -1532,6 +1598,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
 
   @override
   RenderHomericParagraph createRenderObject(BuildContext context) {
+    final cacheScope = HomericParagraphLayoutCacheScope.maybeOf(context);
     return RenderHomericParagraph(
       source: source,
       baseStyle: baseStyle,
@@ -1543,17 +1610,22 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       paintLayers: paintLayers,
       semanticsSource: semanticsSource,
       onGeometryChanged: onGeometryChanged,
-    );
+    )
+      .._paragraphLayoutCache = cacheScope?.cache
+      .._paragraphLayoutCacheKey = cacheScope?.cacheKey;
   }
 
   @override
   void updateRenderObject(
       BuildContext context, RenderHomericParagraph renderObject) {
+    final cacheScope = HomericParagraphLayoutCacheScope.maybeOf(context);
     renderObject
       // First in the cascade: it invalidates nothing, and its catch-up
       // dispatch coalesces with any relayout the rest of the cascade
       // triggers in this same frame.
       ..onGeometryChanged = onGeometryChanged
+      .._paragraphLayoutCache = cacheScope?.cache
+      .._paragraphLayoutCacheKey = cacheScope?.cacheKey
       ..source = source
       ..baseStyle = baseStyle
       ..textAlign = textAlign

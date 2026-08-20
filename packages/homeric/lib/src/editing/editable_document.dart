@@ -12,6 +12,7 @@ import '../model/document.dart';
 import '../model/position.dart';
 import '../model/selection.dart';
 import '../render/paragraph_geometry.dart';
+import '../render/homeric_paragraph.dart';
 import 'block_height_cache.dart';
 import 'editor_controller.dart';
 
@@ -100,6 +101,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   final Map<String, _MountedSelectionHost> _selectionHosts =
       <String, _MountedSelectionHost>{};
   late BlockHeightCache _heightCache;
+  late final HomericParagraphLayoutCache _paragraphLayoutCache;
   late ScrollController _scrollController;
   double _layoutWidth = 0;
   double _pendingAnchorCorrection = 0;
@@ -131,6 +133,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _heightCache = BlockHeightCache(
       estimatedHeight: widget.estimatedBlockHeight,
     );
+    _paragraphLayoutCache = HomericParagraphLayoutCache();
     _scrollController = widget.scrollController ?? ScrollController();
     _syncOrder(force: true);
     _captureSemanticsState();
@@ -151,6 +154,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
       _focusRequestGeneration++;
+      _paragraphLayoutCache.clear();
       _syncOrder(force: true);
       _captureSemanticsState();
     }
@@ -179,6 +183,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   /// Exposed for performance-contract tests; ordinary block-local text edits
   /// must not advance it.
   int get debugHeightOrderRebuildCount => _heightOrderRebuildCount;
+
+  /// Number of detached shaped paragraphs retained for recycled rows.
+  int get debugParagraphLayoutCacheEntries => _paragraphLayoutCache.entryCount;
+
+  /// Bounded retained source-text footprint of the paragraph cache.
+  int get debugParagraphLayoutCacheTextCodeUnits =>
+      _paragraphLayoutCache.textCodeUnits;
 
   /// Cancels a pointer drag if focus remains outside every editor row.
   ///
@@ -945,9 +956,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _heightOrderContentRevision = contentRevision;
     _heightOrderDocument = document;
     if (blockLocalContentChange) return false;
-    _heightCache.replaceOrder(
-      document.blocks.map((block) => block.id).toList(),
-    );
+    final blockIds = document.blocks.map((block) => block.id).toList();
+    _heightCache.replaceOrder(blockIds);
+    _paragraphLayoutCache.retainKeys(blockIds.toSet());
     _heightOrderRebuildCount++;
     return true;
   }
@@ -1014,6 +1025,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
     _mountedRows.clear();
     _mountedFocusNodes.clear();
     _selectionHosts.clear();
+    _paragraphLayoutCache.dispose();
     _rowKeys.clear();
     _blockIdsByRowKey.clear();
     if (widget.scrollController == null) _scrollController.dispose();
@@ -1097,6 +1109,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
                   index: index,
                   totalCount: document.blockCount,
                   builder: widget.blockBuilder!,
+                  paragraphLayoutCache: _paragraphLayoutCache,
                   witness: witness,
                   keepAlive: () =>
                       widget.controller.activeBlockId == block.id ||
@@ -1182,6 +1195,7 @@ class _DocumentBlockRow extends StatefulWidget {
     required this.index,
     required this.totalCount,
     required this.builder,
+    required this.paragraphLayoutCache,
     required this.witness,
     required this.keepAlive,
     required this.canReorder,
@@ -1196,6 +1210,7 @@ class _DocumentBlockRow extends StatefulWidget {
   final int index;
   final int totalCount;
   final HomericEditableBlockBuilder builder;
+  final HomericParagraphLayoutCache paragraphLayoutCache;
   final BlockHeightWitness witness;
   final ValueGetter<bool> keepAlive;
   final ValueGetter<bool> canReorder;
@@ -1301,7 +1316,13 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
               ),
             ),
           ),
-          Expanded(child: widget.builder(context, widget.block, _focusNode)),
+          Expanded(
+            child: HomericParagraphLayoutCacheScope(
+              cache: widget.paragraphLayoutCache,
+              cacheKey: widget.block.id,
+              child: widget.builder(context, widget.block, _focusNode),
+            ),
+          ),
         ],
       ),
     );

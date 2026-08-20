@@ -2,6 +2,34 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-19 — Height reuse and glyph-layout reuse are separate caches
+
+**What:** Natural-height virtualization retained scalar row measurements by
+stable block ID, but every recycled `RenderHomericParagraph` still disposed its
+shaped `ui.Paragraph`. A reverse traversal therefore repeated every engine
+layout even though the height index was warm. The document viewport now owns a
+separate bounded LRU of detached shaped paragraphs. A row releases exactly one
+paragraph on disposal and can reclaim it only when block ID, source, resolved
+styles, scaler, alignment, placeholder dimensions, paint styler, and wrap width
+all still match. The cache never supplies a child extent; a miss performs the
+same natural layout as before.
+
+**Why it mattered:** Render-object-local caching cannot survive the lifecycle
+virtualization deliberately creates. Conversely, putting engine objects into
+the height index would couple scroll targeting to presentation ownership and
+turn stale estimates into a correctness risk. Keeping the caches separate made
+the 100k warmed trace perform zero repeated layouts while preserving 11 mounted
+rows and bounding detached state to 2,048 entries and one million UTF-16 code
+units.
+
+**Rule going forward:** Cache compact measurements for indexing and cache shaped
+engine resources for reuse under different owners. Transfer each engine object
+between exactly one render object and one bounded document cache; validate the
+complete layout witness before reuse, clear on system-font changes, dispose on
+eviction/viewport teardown, and measure cold mount separately from warmed
+scroll. Never improve a layout metric by retaining rows or by letting cached
+heights constrain natural content.
+
 ## editor-architect — 2026-08-19 — A recycled row cannot own a document drag
 
 **What:** Multi-block pointer selection began inside a paragraph, but the

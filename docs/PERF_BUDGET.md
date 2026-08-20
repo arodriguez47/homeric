@@ -46,6 +46,9 @@ than proving a product regression.
 ## How to measure locally
 
 Run `melos run benchmark` on macOS. It records profile `FrameTiming`, mounted
-row counts, and cumulative engine paragraph-layout counts/time for the real
-playground editor. Results are local and ignored; the accepted summary lives
-under `benchmarks/`.
+row counts, bounded detached-paragraph cache size/text footprint, and
+cumulative engine paragraph-layout counts/time for the real playground editor.
+Cold first-frame/mount evidence is recorded separately; scroll and layout
+evidence follow one full unmeasured outward warm-up traversal so recycled-row reuse is
+measured against an identical document/viewport state. Results are local and
+ignored; the accepted summary lives under `benchmarks/`.

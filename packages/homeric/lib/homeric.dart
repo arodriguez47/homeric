@@ -27,7 +27,8 @@ export 'src/model/document.dart';
 export 'src/model/inline_run.dart';
 export 'src/model/position.dart';
 export 'src/model/selection.dart';
-export 'src/render/homeric_paragraph.dart';
+export 'src/render/homeric_paragraph.dart'
+    hide HomericParagraphLayoutCache, HomericParagraphLayoutCacheScope;
 export 'src/render/paint_layers.dart';
 export 'src/render/paragraph_layout_instrumentation.dart';
 export 'src/render/paragraph_geometry.dart';

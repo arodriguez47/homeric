@@ -17,7 +17,7 @@ void main() {
       result: readJson(
         'benchmarks/testdata/large-generated-passing.json',
       ),
-      baseline: readJson('benchmarks/baseline.json'),
+      accepted: readJson('benchmarks/accepted.json'),
     );
 
     expect(failures, isEmpty);
@@ -28,10 +28,10 @@ void main() {
       result: readJson(
         'benchmarks/testdata/large-generated-failing.json',
       ),
-      baseline: readJson('benchmarks/baseline.json'),
+      accepted: readJson('benchmarks/accepted.json'),
     );
 
-    expect(failures, hasLength(8));
+    expect(failures, hasLength(10));
     expect(
       failures.join('\n'),
       allOf(<Matcher>[
@@ -41,6 +41,8 @@ void main() {
         contains('scroll p95 frame time: 33000 us'),
         contains('active widget count'),
         contains('five-second cumulative paragraph layout'),
+        contains('detached paragraph cache entries'),
+        contains('detached paragraph cache text'),
         contains('cold-load p95 frame time regression'),
         contains('scroll p95 frame time regression'),
       ]),
@@ -62,26 +64,55 @@ void main() {
     );
   });
 
+  test('rejects fast results from a different corpus or scenario', () {
+    final result = readJson(
+      'benchmarks/testdata/large-generated-passing.json',
+    );
+    final homeric = result['homeric']! as Map<String, Object?>;
+    homeric
+      ..['scenario'] = 'height_churn'
+      ..['fixture_words'] = 99999
+      ..['fixture_fnv1a32'] = '00000000'
+      ..['blocks'] = 1119;
+
+    expect(
+      largeGeneratedBudgetFailures(
+        result: result,
+        accepted: readJson('benchmarks/accepted.json'),
+      ).join('\n'),
+      allOf(
+        contains('benchmark scenario mismatch'),
+        contains('fixture word count mismatch'),
+        contains('fixture fingerprint mismatch'),
+        contains('fixture block count mismatch'),
+      ),
+    );
+  });
+
   test('allows exactly five percent p95 regression but rejects more', () {
     final result = readJson(
       'benchmarks/testdata/large-generated-passing.json',
     );
+    final accepted = readJson('benchmarks/accepted.json');
+    final observed = accepted['observed']! as Map<String, Object?>;
+    final acceptedP95 = observed['scroll_disabled_total_p95_us']! as int;
+    final largestAllowedP95 = acceptedP95 * 105 ~/ 100;
     final scroll = result['scroll_disabled']! as Map<String, Object?>;
-    scroll['total_p95_us'] = 13496;
+    scroll['total_p95_us'] = largestAllowedP95;
 
     expect(
       largeGeneratedBudgetFailures(
         result: result,
-        baseline: readJson('benchmarks/baseline.json'),
+        accepted: accepted,
       ),
       isEmpty,
     );
 
-    scroll['total_p95_us'] = 13497;
+    scroll['total_p95_us'] = largestAllowedP95 + 1;
     expect(
       largeGeneratedBudgetFailures(
         result: result,
-        baseline: readJson('benchmarks/baseline.json'),
+        accepted: accepted,
       ),
       contains(contains('scroll p95 frame time regression')),
     );

@@ -6,6 +6,13 @@ import 'package:homeric_playground/view_models/document_view_model.dart';
 import 'package:homeric_playground/views/editor_page.dart';
 
 void main() {
+  test('benchmark corpus identity uses exact bytes and whitespace words', () {
+    expect(
+      benchmarkFixtureIdentity('a b\n'),
+      (words: 2, fnv1a32: '2a228168'),
+    );
+  });
+
   test('benchmark Markdown parser assigns stable blocks and types', () {
     final document = benchmarkDocumentFromMarkdown(
       '# Title\n\nparagraph words\n\n- one\n- two\n\n> quote',

@@ -4,6 +4,8 @@ const _scrollP50BudgetUs = 16000;
 const _scrollP95BudgetUs = 33000;
 const _activeWidgetsBudget = 500;
 const _layoutBudgetUs = 200000;
+const _paragraphCacheEntryLimitExclusive = 2049;
+const _paragraphCacheTextCodeUnitLimitExclusive = 1000001;
 const _baselineP95TolerancePercent = 5;
 
 String? instrumentationCalibrationFailure(Map<String, Object?> result) {
@@ -19,19 +21,20 @@ String? instrumentationCalibrationFailure(Map<String, Object?> result) {
 
 List<String> largeGeneratedBudgetFailures({
   required Map<String, Object?> result,
-  required Map<String, Object?> baseline,
+  required Map<String, Object?> accepted,
 }) {
-  final schema = _integer(baseline, 'schema', path: 'baseline');
+  final schema = _integer(accepted, 'schema', path: 'accepted');
   if (schema != 1) {
     throw FormatException(
-      'Unsupported benchmarks/baseline.json schema: $schema',
+      'Unsupported benchmarks/accepted.json schema: $schema',
     );
   }
 
   final scrollDisabled = _map(result, 'scroll_disabled');
   final coldMount = _map(result, 'cold_mount');
   final homeric = _map(result, 'homeric');
-  final observed = _map(baseline, 'observed');
+  final observed = _map(accepted, 'observed');
+  final fixture = _map(accepted, 'fixture');
 
   final firstFrameUs = _integer(
     homeric,
@@ -63,14 +66,68 @@ List<String> largeGeneratedBudgetFailures({
     'layout_median_sample_us',
     path: 'homeric',
   );
+  final paragraphCacheEntries = _integer(
+    homeric,
+    'paragraph_cache_entries',
+    path: 'homeric',
+  );
+  final paragraphCacheTextCodeUnits = _integer(
+    homeric,
+    'paragraph_cache_text_code_units',
+    path: 'homeric',
+  );
 
   final failures = <String>[];
+  _requireEqual(
+    failures,
+    label: 'fixture file',
+    actual: _string(homeric, 'fixture', path: 'homeric'),
+    expected: _string(fixture, 'file', path: 'accepted.fixture'),
+  );
+  _requireEqual(
+    failures,
+    label: 'benchmark scenario',
+    actual: _string(homeric, 'scenario', path: 'homeric'),
+    expected: 'generated',
+  );
+  _requireEqual(
+    failures,
+    label: 'fixture word count',
+    actual: _integer(homeric, 'fixture_words', path: 'homeric'),
+    expected: _integer(fixture, 'words', path: 'accepted.fixture'),
+  );
+  _requireEqual(
+    failures,
+    label: 'fixture block count',
+    actual: _integer(homeric, 'blocks', path: 'homeric'),
+    expected: _integer(fixture, 'blocks', path: 'accepted.fixture'),
+  );
+  _requireEqual(
+    failures,
+    label: 'fixture fingerprint',
+    actual: _string(homeric, 'fixture_fnv1a32', path: 'homeric'),
+    expected: _string(fixture, 'fnv1a32', path: 'accepted.fixture'),
+  );
   _requireUnder(
     failures,
     label: 'time to first frame',
     actual: firstFrameUs,
     budget: _firstFrameBudgetUs,
     unit: 'us',
+  );
+  _requireUnder(
+    failures,
+    label: 'detached paragraph cache entries',
+    actual: paragraphCacheEntries,
+    budget: _paragraphCacheEntryLimitExclusive,
+    unit: 'entries',
+  );
+  _requireUnder(
+    failures,
+    label: 'detached paragraph cache text',
+    actual: paragraphCacheTextCodeUnits,
+    budget: _paragraphCacheTextCodeUnitLimitExclusive,
+    unit: 'UTF-16 code units',
   );
   _requireUnder(
     failures,
@@ -115,7 +172,7 @@ List<String> largeGeneratedBudgetFailures({
     baseline: _integer(
       observed,
       'cold_mount_total_p95_us',
-      path: 'baseline.observed',
+      path: 'accepted.observed',
     ),
   );
   _requireP95WithinBaseline(
@@ -125,7 +182,7 @@ List<String> largeGeneratedBudgetFailures({
     baseline: _integer(
       observed,
       'scroll_disabled_total_p95_us',
-      path: 'baseline.observed',
+      path: 'accepted.observed',
     ),
   );
   return failures;
@@ -145,6 +202,26 @@ int _integer(
   final value = parent[key];
   if (value is int) return value;
   throw FormatException('Expected $path.$key to be an integer');
+}
+
+String _string(
+  Map<String, Object?> parent,
+  String key, {
+  required String path,
+}) {
+  final value = parent[key];
+  if (value is String) return value;
+  throw FormatException('Expected $path.$key to be a string');
+}
+
+void _requireEqual<T>(
+  List<String> failures, {
+  required String label,
+  required T actual,
+  required T expected,
+}) {
+  if (actual == expected) return;
+  failures.add('$label mismatch: $actual vs expected $expected');
 }
 
 void _requireUnder(

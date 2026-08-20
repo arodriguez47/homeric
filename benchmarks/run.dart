@@ -105,12 +105,12 @@ Future<void> _enforceLargeGeneratedGate(
       exit(2);
     }
 
-    final baseline = jsonDecode(
-      await File('${root.path}/benchmarks/baseline.json').readAsString(),
+    final accepted = jsonDecode(
+      await File('${root.path}/benchmarks/accepted.json').readAsString(),
     ) as Map<String, Object?>;
     final failures = largeGeneratedBudgetFailures(
       result: result,
-      baseline: baseline,
+      accepted: accepted,
     );
     if (failures.isEmpty) {
       stdout.writeln('large-generated performance gate passed');

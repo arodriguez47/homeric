@@ -248,6 +248,341 @@ void main() {
       expect(controller.canUndo, isFalse);
     });
   });
+
+  group('prepared commands', () {
+    test('multiple stages publish one final state and explicit caret', () {
+      final document = _document(['abcd']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+      );
+      final split = Transaction(document);
+      final trailingId = split.splitBlock(document.positionAt(0, 2));
+      final typed = Transaction(split.doc)
+        ..insertText(split.doc.positionAt(1, 0), '> ');
+      final finalSelection = HomericSelection.collapsed(
+        typed.doc.positionAt(1, 2),
+      );
+      final events = <HomericCommittedChange>[];
+      var notifications = 0;
+      controller.committedChanges.listen(events.add);
+      controller.addListener(() => notifications++);
+
+      expect(
+        controller.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[split, typed],
+          selection: finalSelection,
+        )),
+        isTrue,
+      );
+
+      expect(trailingId, controller.document.blocks.last.id);
+      expect(controller.document.blocks.map((block) => block.text),
+          <String>['ab', '> cd']);
+      expect(controller.selection, finalSelection);
+      expect(notifications, 1);
+      expect(events, hasLength(1));
+      expect(events.single.before, same(document));
+      expect(events.single.after, same(typed.doc));
+      expect(events.single.origin, HomericCommitOrigin.externalTransaction);
+    });
+
+    test('history-only checkpoint is preflight-visible but not published', () {
+      final document = _document(['+']);
+      late Document literal;
+      late Document converted;
+      final preflightHistory = <Document>[];
+      final preflightMutations = <HomericRetainedHistoryMutation>[];
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+        mutationPolicy: (request) {
+          preflightHistory.addAll(request.retainedHistoryDocuments);
+          preflightMutations.addAll(request.retainedHistoryMutations);
+          return true;
+        },
+      );
+      final completeLiteral = Transaction(document)
+        ..insertText(document.positionAt(0, 1), '+');
+      literal = completeLiteral.doc;
+      final conversion = Transaction(literal)
+        ..deleteRange(literal.positionAt(0, 0), literal.positionAt(0, 2))
+        ..setBlockType('a', 'aside');
+      converted = conversion.doc;
+      final events = <HomericCommittedChange>[];
+      var notifications = 0;
+      controller.committedChanges.listen(events.add);
+      controller.addListener(() => notifications++);
+
+      expect(
+        controller.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[completeLiteral, conversion],
+          selection: HomericSelection.collapsed(converted.positionAt(0, 0)),
+          undoCheckpoint: HomericPreparedUndoCheckpoint(
+            stage: 0,
+            selection: HomericSelection.collapsed(literal.positionAt(0, 2)),
+          ),
+        )),
+        isTrue,
+      );
+
+      expect(preflightHistory, <Document>[literal]);
+      expect(preflightMutations, hasLength(1));
+      expect(preflightMutations.single.before, same(document));
+      expect(preflightMutations.single.after, same(literal));
+      expect(preflightMutations.single.changes.touchedBlockIds, <String>['a']);
+      expect(preflightMutations.single.mapping, isNot(isA<Mapping>()),
+          reason: 'retained descriptors expose only a read-only mappable');
+      expect(
+        preflightMutations.single.mapping.map(document.positionAt(0, 1)),
+        literal.positionAt(0, 2),
+      );
+      expect(events, hasLength(1));
+      expect(notifications, 1);
+      expect(controller.document, same(converted));
+
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(literal));
+      expect(controller.selection,
+          HomericSelection.collapsed(literal.positionAt(0, 2)));
+      expect(controller.redo(), isTrue);
+      expect(controller.document, same(converted));
+    });
+
+    test('construction freezes every prepared transaction stage', () {
+      final document = _document(['abc']);
+      final source = Transaction(document)
+        ..insertText(document.positionAt(0, 1), 'X');
+      final captured = source.doc;
+      final command = HomericPreparedCommand(
+        stages: <Transaction>[source],
+        selection: HomericSelection.collapsed(captured.positionAt(0, 2)),
+      );
+      source.insertText(source.doc.positionAt(0, 2), 'Y');
+      final controller = HomericEditorController(document: document);
+      HomericCommittedChange? event;
+      controller.committedChanges.listen((change) => event = change);
+
+      expect(command.stageCount, 1);
+      expect(controller.applyPreparedCommand(command), isTrue);
+      expect(controller.document, same(captured));
+      expect(controller.document.blocks.single.text, 'aXbc');
+      expect(event!.after, same(captured));
+      expect(
+        event!.mapping.map(document.positionAt(0, 3)),
+        captured.positionAt(0, 4),
+      );
+    });
+
+    test('rejection and invalid prepared state are completely inert', () {
+      final document = _document(['abc']);
+      final retained = Transaction(document)
+        ..insertText(document.positionAt(0, 3), '!');
+      final finalStage = Transaction(retained.doc)
+        ..setBlockType('a', 'heading');
+      var policyCalls = 0;
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 3)),
+        mutationPolicy: (request) {
+          policyCalls++;
+          expect(request.retainedHistoryDocuments, <Document>[retained.doc]);
+          return false;
+        },
+      );
+      var notifications = 0;
+      final events = <HomericCommittedChange>[];
+      controller.addListener(() => notifications++);
+      controller.committedChanges.listen(events.add);
+      final command = HomericPreparedCommand(
+        stages: <Transaction>[retained, finalStage],
+        selection: HomericSelection.collapsed(finalStage.doc.positionAt(0, 4)),
+        undoCheckpoint: HomericPreparedUndoCheckpoint(
+          stage: 0,
+          selection: HomericSelection.collapsed(retained.doc.positionAt(0, 4)),
+        ),
+      );
+
+      expect(controller.applyPreparedCommand(command), isFalse);
+      expect(policyCalls, 1);
+      expect(controller.document, same(document));
+      expect(controller.canUndo, isFalse);
+      expect(controller.documentRevision, 0);
+      expect(notifications, 0);
+      expect(events, isEmpty);
+
+      final staleController = HomericEditorController(document: document);
+      final advance = Transaction(document)
+        ..insertText(document.positionAt(0, 0), '?');
+      expect(staleController.applyTransaction(advance), isTrue);
+      expect(staleController.applyPreparedCommand(command), isFalse);
+      expect(staleController.document, same(advance.doc));
+
+      final composingController = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      expect(
+        composingController.applyBlockEditBatch(
+          blockId: 'a',
+          selection: const BlockTextSelection.collapsed(1),
+          composing: const BlockTextRange.collapsed(1),
+        ),
+        isTrue,
+      );
+      final composingRevision = composingController.stateRevision;
+      expect(composingController.applyPreparedCommand(command), isFalse);
+      expect(composingController.stateRevision, composingRevision);
+
+      final readOnlyController = HomericEditorController(
+        document: document,
+        readOnly: true,
+      );
+      expect(readOnlyController.applyPreparedCommand(command), isFalse);
+      expect(readOnlyController.stateRevision, 0);
+
+      final invalidController = HomericEditorController(document: document);
+      expect(
+        invalidController.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[retained, finalStage],
+          selection: const HomericSelection.collapsed(999),
+        )),
+        isFalse,
+      );
+      expect(invalidController.stateRevision, 0);
+
+      final wrongBase = Transaction(document)..setBlockType('a', 'quote');
+      expect(
+        invalidController.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[retained, wrongBase],
+          selection: HomericSelection.collapsed(wrongBase.doc.positionAt(0, 3)),
+        )),
+        isFalse,
+      );
+      expect(invalidController.stateRevision, 0);
+    });
+
+    test('history checkpoint participates in max-depth pruning', () {
+      final document = _document(['+']);
+      final literal = Transaction(document)
+        ..insertText(document.positionAt(0, 1), '+');
+      final conversion = Transaction(literal.doc)..setBlockType('a', 'aside');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+        maxUndoDepth: 1,
+      );
+
+      expect(
+        controller.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[literal, conversion],
+          selection:
+              HomericSelection.collapsed(conversion.doc.positionAt(0, 2)),
+          undoCheckpoint: HomericPreparedUndoCheckpoint(
+            stage: 0,
+            selection: HomericSelection.collapsed(literal.doc.positionAt(0, 2)),
+          ),
+        )),
+        isTrue,
+      );
+
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(literal.doc));
+      expect(controller.undo(), isFalse,
+          reason: 'the older pre-command state was pruned');
+    });
+
+    test('checkpoint preflight retains exact structural descriptors', () {
+      final document = _document(['abcd']);
+      HomericRetainedHistoryMutation? retained;
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+        mutationPolicy: (request) {
+          retained = request.retainedHistoryMutations.single;
+          return true;
+        },
+      );
+      final split = Transaction(document);
+      final trailingId = split.splitBlock(document.positionAt(0, 2));
+      final decorate = Transaction(split.doc)
+        ..setBlockType(trailingId, 'aside');
+
+      expect(
+        controller.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[split, decorate],
+          selection: HomericSelection.collapsed(decorate.doc.positionAt(1, 0)),
+          undoCheckpoint: HomericPreparedUndoCheckpoint(
+            stage: 0,
+            selection: HomericSelection.collapsed(split.doc.positionAt(1, 0)),
+          ),
+        )),
+        isTrue,
+      );
+
+      expect(retained!.before, same(document));
+      expect(retained!.after, same(split.doc));
+      expect(retained!.changes.structural, hasLength(1));
+      expect(retained!.changes.structural.single, isA<BlockSplit>());
+      final structural = retained!.changes.structural.single as BlockSplit;
+      expect(structural.sourceId, 'a');
+      expect(structural.trailingId, trailingId);
+      expect(structural.sourceOffset, 2);
+    });
+
+    test('explicit final composition remains one history group', () {
+      final document = _document(['abc']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      final prepared = Transaction(document)
+        ..insertText(document.positionAt(0, 1), 'X');
+      final events = <HomericCommittedChange>[];
+      controller.committedChanges.listen(events.add);
+
+      expect(
+        controller.applyPreparedCommand(HomericPreparedCommand(
+          stages: <Transaction>[prepared],
+          selection: HomericSelection.collapsed(prepared.doc.positionAt(0, 2)),
+          composing: HomericTextRange(
+            prepared.doc.positionAt(0, 1),
+            prepared.doc.positionAt(0, 2),
+          ),
+        )),
+        isTrue,
+      );
+      expect(controller.composing, isNotNull);
+      expect(controller.canUndo, isFalse,
+          reason: 'the active composition has not closed its history group');
+      final publishedMapping = events.single.mapping;
+
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const <CanonicalTextEdit>[CanonicalTextEdit(2, 2, 'Y')],
+          selection: const BlockTextSelection.collapsed(3),
+          composing: const BlockTextRange(1, 3),
+        ),
+        isTrue,
+      );
+      expect(
+        publishedMapping.map(document.positionAt(0, 3)),
+        prepared.doc.positionAt(0, 4),
+        reason: 'later composition edits must not mutate the published map',
+      );
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          selection: const BlockTextSelection.collapsed(3),
+        ),
+        isTrue,
+      );
+      expect(controller.canUndo, isTrue);
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(document));
+    });
+  });
 }
 
 Document _document(List<String> texts) => Document([

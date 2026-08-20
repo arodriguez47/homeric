@@ -1255,6 +1255,346 @@ void main() {
   });
 
   testWidgets(
+      'ordered document shortcuts use one current host and fall through to built-ins',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final order = <String>[];
+    HomericDocumentCommandContext? firstContext;
+    const shortcut = SingleActivator(
+      LogicalKeyboardKey.arrowUp,
+      meta: true,
+      shift: true,
+    );
+    final bindings = <HomericDocumentCommandBinding>[
+      HomericDocumentCommandBinding(
+        shortcut: shortcut,
+        onInvoke: (context) {
+          order.add('first');
+          firstContext = context;
+          return HomericDocumentCommandResult.ignored;
+        },
+      ),
+      HomericDocumentCommandBinding(
+        shortcut: shortcut,
+        onInvoke: (context) {
+          order.add('second');
+          return HomericDocumentCommandResult.ignored;
+        },
+      ),
+    ];
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      commandBindings: bindings,
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    final documentBefore = controller.document;
+    final selectionBefore = controller.selection;
+    final stateRevisionBefore = controller.stateRevision;
+    final documentRevisionBefore = controller.documentRevision;
+
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+
+    expect(order, <String>['first', 'second']);
+    expect(controller.document.blocks.map((block) => block.id),
+        <String>['block-1', 'block-0', 'block-2']);
+    expect(firstContext!.isCurrent, isTrue);
+    expect(firstContext!.document, same(documentBefore));
+    expect(firstContext!.selection, selectionBefore);
+    expect(firstContext!.composing, isNull);
+    expect(firstContext!.stateRevision, stateRevisionBefore);
+    expect(firstContext!.documentRevision, documentRevisionBefore);
+    expect(
+      () => (firstContext! as dynamic).controller,
+      throwsNoSuchMethodError,
+      reason:
+          'the command context is a read-only snapshot, not a mutation owner',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-2')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(2, 1)),
+    );
+    await tester.pump();
+    expect(firstContext!.isCurrent, isFalse,
+        reason: 'the captured command belongs to the old focused host epoch');
+  });
+
+  testWidgets('rejected document shortcut reports and announces once',
+      (tester) async {
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final rejections = <HomericDocumentCommandRejection>[];
+    final announcements = <Map<dynamic, dynamic>>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockDecodedMessageHandler<dynamic>(
+      SystemChannels.accessibility,
+      (message) async {
+        announcements.add(message as Map<dynamic, dynamic>);
+      },
+    );
+    addTearDown(() => TestDefaultBinaryMessengerBinding
+        .instance.defaultBinaryMessenger
+        .setMockDecodedMessageHandler<dynamic>(
+            SystemChannels.accessibility, null));
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      commandBindings: <HomericDocumentCommandBinding>[
+        HomericDocumentCommandBinding(
+          shortcut: const SingleActivator(LogicalKeyboardKey.f2),
+          onInvoke: (_) => HomericDocumentCommandResult.rejected(
+            #opaque,
+            announcement: 'This block cannot be changed',
+          ),
+        ),
+      ],
+      onCommandRejected: rejections.add,
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+    await tester.pump();
+    final beforeRevision = controller.stateRevision;
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+    await tester.pump();
+
+    expect(controller.stateRevision, beforeRevision);
+    expect(rejections, hasLength(1));
+    expect(rejections.single.reason, #opaque);
+    expect(rejections.single.blockId, 'block-0');
+    expect(
+      announcements.where((message) => message['type'] == 'announce').map(
+            (message) => (message['data'] as Map<dynamic, dynamic>)['message'],
+          ),
+      contains('This block cannot be changed'),
+    );
+  });
+
+  testWidgets('handled document shortcut stops later registrations',
+      (tester) async {
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    var invocations = 0;
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      commandBindings: <HomericDocumentCommandBinding>[
+        HomericDocumentCommandBinding(
+          shortcut: const SingleActivator(LogicalKeyboardKey.f3),
+          onInvoke: (_) {
+            invocations++;
+            return HomericDocumentCommandResult.handled;
+          },
+        ),
+        HomericDocumentCommandBinding(
+          shortcut: const SingleActivator(LogicalKeyboardKey.f3),
+          onInvoke: (_) {
+            invocations += 100;
+            return HomericDocumentCommandResult.handled;
+          },
+        ),
+      ],
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f3);
+    await tester.pump();
+
+    expect(invocations, 1);
+  });
+
+  testWidgets(
+      'handled Cmd Shift shortcut suppresses its AppKit follow-up selector',
+      (tester) async {
+    TextInputConnection.debugResetId();
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    var callbacks = 0;
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      commandBindings: <HomericDocumentCommandBinding>[
+        HomericDocumentCommandBinding(
+          shortcut: const SingleActivator(
+            LogicalKeyboardKey.arrowUp,
+            meta: true,
+            shift: true,
+          ),
+          onInvoke: (_) {
+            callbacks++;
+            return HomericDocumentCommandResult.handled;
+          },
+        ),
+      ],
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    final selectionBefore = controller.selection;
+    final revisionBefore = controller.stateRevision;
+
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    await _sendSelectors(
+      tester.binding,
+      1,
+      const <String>['moveUpAndModifySelection:'],
+    );
+    await tester.pump();
+
+    expect(callbacks, 1);
+    expect(controller.document, same(document));
+    expect(controller.selection, selectionBefore);
+    expect(controller.stateRevision, revisionBefore);
+  });
+
+  testWidgets(
+      'rejected Cmd Shift shortcut suppresses its AppKit follow-up selector',
+      (tester) async {
+    TextInputConnection.debugResetId();
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final rejections = <HomericDocumentCommandRejection>[];
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      commandBindings: <HomericDocumentCommandBinding>[
+        HomericDocumentCommandBinding(
+          shortcut: const SingleActivator(
+            LogicalKeyboardKey.arrowDown,
+            meta: true,
+            shift: true,
+          ),
+          onInvoke: (_) => HomericDocumentCommandResult.rejected(
+            #opaque,
+            announcement: 'This block cannot be moved',
+          ),
+        ),
+      ],
+      onCommandRejected: rejections.add,
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    final selectionBefore = controller.selection;
+    final revisionBefore = controller.stateRevision;
+
+    await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    await _sendSelectors(
+      tester.binding,
+      1,
+      const <String>['moveDownAndModifySelection:'],
+    );
+    await tester.pump();
+
+    expect(rejections, hasLength(1));
+    expect(controller.document, same(document));
+    expect(controller.selection, selectionBefore);
+    expect(controller.stateRevision, revisionBefore);
+  });
+
+  testWidgets(
+      'prepared document command mutates only after its handler returns',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    var inHandler = false;
+    var notifications = 0;
+    controller.addListener(() {
+      expect(inHandler, isFalse);
+      notifications++;
+    });
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      commandBindings: <HomericDocumentCommandBinding>[
+        HomericDocumentCommandBinding(
+          shortcut: const SingleActivator(LogicalKeyboardKey.f4),
+          onInvoke: (context) {
+            inHandler = true;
+            try {
+              final transaction = Transaction(context.document)
+                ..moveBlock(context.blockId, 0);
+              return HomericDocumentCommandResult.prepared(
+                HomericPreparedCommand(
+                  stages: <Transaction>[transaction],
+                  selection: HomericSelection.collapsed(
+                    transaction.doc.positionAt(0, 2),
+                  ),
+                ),
+              );
+            } finally {
+              inHandler = false;
+            }
+          },
+        ),
+      ],
+    ));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+    await tester.pump();
+    notifications = 0;
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f4);
+    await tester.pump();
+
+    expect(controller.document.blocks.map((block) => block.id),
+        <String>['block-1', 'block-0', 'block-2']);
+    expect(controller.activeBlockId, 'block-1');
+    expect(notifications, 1);
+  });
+
+  testWidgets(
       'unrelated selector does not consume the matching block-move duplicate',
       (tester) async {
     final document = _document(<String>['alpha', 'beta', 'gamma', 'delta']);
@@ -1705,6 +2045,9 @@ Widget _editableDocument(
   HomericEditorController controller,
   HomericTextInputSession session, {
   Key? key,
+  List<HomericDocumentCommandBinding> commandBindings =
+      const <HomericDocumentCommandBinding>[],
+  ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -1713,6 +2056,8 @@ Widget _editableDocument(
         key: key,
         controller: controller,
         inputSession: session,
+        commandBindings: commandBindings,
+        onCommandRejected: onCommandRejected,
         cacheExtent: 0,
         estimatedBlockHeight: 44,
         blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
@@ -1827,6 +2172,22 @@ Future<void> _sendTextInputAction(
   final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
     'method': 'TextInputClient.performAction',
     'args': <Object?>[clientId, action],
+  });
+  await binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/textinput',
+    message,
+    (_) {},
+  );
+}
+
+Future<void> _sendSelectors(
+  TestWidgetsFlutterBinding binding,
+  int clientId,
+  List<String> selectors,
+) async {
+  final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+    'method': 'TextInputClient.performSelectors',
+    'args': <Object?>[clientId, selectors],
   });
   await binding.defaultBinaryMessenger.handlePlatformMessage(
     'flutter/textinput',

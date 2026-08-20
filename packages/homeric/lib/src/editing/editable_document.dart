@@ -23,6 +23,141 @@ typedef HomericEditableBlockBuilder = Widget Function(
   FocusNode focusNode,
 );
 
+/// Epoch-bound context supplied to a document-level command binding.
+final class HomericDocumentCommandContext {
+  const HomericDocumentCommandContext._({
+    required this.document,
+    required this.selection,
+    required this.composing,
+    required this.stateRevision,
+    required this.documentRevision,
+    required this.blockId,
+    required this.hostEpoch,
+    required bool Function() isCurrent,
+  }) : _isCurrent = isCurrent;
+
+  /// Immutable canonical document captured before the handler runs.
+  final Document document;
+
+  /// Directional selection captured before the handler runs.
+  final HomericSelection? selection;
+
+  /// Canonical composition captured before the handler runs.
+  final HomericTextRange? composing;
+
+  /// Listener-visible state generation captured before the handler runs.
+  final int stateRevision;
+
+  /// Canonical document generation captured before the handler runs.
+  final int documentRevision;
+
+  /// Stable block id of the paragraph that received the command.
+  final String blockId;
+
+  /// Mounted paragraph command generation.
+  final int hostEpoch;
+
+  final bool Function() _isCurrent;
+
+  /// Whether this command still belongs to the active mounted host.
+  bool get isCurrent => _isCurrent();
+}
+
+/// Result returned by a [HomericDocumentCommandHandler].
+sealed class HomericDocumentCommandResult {
+  const HomericDocumentCommandResult();
+
+  /// Continue through later registrations, then the built-in action.
+  static const ignored = HomericDocumentCommandIgnored();
+
+  /// Stop after the consumer handled the command.
+  static const handled = HomericDocumentCommandHandled();
+
+  /// Ask the mounted host to apply one already-prepared canonical command.
+  static HomericDocumentCommandPrepared prepared(
+    HomericPreparedCommand command,
+  ) =>
+      HomericDocumentCommandPrepared(command);
+
+  /// Stop without mutation and report a typed rejection.
+  static HomericDocumentCommandRejected rejected(
+    Object reason, {
+    required String announcement,
+  }) =>
+      HomericDocumentCommandRejected(
+        reason,
+        announcement: announcement,
+      );
+}
+
+/// The binding did not claim the physical command.
+final class HomericDocumentCommandIgnored extends HomericDocumentCommandResult {
+  const HomericDocumentCommandIgnored();
+}
+
+/// The binding handled the physical command.
+final class HomericDocumentCommandHandled extends HomericDocumentCommandResult {
+  const HomericDocumentCommandHandled();
+}
+
+/// The binding prepared one mutation for the mounted host to apply.
+final class HomericDocumentCommandPrepared
+    extends HomericDocumentCommandResult {
+  const HomericDocumentCommandPrepared(this.command);
+
+  /// Frozen canonical command applied only after the handler returns.
+  final HomericPreparedCommand command;
+}
+
+/// The binding rejected the physical command with consumer-owned feedback.
+final class HomericDocumentCommandRejected
+    extends HomericDocumentCommandResult {
+  const HomericDocumentCommandRejected(
+    this.reason, {
+    required this.announcement,
+  });
+
+  /// Consumer-defined typed rejection reason.
+  final Object reason;
+
+  /// Accessible explanation announced by the mounted document host.
+  final String announcement;
+}
+
+/// Handles one document-level consumer shortcut.
+typedef HomericDocumentCommandHandler = HomericDocumentCommandResult Function(
+  HomericDocumentCommandContext context,
+);
+
+/// One ordered document-level shortcut/action registration.
+final class HomericDocumentCommandBinding {
+  const HomericDocumentCommandBinding({
+    required this.shortcut,
+    required this.onInvoke,
+  });
+
+  /// Physical shortcut resolved inside the nearest editable paragraph.
+  final ShortcutActivator shortcut;
+
+  /// Typed consumer action.
+  final HomericDocumentCommandHandler onInvoke;
+}
+
+/// Observable rejection from a document command binding.
+final class HomericDocumentCommandRejection {
+  const HomericDocumentCommandRejection({
+    required this.reason,
+    required this.announcement,
+    required this.blockId,
+    required this.hostEpoch,
+  });
+
+  final Object reason;
+  final String announcement;
+  final String blockId;
+  final int hostEpoch;
+}
+
 typedef HomericDocumentSelectionHit = ({
   int offset,
   HomericCaretAffinity affinity,
@@ -77,6 +212,8 @@ class HomericEditableDocument extends StatefulWidget {
     required this.controller,
     required this.inputSession,
     required this.child,
+    this.commandBindings = const <HomericDocumentCommandBinding>[],
+    this.onCommandRejected,
   })  : blockBuilder = null,
         scrollController = null,
         padding = EdgeInsets.zero,
@@ -96,6 +233,8 @@ class HomericEditableDocument extends StatefulWidget {
     this.cacheExtent = 250,
     this.estimatedBlockHeight = 48,
     this.layoutRevision,
+    this.commandBindings = const <HomericDocumentCommandBinding>[],
+    this.onCommandRejected,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
         child = null;
@@ -113,6 +252,15 @@ class HomericEditableDocument extends StatefulWidget {
   final double cacheExtent;
   final double estimatedBlockHeight;
   final Object? layoutRevision;
+
+  /// Ordered consumer shortcut registrations shared by every paragraph.
+  ///
+  /// As with other Flutter widget collections, treat this list as immutable
+  /// and replace it with a new instance when registrations change.
+  final List<HomericDocumentCommandBinding> commandBindings;
+
+  /// Receives typed rejected-command feedback.
+  final ValueChanged<HomericDocumentCommandRejection>? onCommandRejected;
 
   /// Returns the nearest document editing coordinator, if present.
   static HomericEditableDocumentState? maybeOf(BuildContext context) => context
@@ -159,6 +307,31 @@ class HomericEditableDocumentState extends State<HomericEditableDocument> {
   bool _semanticsCanUndo = false;
   bool _semanticsCanRedo = false;
   bool _semanticsReadOnly = false;
+
+  /// Current ordered consumer command bindings.
+  List<HomericDocumentCommandBinding> get commandBindings =>
+      widget.commandBindings;
+
+  /// Reports one rejected command through the document-owned callback.
+  void reportCommandRejection(HomericDocumentCommandRejection rejection) =>
+      widget.onCommandRejected?.call(rejection);
+
+  /// Creates a host-owned epoch witness for a mounted paragraph command.
+  HomericDocumentCommandContext createCommandContext({
+    required String blockId,
+    required int hostEpoch,
+    required bool Function() isCurrent,
+  }) =>
+      HomericDocumentCommandContext._(
+        document: widget.controller.document,
+        selection: widget.controller.selection,
+        composing: widget.controller.composing,
+        stateRevision: widget.controller.stateRevision,
+        documentRevision: widget.controller.documentRevision,
+        blockId: blockId,
+        hostEpoch: hostEpoch,
+        isCurrent: isCurrent,
+      );
 
   @override
   void initState() {

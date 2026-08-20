@@ -18,6 +18,7 @@ import '../transform/builders.dart';
 import '../transform/change_list.dart';
 import '../transform/mapping.dart';
 import '../transform/replace_step.dart';
+import '../transform/step_map.dart' show Mappable, MapResult;
 import '../transform/transaction.dart';
 
 /// Identifies the canonical command that produced a committed document change.
@@ -138,6 +139,7 @@ final class HomericMutationRequest {
     required this.before,
     required this.after,
     required this.changes,
+    this.retainedHistoryMutations = const <HomericRetainedHistoryMutation>[],
   });
 
   /// Command family proposing the mutation.
@@ -152,12 +154,146 @@ final class HomericMutationRequest {
   /// Stable block identities touched by the proposed mutation.
   final ChangeList changes;
 
+  /// Intermediate canonical transitions that this mutation will retain in
+  /// undo history without publishing as committed changes.
+  ///
+  /// A persistence or topology policy can preflight their exact mapping and
+  /// structural descriptors alongside [changes]. Ordinary mutations expose an
+  /// empty list.
+  final List<HomericRetainedHistoryMutation> retainedHistoryMutations;
+
+  /// Intermediate documents retained by [retainedHistoryMutations].
+  List<Document> get retainedHistoryDocuments => List<Document>.unmodifiable(
+        retainedHistoryMutations.map((mutation) => mutation.after),
+      );
+
   /// IDs of every block touched, created, or removed by the mutation.
   Iterable<String> get touchedBlockIds => changes.touchedBlockIds;
 }
 
 /// Returns whether a proposed canonical mutation may commit.
 typedef HomericMutationPolicy = bool Function(HomericMutationRequest request);
+
+/// One immutable history-only transition exposed during mutation preflight.
+final class HomericRetainedHistoryMutation {
+  /// Creates the exact transition retained as an additional undo step.
+  HomericRetainedHistoryMutation({
+    required this.before,
+    required this.after,
+    required Mapping mapping,
+    required this.changes,
+  }) : mapping = _ReadOnlyMapping.copy(mapping);
+
+  /// Document before the retained transition.
+  final Document before;
+
+  /// History-only document after the retained transition.
+  final Document after;
+
+  /// Position mapping from [before] to [after].
+  final Mappable mapping;
+
+  /// Exact touched blocks and structural descriptors for the transition.
+  final ChangeList changes;
+}
+
+/// One intermediate stage retained as an undo checkpoint by a prepared
+/// command.
+final class HomericPreparedUndoCheckpoint {
+  /// Retains the document produced by [stage] with the explicit editor state.
+  const HomericPreparedUndoCheckpoint({
+    required this.stage,
+    required this.selection,
+    this.composing,
+  });
+
+  /// Zero-based index into the command's [HomericPreparedCommand.stageCount].
+  final int stage;
+
+  /// Selection restored with the retained stage document.
+  final HomericSelection? selection;
+
+  /// Composition restored with the retained stage document, when present.
+  final HomericTextRange? composing;
+}
+
+/// A bounded sequence of already-prepared canonical transactions committed as
+/// one observable editor command.
+///
+/// Every stage must start from the prior stage's resulting [Document]. The
+/// controller validates the whole bundle and its explicit final editor state
+/// before changing canonical state. Consumers may retain at most one
+/// intermediate stage as an additional undo checkpoint. The command still
+/// publishes one listener transition and one committed-change event, while the
+/// checkpoint intentionally adds a second undo step.
+final class HomericPreparedCommand {
+  /// Creates a prepared command over [stages].
+  HomericPreparedCommand({
+    required List<Transaction> stages,
+    required this.selection,
+    this.composing,
+    this.undoCheckpoint,
+  }) : _stages = List<_HomericPreparedStage>.unmodifiable(
+          stages.map(_HomericPreparedStage.freeze),
+        );
+
+  /// Number of frozen sequential transaction stages in this command.
+  int get stageCount => _stages.length;
+
+  final List<_HomericPreparedStage> _stages;
+
+  /// Explicit selection in the final stage document.
+  final HomericSelection? selection;
+
+  /// Explicit composition in the final stage document.
+  final HomericTextRange? composing;
+
+  /// Optional history-only intermediate stage.
+  final HomericPreparedUndoCheckpoint? undoCheckpoint;
+}
+
+final class _HomericPreparedStage {
+  _HomericPreparedStage._({
+    required this.before,
+    required this.after,
+    required this.mapping,
+    required this.changes,
+    required this.docChanged,
+  });
+
+  factory _HomericPreparedStage.freeze(Transaction transaction) {
+    final result = transaction.finish();
+    return _HomericPreparedStage._(
+      before: transaction.before,
+      after: result.doc,
+      mapping: Mapping()..appendMapping(result.mapping),
+      changes: result.changes,
+      docChanged: transaction.docChanged,
+    );
+  }
+
+  final Document before;
+  final Document after;
+  final Mapping mapping;
+  final ChangeList changes;
+  final bool docChanged;
+}
+
+final class _ReadOnlyMapping implements Mappable {
+  _ReadOnlyMapping._(this._mapping);
+
+  factory _ReadOnlyMapping.copy(Mapping mapping) =>
+      _ReadOnlyMapping._(Mapping()..appendMapping(mapping));
+
+  final Mapping _mapping;
+
+  @override
+  int map(int pos, {int assoc = 1}) => _mapping.map(pos, assoc: assoc);
+
+  @override
+  MapResult mapResult(int pos, {int assoc = 1}) =>
+      _mapping.mapResult(pos, assoc: assoc);
+}
 
 /// One post-commit canonical document event.
 final class HomericCommittedChange {
@@ -391,12 +527,24 @@ final class _HistoryEntry {
   final ChangeList changes;
 }
 
+final class _PreparedHistoryCheckpoint {
+  const _PreparedHistoryCheckpoint({
+    required this.stage,
+    required this.snapshot,
+  });
+
+  final int stage;
+  final _EditorSnapshot snapshot;
+}
+
 /// Owns Homeric's canonical document editing state.
 ///
 /// This surface is experimental until a real Nexus consumer validates it.
 /// Render objects remain read-only; input sessions and gestures translate
 /// their events into this controller's canonical intents.
 class HomericEditorController extends ChangeNotifier {
+  static const int _maxPreparedCommandStages = 8;
+
   /// Creates a controller over [document].
   HomericEditorController({
     required Document document,
@@ -1240,6 +1388,228 @@ class HomericEditorController extends ChangeNotifier {
     return true;
   }
 
+  /// Applies one bounded prepared command as a single observable transition.
+  ///
+  /// The final mutation and every history-retained intermediate document are
+  /// presented to [mutationPolicy] before canonical state changes. A retained
+  /// checkpoint is history-only: it produces neither a listener notification
+  /// nor a [HomericCommittedChange].
+  bool applyPreparedCommand(HomericPreparedCommand command) {
+    if (_readOnly || _compositionStart != null || _composing != null) {
+      return false;
+    }
+    final stages = command._stages;
+    if (stages.isEmpty || stages.length > _maxPreparedCommandStages) {
+      return false;
+    }
+
+    var expectedBefore = _document;
+    final results = <_HomericPreparedStage>[];
+    for (final stage in stages) {
+      if (!identical(stage.before, expectedBefore) || !stage.docChanged) {
+        return false;
+      }
+      results.add(stage);
+      expectedBefore = stage.after;
+    }
+    final finalDocument = results.last.after;
+    if (!_isValidSelection(finalDocument, command.selection) ||
+        !_isValidComposing(
+          finalDocument,
+          command.selection,
+          command.composing,
+        )) {
+      return false;
+    }
+
+    final checkpoint = command.undoCheckpoint;
+    _PreparedHistoryCheckpoint? preparedCheckpoint;
+    if (checkpoint != null) {
+      if (checkpoint.stage < 0 || checkpoint.stage >= stages.length - 1) {
+        return false;
+      }
+      final checkpointDocument = results[checkpoint.stage].after;
+      if (!_isValidSelection(checkpointDocument, checkpoint.selection) ||
+          !_isValidComposing(
+            checkpointDocument,
+            checkpoint.selection,
+            checkpoint.composing,
+          )) {
+        return false;
+      }
+      preparedCheckpoint = _PreparedHistoryCheckpoint(
+        stage: checkpoint.stage,
+        snapshot: _EditorSnapshot(
+          checkpointDocument,
+          _mapDecorationsThroughStages(
+            _decorations,
+            results,
+            0,
+            checkpoint.stage + 1,
+          ),
+          checkpoint.selection,
+          checkpoint.composing,
+          null,
+        ),
+      );
+    }
+
+    final mapping = _mappingForStages(results, 0, results.length);
+    final changes = _changesForStages(
+      _document,
+      finalDocument,
+      results,
+      0,
+      results.length,
+    );
+    final checkpointEnd =
+        preparedCheckpoint == null ? null : preparedCheckpoint.stage + 1;
+    final retainedMutation = checkpointEnd == null
+        ? null
+        : HomericRetainedHistoryMutation(
+            before: _document,
+            after: preparedCheckpoint!.snapshot.document,
+            mapping: _mappingForStages(results, 0, checkpointEnd),
+            changes: _changesForStages(
+              _document,
+              preparedCheckpoint.snapshot.document,
+              results,
+              0,
+              checkpointEnd,
+            ),
+          );
+    if (!_allowsMutation(
+      origin: HomericCommitOrigin.externalTransaction,
+      before: _document,
+      after: finalDocument,
+      changes: changes,
+      retainedHistoryMutations: retainedMutation == null
+          ? const <HomericRetainedHistoryMutation>[]
+          : <HomericRetainedHistoryMutation>[retainedMutation],
+    )) {
+      return false;
+    }
+
+    final before = _snapshot();
+    final finalDecorations =
+        _mapDecorationsThroughStages(_decorations, results, 0, results.length);
+    _document = finalDocument;
+    _decorations = finalDecorations;
+    _selection = command.selection;
+    _composing = command.composing;
+    _preferredX = null;
+
+    if (preparedCheckpoint == null) {
+      if (command.composing == null) {
+        _pushUndo(before, mapping: mapping, changes: changes);
+      } else {
+        _beginPreparedComposition(before, mapping, changes);
+      }
+    } else {
+      final checkpointEnd = preparedCheckpoint.stage + 1;
+      final mappingToCheckpoint = _mappingForStages(results, 0, checkpointEnd);
+      final changesToCheckpoint = _changesForStages(
+        before.document,
+        preparedCheckpoint.snapshot.document,
+        results,
+        0,
+        checkpointEnd,
+      );
+      _pushUndo(
+        before,
+        mapping: mappingToCheckpoint,
+        changes: changesToCheckpoint,
+      );
+      final mappingFromCheckpoint =
+          _mappingForStages(results, checkpointEnd, results.length);
+      final changesFromCheckpoint = _changesForStages(
+        preparedCheckpoint.snapshot.document,
+        finalDocument,
+        results,
+        checkpointEnd,
+        results.length,
+      );
+      if (command.composing == null) {
+        _pushUndo(
+          preparedCheckpoint.snapshot,
+          mapping: mappingFromCheckpoint,
+          changes: changesFromCheckpoint,
+        );
+      } else {
+        _beginPreparedComposition(
+          preparedCheckpoint.snapshot,
+          mappingFromCheckpoint,
+          changesFromCheckpoint,
+        );
+      }
+    }
+    _redoStack.clear();
+    _notifyTransition(
+      documentChanged: true,
+      contentChanged: _canonicalTextDiffers(before.document, _document),
+      committedBefore: before.document,
+      committedMapping: mapping,
+      committedChanges: changes,
+      committedOrigin: HomericCommitOrigin.externalTransaction,
+    );
+    return true;
+  }
+
+  void _beginPreparedComposition(
+    _EditorSnapshot snapshot,
+    Mapping mapping,
+    ChangeList changes,
+  ) {
+    _compositionStart = snapshot;
+    _compositionDidEdit = true;
+    _compositionMapping = Mapping()..appendMapping(mapping);
+    _compositionStructural
+      ..clear()
+      ..addAll(changes.structural);
+  }
+
+  static Mapping _mappingForStages(
+    List<_HomericPreparedStage> results,
+    int start,
+    int end,
+  ) {
+    final mapping = Mapping();
+    for (var index = start; index < end; index++) {
+      mapping.appendMapping(results[index].mapping);
+    }
+    return mapping;
+  }
+
+  static ChangeList _changesForStages(
+    Document before,
+    Document after,
+    List<_HomericPreparedStage> results,
+    int start,
+    int end,
+  ) =>
+      ChangeList.compute(
+        before,
+        after,
+        <StructuralChange>[
+          for (var index = start; index < end; index++)
+            ...results[index].changes.structural,
+        ],
+      );
+
+  static DecorationSet _mapDecorationsThroughStages(
+    DecorationSet decorations,
+    List<_HomericPreparedStage> results,
+    int start,
+    int end,
+  ) {
+    var mapped = decorations;
+    for (var index = start; index < end; index++) {
+      final result = results[index];
+      mapped = mapped.map(result.mapping, result.changes);
+    }
+    return mapped;
+  }
+
   /// Replaces the canonical decoration set as one undoable editor change.
   ///
   /// Decoration-only consumer controls use this instead of retaining a
@@ -1488,6 +1858,8 @@ class HomericEditorController extends ChangeNotifier {
     required Document before,
     required Document after,
     required ChangeList changes,
+    List<HomericRetainedHistoryMutation> retainedHistoryMutations =
+        const <HomericRetainedHistoryMutation>[],
   }) {
     if (_readOnly) return false;
     final policy = mutationPolicy;
@@ -1497,6 +1869,10 @@ class HomericEditorController extends ChangeNotifier {
       before: before,
       after: after,
       changes: changes,
+      retainedHistoryMutations:
+          List<HomericRetainedHistoryMutation>.unmodifiable(
+        retainedHistoryMutations,
+      ),
     ));
   }
 

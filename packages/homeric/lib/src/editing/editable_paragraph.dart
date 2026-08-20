@@ -776,6 +776,27 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         shift: true,
       ): const _MoveDocumentBlockIntent(1),
     };
+    final documentCommandBindings = _documentHost?.commandBindings ??
+        const <HomericDocumentCommandBinding>[];
+    final commandBindings =
+        <ShortcutActivator, List<HomericDocumentCommandBinding>>{};
+    for (final binding in documentCommandBindings) {
+      commandBindings
+          .putIfAbsent(
+            binding.shortcut,
+            () => <HomericDocumentCommandBinding>[],
+          )
+          .add(binding);
+    }
+    for (final entry in commandBindings.entries) {
+      final fallback = shortcuts[entry.key];
+      shortcuts[entry.key] = _DocumentCommandIntent(
+        List<HomericDocumentCommandBinding>.unmodifiable(entry.value),
+        registrationOwner: documentCommandBindings,
+        fallback: fallback,
+        appKitSelector: _appKitSelectorForShortcut(entry.key),
+      );
+    }
     final actions = <Type, Action<Intent>>{
       DoNothingAndStopPropagationTextIntent:
           DoNothingAction(consumesKey: false),
@@ -912,6 +933,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
         enabled: (_) => _canMutateActions && _controller.canRedo,
         invoke: (_) => _controller.redo(),
       ),
+      _DocumentCommandIntent: _DocumentCommandAction(this, _hostEpoch),
     };
 
     final semanticsSelection = localSelection == null
@@ -986,6 +1008,79 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph> {
     return commandContext == null
         ? null
         : Actions.maybeInvoke(commandContext, intent);
+  }
+
+  _DocumentCommandDisposition _invokeDocumentCommand(
+    _DocumentCommandIntent intent,
+    int epoch,
+  ) {
+    if (!_isHostEpochCurrent(epoch)) {
+      return _DocumentCommandDisposition.ignored;
+    }
+    final documentHost = _documentHost;
+    if (documentHost == null) return _DocumentCommandDisposition.ignored;
+    if (!identical(documentHost.commandBindings, intent.registrationOwner)) {
+      return _DocumentCommandDisposition.ignored;
+    }
+    final context = documentHost.createCommandContext(
+      blockId: widget.blockId,
+      hostEpoch: epoch,
+      isCurrent: () => _isHostEpochCurrent(epoch),
+    );
+    for (final binding in intent.bindings) {
+      if (!context.isCurrent) {
+        return _DocumentCommandDisposition.ignored;
+      }
+      final revisionBefore = _controller.stateRevision;
+      final result = binding.onInvoke(context);
+      if (_controller.stateRevision != revisionBefore) {
+        throw StateError(
+          'A Homeric document command handler must return before editor '
+          'state changes.',
+        );
+      }
+      switch (result) {
+        case HomericDocumentCommandIgnored():
+          continue;
+        case HomericDocumentCommandRejected():
+          _suppressFollowUpSelector(intent);
+          final rejection = HomericDocumentCommandRejection(
+            reason: result.reason,
+            announcement: result.announcement,
+            blockId: widget.blockId,
+            hostEpoch: epoch,
+          );
+          documentHost.reportCommandRejection(rejection);
+          // Flutter 3.24 does not yet expose the multi-view announcement API.
+          // ignore: deprecated_member_use
+          SemanticsService.announce(
+            result.announcement,
+            Directionality.of(this.context),
+          );
+          return _DocumentCommandDisposition.handled;
+        case HomericDocumentCommandHandled():
+          _suppressFollowUpSelector(intent);
+          return _DocumentCommandDisposition.handled;
+        case HomericDocumentCommandPrepared():
+          if (!context.isCurrent) {
+            return _DocumentCommandDisposition.ignored;
+          }
+          _controller.applyPreparedCommand(result.command);
+          _suppressFollowUpSelector(intent);
+          return _DocumentCommandDisposition.handled;
+      }
+    }
+    final fallback = intent.fallback;
+    if (fallback != null && context.isCurrent) {
+      _dispatchIntent(fallback);
+      return _DocumentCommandDisposition.handled;
+    }
+    return _DocumentCommandDisposition.ignored;
+  }
+
+  void _suppressFollowUpSelector(_DocumentCommandIntent intent) {
+    final selector = intent.appKitSelector;
+    if (selector != null) widget.inputSession.suppressNextSelector(selector);
   }
 
   Object? _selectAll() {
@@ -2023,6 +2118,66 @@ final class _TraverseIntent extends Intent {
   const _TraverseIntent(this.backward);
 
   final bool backward;
+}
+
+final class _DocumentCommandIntent extends Intent {
+  const _DocumentCommandIntent(
+    this.bindings, {
+    required this.registrationOwner,
+    required this.fallback,
+    required this.appKitSelector,
+  });
+
+  final List<HomericDocumentCommandBinding> bindings;
+  final Object registrationOwner;
+  final Intent? fallback;
+  final String? appKitSelector;
+}
+
+String? _appKitSelectorForShortcut(ShortcutActivator shortcut) {
+  if (shortcut ==
+      const SingleActivator(
+        LogicalKeyboardKey.arrowUp,
+        meta: true,
+        shift: true,
+      )) {
+    return 'moveUpAndModifySelection:';
+  }
+  if (shortcut ==
+      const SingleActivator(
+        LogicalKeyboardKey.arrowDown,
+        meta: true,
+        shift: true,
+      )) {
+    return 'moveDownAndModifySelection:';
+  }
+  return null;
+}
+
+enum _DocumentCommandDisposition { ignored, handled }
+
+final class _DocumentCommandAction extends Action<_DocumentCommandIntent> {
+  _DocumentCommandAction(this.state, this.epoch);
+
+  final _HomericEditableParagraphState state;
+  final int epoch;
+
+  @override
+  bool isEnabled(_DocumentCommandIntent intent) =>
+      state._isHostEpochCurrent(epoch);
+
+  @override
+  _DocumentCommandDisposition invoke(_DocumentCommandIntent intent) =>
+      state._invokeDocumentCommand(intent, epoch);
+
+  @override
+  KeyEventResult toKeyEventResult(
+    _DocumentCommandIntent intent,
+    _DocumentCommandDisposition invokeResult,
+  ) =>
+      invokeResult == _DocumentCommandDisposition.handled
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
 }
 
 final class _HostAction<T extends Intent> extends Action<T> {

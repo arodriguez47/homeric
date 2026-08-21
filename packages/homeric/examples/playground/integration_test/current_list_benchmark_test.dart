@@ -518,9 +518,9 @@ Document _scenarioDocument(String markdown, String scenario) {
             id: 'benchmark-biased-$index',
             type: 'paragraph',
             runs: [
-              InlineRun(index.isEven
+              InlineRun(index < generated.blockCount ~/ 2
                   ? 'short block'
-                  : List.filled(4, generated.blocks[index].text).join(' ')),
+                  : List.filled(12, generated.blocks[index].text).join(' ')),
             ],
           ),
       ]),

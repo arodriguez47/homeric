@@ -5,6 +5,55 @@ import 'dart:convert';
 
 import 'package:homeric/homeric.dart';
 
+/// An even sample count gives each trace mode the same number of first runs.
+const benchmarkSamplePairCount = 4;
+
+/// Number of frames scheduled by one fixed benchmark trace.
+const benchmarkTraceFrameCount = 100;
+
+/// A cold mount is measured over its one explicitly pumped first frame.
+const benchmarkColdMountFrameCount = 1;
+
+/// Alternates which mode runs first so cache warming cannot favor one mode.
+bool benchmarkInstrumentedFirst(int sampleIndex) => sampleIndex.isOdd;
+
+/// Returns the balanced median instrumentation delta in basis points.
+///
+/// Callers must provide the same positive, even number of paired p95 values.
+/// Averaging the two middle deltas cancels the symmetric first-trace warming
+/// effect while preserving a real instrumentation cost.
+int benchmarkPairedDeltaBasisPoints({
+  required List<int> controlP95Us,
+  required List<int> instrumentedP95Us,
+}) {
+  if (controlP95Us.isEmpty ||
+      controlP95Us.length != instrumentedP95Us.length ||
+      controlP95Us.length.isOdd ||
+      controlP95Us.any((value) => value <= 0) ||
+      instrumentedP95Us.any((value) => value <= 0)) {
+    throw ArgumentError(
+      'Benchmark calibration requires equal, positive, even sample pairs.',
+    );
+  }
+  final deltas = <int>[
+    for (var index = 0; index < controlP95Us.length; index++)
+      (((instrumentedP95Us[index] / controlP95Us[index]) - 1) * 10000).round(),
+  ]..sort();
+  final upper = deltas.length ~/ 2;
+  return ((deltas[upper - 1] + deltas[upper]) / 2).round();
+}
+
+/// Rejects timing samples that include missing or background frames.
+void benchmarkRequireExactFrameCount(
+  int actual, {
+  int expected = benchmarkTraceFrameCount,
+}) {
+  if (actual == expected) return;
+  throw StateError(
+    'Benchmark trace recorded $actual frames; expected exactly $expected.',
+  );
+}
+
 /// Exact corpus identity used by the benchmark gate.
 ({int words, String fnv1a32}) benchmarkFixtureIdentity(String markdown) {
   final trimmed = markdown.trim();

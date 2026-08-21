@@ -502,7 +502,11 @@ flowchart TB
 - Run the deterministic structural counter suite for all standard and pathological fixtures, including forward/backward/alternating traces, deep typing, selection autoscroll, reorder, undo/redo, document replacement, and repeated full-scroll memory checks.
 - Prove mounted rows equal rows intersecting viewport/cache extent plus at most one active row; retained height entries equal current block count; ordinary edits do not rebuild the ID index; far-jump build/layout work at 10/50/99 percent does not grow linearly with destination index.
 - Run profile/release repeated samples with pinned environment/trace boundaries, warmups, sample count, aggregation/outlier rules, variance below the regression threshold, machine/SDK metadata, and Flutter frame timings.
-- Enforce the existing 100k absolute thresholds and accepted baseline's 5-percent p95 regression rule.
+- Enforce the existing 100k absolute thresholds and the accepted baseline's
+  5-percent warmed-scroll p95 regression rule. Cold mount uses its binding
+  50 ms absolute threshold over one preflushed, explicitly pumped first frame.
+  The older accepted cold summary used unbounded two-or-three-frame callback
+  batches, so it is retained as history rather than used as a relative gate.
 - Record 1k/10k/50k/100k/500k results and verify active rows/layout work remain bounded; 500k must complete without crash or unbounded growth.
 - Instrument cumulative time at every actual paragraph-layout call site, report live/intrinsic-template/paint categories, and apply the `<200 ms` five-second scroll budget to their total. Widget build counts alone are insufficient.
 - Compare instrumented and uninstrumented controls; benchmark-disabled release code carries no recurring timing/allocation/callback cost beyond the accepted constant guard.

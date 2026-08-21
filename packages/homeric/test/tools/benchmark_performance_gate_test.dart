@@ -23,7 +23,7 @@ void main() {
     expect(failures, isEmpty);
   });
 
-  test('rejects saved results at every absolute limit and p95 regression', () {
+  test('rejects every absolute limit and the reproducible p95 regression', () {
     final failures = largeGeneratedBudgetFailures(
       result: readJson(
         'benchmarks/testdata/large-generated-failing.json',
@@ -31,7 +31,7 @@ void main() {
       accepted: readJson('benchmarks/accepted.json'),
     );
 
-    expect(failures, hasLength(10));
+    expect(failures, hasLength(9));
     expect(
       failures.join('\n'),
       allOf(<Matcher>[
@@ -43,24 +43,68 @@ void main() {
         contains('five-second cumulative paragraph layout'),
         contains('detached paragraph cache entries'),
         contains('detached paragraph cache text'),
-        contains('cold-load p95 frame time regression'),
         contains('scroll p95 frame time regression'),
       ]),
     );
   });
 
-  test('preserves the instrumentation calibration gate', () {
+  test('cold mount uses its absolute budget, not an irreproducible baseline',
+      () {
     final result = readJson(
       'benchmarks/testdata/large-generated-passing.json',
     );
-    result['calibration'] = <String, Object?>{
-      'paired_total_p95_delta_basis_points': 501,
-      'valid': false,
-    };
+    final coldMount = result['cold_mount']! as Map<String, Object?>;
+    coldMount['total_p95_us'] = 49999;
 
     expect(
+      largeGeneratedBudgetFailures(
+        result: result,
+        accepted: readJson('benchmarks/accepted.json'),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('derives the symmetric instrumentation calibration gate', () {
+    final result = readJson(
+      'benchmarks/testdata/large-generated-passing.json',
+    );
+    final calibration = result['calibration']! as Map<String, Object?>;
+
+    for (final delta in [-500, 500]) {
+      calibration
+        ..['paired_total_p95_delta_basis_points'] = delta
+        ..['valid'] = true;
+      expect(instrumentationCalibrationFailure(result), isNull);
+    }
+
+    for (final delta in [-501, 501]) {
+      calibration
+        ..['paired_total_p95_delta_basis_points'] = delta
+        ..['valid'] = true;
+      expect(
+        instrumentationCalibrationFailure(result),
+        'instrumentation calibration was noisy: $delta bp',
+      );
+    }
+
+    calibration
+      ..['paired_total_p95_delta_basis_points'] = 0
+      ..['layout_total_count'] = 1
+      ..['valid'] = false;
+    expect(
       instrumentationCalibrationFailure(result),
-      'instrumentation calibration was noisy: 501 bp',
+      'instrumentation calibration validity flag disagrees with '
+      'recorded evidence',
+    );
+
+    calibration
+      ..['paired_total_p95_delta_basis_points'] = 0
+      ..['layout_total_count'] = 0
+      ..['valid'] = true;
+    expect(
+      instrumentationCalibrationFailure(result),
+      'instrumentation calibration recorded no paragraph layouts',
     );
   });
 

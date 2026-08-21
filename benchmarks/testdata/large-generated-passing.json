@@ -8,6 +8,7 @@
   },
   "calibration": {
     "paired_total_p95_delta_basis_points": 100,
+    "layout_total_count": 400,
     "valid": true
   },
   "homeric": {

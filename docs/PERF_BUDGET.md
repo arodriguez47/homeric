@@ -37,9 +37,13 @@ Measured on Alvaro's MacBook Pro M5 Max, Flutter `stable` channel, release build
 ## Regression policy
 
 The benchmark suite currently runs locally; GitHub Actions remain deliberately
-disabled for this phase. A regression of more than **5%** on any p95 metric
+disabled for this phase. A warmed-scroll p95 regression of more than **5%**
 blocks acceptance unless the change explicitly updates the baseline with a
-performance rationale. The median of three paired disabled-versus-instrumented
+performance rationale. Cold mount remains bound by its 50 ms absolute budget:
+the corrected harness preflushes timing callbacks and records exactly the one
+explicitly pumped first frame. The older accepted cold summary used unbounded
+two-or-three-frame callback batches and is not a comparable relative baseline.
+The balanced median of four paired disabled-versus-instrumented
 p95 deltas above 5% on the 100k fixture invalidates the run as noisy rather
 than proving a product regression.
 
@@ -48,7 +52,10 @@ than proving a product regression.
 Run `melos run benchmark` on macOS. It records profile `FrameTiming`, mounted
 row counts, bounded detached-paragraph cache size/text footprint, and
 cumulative engine paragraph-layout counts/time for the real playground editor.
-Cold first-frame/mount evidence is recorded separately; scroll and layout
-evidence follow one full unmeasured outward warm-up traversal so recycled-row reuse is
-measured against an identical document/viewport state. Results are local and
-ignored; the accepted summary lives under `benchmarks/`.
+Cold first-frame/mount evidence is recorded as one exact frame per mount;
+scroll and layout evidence follow one full unmeasured outward warm-up traversal
+so recycled-row
+reuse is measured against an identical document/viewport state. A separate
+fresh-cache calibration executes exactly 100 frames of real paragraph layout
+in each mode and must record nonzero instrumented layouts. Results are local
+and ignored; the accepted summary lives under `benchmarks/`.

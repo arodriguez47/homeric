@@ -2,6 +2,29 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-21 — IME geometry is an attachment capability
+
+**What:** Candidate-window and caret geometry was guarded by document identity
+and layout generation but not by the exact platform-input host. A post-frame
+callback from a recycled prior block, or from a replaced host for the same
+block, could therefore overwrite the current input connection's caret and
+composing rectangles. The input session now issues an opaque geometry lease
+only to an identified attachment owner and rotates or revokes it on block
+retarget, host replacement, structural survivor changes, blur, connection
+loss, and disposal.
+
+**Why it mattered:** The document can remain byte-identical while focus and the
+platform input owner move. Document revision is therefore too weak for IME
+geometry: stale coordinates can misplace autocorrection or candidate UI without
+mutating content, making ordinary controller tests look green. Virtualization
+and post-frame publication make this race routine rather than theoretical.
+
+**Rule going forward:** Treat platform caret, composing, candidate, magnifier,
+and toolbar geometry as revocable attachment capabilities. Capture the opaque
+owner lease with the measured geometry, validate it again at publication, and
+fail closed when no owner exists. Pair that lease with document identity and
+monotonic layout generation; none is a substitute for the others.
+
 ## editor-architect — 2026-08-20 — Capture a commit before awaiting its normalization
 
 **What:** A consumer session facade may need two distinct post-mutation
@@ -241,21 +264,49 @@ roll back or complete them.
 **What:** Mobile handles, magnifiers, long-press word selection, and the iOS
 floating cursor all need transient platform state, but none owns document
 selection. The document host resolves generation-stamped endpoint geometry;
-paragraphs publish current layer links; every drag or floating-cursor callback
-is bound to the current document, layout, focus, and input epoch. Lifecycle and
-metrics changes synchronously revoke that transient state without changing the
-logical selection.
+paragraphs publish current geometry into two stable, document-owned physical
+handle links; every drag or floating-cursor callback is bound to the current
+document, layout, focus, and input epoch. Lifecycle and metrics changes
+synchronously revoke that transient state without changing the logical
+selection.
 
 **Why it mattered:** A handle can outlive a recycled row, an overlay can remain
 mounted across rotation, and AppKit/UIKit can finish a floating-cursor sequence
 after focus or the platform connection has moved. Treating any of those objects
 as authoritative creates a second selection owner and lets stale callbacks
 mutate the document. Conversely, canceling the logical selection on background
-or rotation destroys user state that remains perfectly valid.
+or rotation destroys user state that remains perfectly valid. Normalized
+selection start/end also swap when a dragged handle crosses its anchor; if the
+layer-link identity swaps with them, Flutter can dispose the active recognizer
+at the crossing or when the head enters a recycled row.
 
 **Rule going forward:** Keep mobile chrome disposable and reconstructible from
 canonical selection plus current geometry. Bind gesture/floating-cursor work to
 revocable generations, cancel it on mutation, blur, lifecycle, metrics, or row
-recycling, and require fresh focus before accepting more platform input.
+recycling, and require fresh focus before accepting more platform input. Keep
+physical start/end handle identity document-owned while mapping normalized
+endpoints onto those links, including the exact collapsed crossing point.
 Widget and integration tests prove the contract; only recorded physical-device
 runs certify platform behavior.
+
+## editor-architect — 2026-08-21 — A valid text-input action is part of platform attachment
+
+**What:** Homeric's delta input session used `TextInputAction.none`, which is
+valid on Android but rejected by Flutter before `TextInput.attach` completes on
+iOS. The input model, composition tests, and even an unsigned iOS release build
+were all green because none mounted a focused input connection inside the iOS
+embedder. A headless iPhone Simulator trace failed at the first focus request.
+The cross-platform default is now `TextInputAction.newline`, which already maps
+to Homeric's epoch-bound structural paragraph-break command.
+
+**Why it mattered:** Input configuration is not inert metadata. Flutter checks
+some values against the active embedder only when a real connection attaches,
+so platform-neutral widget tests and compile-only host builds cannot establish
+that an editor can focus on every supported OS.
+
+**Rule going forward:** Exercise one focused, mounted text-input connection on
+each platform host before calling it supported. Choose configuration values
+from the intersection of the supported embedder sets, then prove the serialized
+`TextInput.setClient` payload in unit tests and the attachment path in simulator
+or device integration tests. Keep synthetic channel traces distinct from
+physical keyboard and IME certification.

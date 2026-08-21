@@ -16,15 +16,22 @@ See [`STRATEGY.md`](STRATEGY.md) for the strategy this serves.
 
 ## Status
 
-**Pre-alpha. Not yet usable.** Phase 1 (document model, positions, StepMap, DecorationSet) is in progress — plan at [`docs/plans/`](docs/plans/), phases tracked in Linear (team Homeric) and mirrored in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Pre-alpha integration candidate.** The document model, paragraph renderer,
+desktop editing foundation, lazy multi-block viewport, and experimental mobile
+touch layer are implemented locally. Nexus is exercising the Journal migration
+behind a next-session Compatibility fallback. Automated coverage is green, but
+physical-device IME/touch acceptance, release accessibility checks, and the
+retirement soak remain open; do not treat this as AppFlowy-removal or production
+certification. Plans live in [`docs/plans/`](docs/plans/), and current phase
+status is mirrored in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Platforms
 
 | Platform | v1 support |
 |---|---|
-| macOS | ✅ |
-| Windows | ✅ |
-| Linux | ✅ |
+| macOS | ⚠️ Automated coverage plus an unverified historical interaction note; native IME, CJK, accessibility, and prolonged stress remain open. |
+| Windows | ⚠️ Automated coverage only; native desktop IME certification pending. |
+| Linux | ⚠️ Automated coverage only; native desktop IME certification pending. |
 | Android | ⚠️ Experimental touch editing; real-device certification pending. |
 | Web (Latin-script) | ⚠️ Best-effort. CJK IME blocked by [flutter/flutter#120613](https://github.com/flutter/flutter/issues/120613). |
 | iOS | ⚠️ Experimental touch editing; real-device certification pending. |
@@ -70,13 +77,21 @@ remain available for inspecting the pipeline by hand.
 This combines the macOS-first [HOM-18](https://linear.app/xana-studios/issue/HOM-18)
 editing foundation with the multi-block viewport from
 [HOM-6](https://linear.app/xana-studios/issue/HOM-6). Automated playground and
-profile-benchmark coverage are in place; real macOS acceptance and
-Windows/Linux certification are not claimed here. [HOM-20](https://linear.app/xana-studios/issue/HOM-20)
+profile-benchmark coverage are in place. An August 20 interactive macOS pass
+was reported, but no complete run record or artifact was retained, so it is
+not certification evidence. Platform interaction, VoiceOver, prolonged
+stress, and Windows/Linux certification remain unverified.
+[HOM-20](https://linear.app/xana-studios/issue/HOM-20)
 adds adaptive mobile handles, magnifier, long-press/word gestures, iOS floating
 cursor support, and lifecycle-safe cancellation to the same document owner.
 Automated coverage is green, but the [physical-device acceptance matrix](docs/testing/mobile-touch-acceptance.md)
 remains unrun. Cross-platform IME certification remains
-[HOM-21](https://linear.app/xana-studios/issue/HOM-21).
+[HOM-21](https://linear.app/xana-studios/issue/HOM-21). Its
+[platform IME acceptance ledger](docs/testing/ime-acceptance.md) now records
+the automated epoch/composition/autocorrection and geometry-capability coverage
+separately from the still-open physical platform matrix.
+HOM-19's automated, release-build, and manual evidence is tracked separately in
+the [desktop editing acceptance ledger](docs/testing/desktop-editing-acceptance.md).
 
 ```bash
 cd packages/homeric/examples/playground

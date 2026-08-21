@@ -47,8 +47,9 @@ Future<void> main(List<String> arguments) async {
     'device': 'macos',
     'aggregation': 'Flutter FrameTiming summary per fixed 5-second trace',
     'noise_policy':
-        'Median of three paired disabled/instrumented total-p95 deltas on '
-            'large-generated must remain within 5%.',
+        'Fresh-cache calibration uses four balanced paired exact-100-frame '
+            'disabled/instrumented traces, must record real paragraph layouts, '
+            'and must keep the median total-p95 delta within 5%.',
   };
   await File('${results.path}/run-metadata.json').writeAsString(
     '${const JsonEncoder.withIndent('  ').convert(metadata)}\n',

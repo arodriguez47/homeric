@@ -13,6 +13,59 @@ void main() {
     );
   });
 
+  test('benchmark calibration balances first-trace cache warming', () {
+    expect(
+      [
+        for (var sample = 0; sample < benchmarkSamplePairCount; sample++)
+          benchmarkInstrumentedFirst(sample),
+      ],
+      [false, true, false, true],
+    );
+    expect(
+      benchmarkPairedDeltaBasisPoints(
+        controlP95Us: [10000, 10000, 10000, 10000],
+        instrumentedP95Us: [9000, 11000, 9200, 10800],
+      ),
+      0,
+      reason: 'equal first-trace warming bias must cancel across both orders',
+    );
+    expect(
+      benchmarkPairedDeltaBasisPoints(
+        controlP95Us: [10000, 10000, 10000, 10000],
+        instrumentedP95Us: [10000, 12000, 10200, 11800],
+      ),
+      1000,
+      reason: 'balanced pairing must retain real instrumentation overhead',
+    );
+  });
+
+  test('benchmark calibration rejects invalid pairs and frame windows', () {
+    int calculate(List<int> control, List<int> instrumented) =>
+        benchmarkPairedDeltaBasisPoints(
+          controlP95Us: control,
+          instrumentedP95Us: instrumented,
+        );
+
+    expect(() => calculate([], []), throwsArgumentError);
+    expect(() => calculate([1, 1], [1]), throwsArgumentError);
+    expect(() => calculate([1, 1, 1], [1, 1, 1]), throwsArgumentError);
+    expect(() => calculate([0, 1], [1, 1]), throwsArgumentError);
+    expect(() => calculate([1, 1], [-1, 1]), throwsArgumentError);
+    expect(() => benchmarkRequireExactFrameCount(99), throwsStateError);
+    expect(() => benchmarkRequireExactFrameCount(101), throwsStateError);
+    expect(
+      () => benchmarkRequireExactFrameCount(
+        1,
+        expected: benchmarkColdMountFrameCount,
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => benchmarkRequireExactFrameCount(benchmarkTraceFrameCount),
+      returnsNormally,
+    );
+  });
+
   test('benchmark Markdown parser assigns stable blocks and types', () {
     final document = benchmarkDocumentFromMarkdown(
       '# Title\n\nparagraph words\n\n- one\n- two\n\n> quote',

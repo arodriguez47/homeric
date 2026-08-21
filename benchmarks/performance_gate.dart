@@ -10,13 +10,27 @@ const _baselineP95TolerancePercent = 5;
 
 String? instrumentationCalibrationFailure(Map<String, Object?> result) {
   final calibration = _map(result, 'calibration');
-  if (calibration['valid'] == true) return null;
   final delta = _integer(
     calibration,
     'paired_total_p95_delta_basis_points',
     path: 'calibration',
   );
-  return 'instrumentation calibration was noisy: $delta bp';
+  final layoutCount = _integer(
+    calibration,
+    'layout_total_count',
+    path: 'calibration',
+  );
+  if (layoutCount <= 0) {
+    return 'instrumentation calibration recorded no paragraph layouts';
+  }
+  if (delta.abs() > _baselineP95TolerancePercent * 100) {
+    return 'instrumentation calibration was noisy: $delta bp';
+  }
+  if (calibration['valid'] != true) {
+    return 'instrumentation calibration validity flag disagrees with '
+        'recorded evidence';
+  }
+  return null;
 }
 
 List<String> largeGeneratedBudgetFailures({
@@ -165,16 +179,10 @@ List<String> largeGeneratedBudgetFailures({
     unit: 'us',
   );
 
-  _requireP95WithinBaseline(
-    failures,
-    label: 'cold-load p95 frame time',
-    actual: coldMountP95Us,
-    baseline: _integer(
-      observed,
-      'cold_mount_total_p95_us',
-      path: 'accepted.observed',
-    ),
-  );
+  // The older accepted cold summary used unbounded two-or-three-frame callback
+  // batches, while the corrected harness records eight exact one-frame mounts.
+  // Keep the binding 50 ms absolute budget for the current method; use the
+  // accepted relative gate only for comparable exact-100-frame warmed scroll.
   _requireP95WithinBaseline(
     failures,
     label: 'scroll p95 frame time',

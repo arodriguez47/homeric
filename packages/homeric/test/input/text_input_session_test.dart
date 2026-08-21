@@ -101,6 +101,46 @@ void main() {
     controller.dispose();
   });
 
+  test('autocorrection prompt ranges validate the current attachment epoch',
+      () {
+    final controller = HomericEditorController(
+      document: _document('alpha'),
+      selection: const HomericSelection.collapsed(2),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final firstDelegate = _FakeCommandDelegate();
+    final currentDelegate = _FakeCommandDelegate();
+
+    session.attach(blockId: 'a', commandDelegate: firstDelegate);
+    final stale = session.debugAutocorrectionPromptCallback!;
+    stale(1, 4);
+
+    expect(firstDelegate.autocorrectionPromptRanges, const <TextRange>[
+      TextRange(start: 1, end: 4),
+    ]);
+
+    session.blur();
+    session.attach(blockId: 'a', commandDelegate: currentDelegate);
+    final current = session.debugAutocorrectionPromptCallback!;
+
+    stale(0, 2);
+    expect(firstDelegate.autocorrectionPromptRanges, hasLength(1));
+    expect(currentDelegate.autocorrectionPromptRanges, isEmpty);
+
+    current(-1, 2);
+    current(2, 2);
+    current(0, 6);
+    expect(currentDelegate.autocorrectionPromptRanges, isEmpty);
+
+    current(0, 5);
+    expect(currentDelegate.autocorrectionPromptRanges, const <TextRange>[
+      TextRange(start: 0, end: 5),
+    ]);
+
+    session.dispose();
+    controller.dispose();
+  });
+
   test('attaches a delta client over canonical block text before geometry', () {
     final document = _document('raw **text**');
     final controller = HomericEditorController(
@@ -124,7 +164,7 @@ void main() {
     );
     expect(
       (calls.first.arguments as List<Object?>)[1],
-      containsPair('inputAction', 'TextInputAction.none'),
+      containsPair('inputAction', 'TextInputAction.newline'),
     );
     expect(
       calls[1].arguments,
@@ -348,9 +388,14 @@ void main() {
       ),
     );
     final session = HomericTextInputSession(controller: controller);
+    final host = _FakeCommandDelegate();
     var notifications = 0;
     controller.addListener(() => notifications++);
-    session.attach(blockId: 'b');
+    session.attach(blockId: 'b', commandDelegate: host);
+    expect(
+      session.geometryLeaseFor(blockId: 'b', owner: host),
+      isNotNull,
+    );
     calls.clear();
 
     await _sendDeltas(binding, 1, <Map<String, Object?>>[
@@ -378,6 +423,8 @@ void main() {
       ),
     );
     expect(notifications, 1);
+    expect(session.geometryLeaseFor(blockId: 'a', owner: host), isNull,
+        reason: 'the surviving block has no mounted host capability yet');
     expect(_editingStateCalls(calls), hasLength(1));
     expect(_editingStateCalls(calls).single.arguments,
         containsPair('text', 'aXf'));
@@ -593,8 +640,12 @@ void main() {
     final session = HomericTextInputSession(controller: controller);
     session.attach(blockId: 'a');
     final oldCallback = session.debugDeltaCallback!;
+    expect(session.debugDeltaCallback, same(oldCallback));
     session.blur();
     session.attach(blockId: 'a');
+    final currentCallback = session.debugDeltaCallback!;
+    expect(currentCallback, isNot(same(oldCallback)));
+    expect(session.debugDeltaCallback, same(currentCallback));
     calls.clear();
 
     oldCallback(<TextEditingDelta>[
@@ -751,11 +802,17 @@ void main() {
       selection: HomericSelection.collapsed(document.positionAt(0, 1)),
     );
     final session = HomericTextInputSession(controller: controller);
-    session.attach(blockId: 'a');
+    final host = _FakeCommandDelegate();
+    session.attach(blockId: 'a', commandDelegate: host);
+    final geometryLease = session.geometryLeaseFor(
+      blockId: 'a',
+      owner: host,
+    )!;
     calls.clear();
 
     expect(
       session.publishGeometry(
+        lease: geometryLease,
         documentRevision: document,
         layoutGeneration: 5,
         editableSize: const Size(100, 20),
@@ -778,6 +835,7 @@ void main() {
     calls.clear();
     expect(
       session.publishGeometry(
+        lease: geometryLease,
         documentRevision: document,
         layoutGeneration: 6,
         editableSize: const Size(100, 20),
@@ -790,6 +848,7 @@ void main() {
 
     expect(
       session.publishGeometry(
+        lease: geometryLease,
         documentRevision: controller.document,
         layoutGeneration: 4,
         editableSize: const Size(100, 20),
@@ -799,6 +858,163 @@ void main() {
       isFalse,
     );
     expect(calls, isEmpty);
+
+    session.dispose();
+    controller.dispose();
+  });
+
+  test('ownerless attachment cannot publish ambiguous platform geometry', () {
+    final document = _document('ab');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    expect(session.attach(blockId: 'a'), isTrue);
+    expect(
+      session.geometryLeaseFor(blockId: 'a', owner: Object()),
+      isNull,
+    );
+
+    final geometryOwner = Object();
+    expect(
+      session.attach(blockId: 'a', geometryOwner: geometryOwner),
+      isTrue,
+    );
+    final lease = session.geometryLeaseFor(
+      blockId: 'a',
+      owner: geometryOwner,
+    );
+    expect(lease, isNotNull);
+    calls.clear();
+    expect(
+      session.publishGeometry(
+        lease: lease!,
+        documentRevision: document,
+        layoutGeneration: 1,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(10, 0, 1, 20),
+      ),
+      isTrue,
+    );
+
+    session.dispose();
+    controller.dispose();
+  });
+
+  test('geometry is bound to the exact active block and host capability', () {
+    final document = _documents(<String>['alpha', 'beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final firstHost = _FakeCommandDelegate();
+    final replacementHost = _FakeCommandDelegate();
+    final secondHost = _FakeCommandDelegate();
+    expect(
+      session.attach(blockId: 'a', commandDelegate: firstHost),
+      isTrue,
+    );
+    final firstLease = session.geometryLeaseFor(
+      blockId: 'a',
+      owner: firstHost,
+    )!;
+    calls.clear();
+
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 1)),
+    );
+    calls.clear();
+    expect(
+      session.publishGeometry(
+        lease: firstLease,
+        documentRevision: controller.document,
+        layoutGeneration: 19,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(5, 0, 1, 20),
+      ),
+      isFalse,
+      reason: 'controller focus moved before the session retarget completed',
+    );
+    expect(calls, isEmpty);
+    expect(
+      session.retarget(blockId: 'b', commandDelegate: secondHost),
+      isTrue,
+    );
+    final secondLease = session.geometryLeaseFor(
+      blockId: 'b',
+      owner: secondHost,
+    )!;
+    expect(
+      session.geometryLeaseFor(blockId: 'a', owner: firstHost),
+      isNull,
+    );
+    expect(secondLease, isNot(same(firstLease)));
+    calls.clear();
+
+    expect(
+      session.publishGeometry(
+        lease: firstLease,
+        documentRevision: controller.document,
+        layoutGeneration: 20,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(10, 0, 1, 20),
+      ),
+      isFalse,
+      reason: 'a recycled prior row cannot position the current IME',
+    );
+    expect(calls, isEmpty);
+
+    expect(
+      session.retarget(blockId: 'b', commandDelegate: replacementHost),
+      isTrue,
+    );
+    final replacementLease = session.geometryLeaseFor(
+      blockId: 'b',
+      owner: replacementHost,
+    )!;
+    expect(
+      session.geometryLeaseFor(blockId: 'b', owner: secondHost),
+      isNull,
+    );
+    expect(replacementLease, isNot(same(secondLease)));
+    calls.clear();
+    expect(
+      session.publishGeometry(
+        lease: firstLease,
+        documentRevision: controller.document,
+        layoutGeneration: 21,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(20, 0, 1, 20),
+      ),
+      isFalse,
+      reason: 'a replaced same-block host cannot publish stale geometry',
+    );
+    expect(calls, isEmpty);
+
+    expect(
+      session.publishGeometry(
+        lease: replacementLease,
+        documentRevision: controller.document,
+        layoutGeneration: 1,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(30, 0, 1, 20),
+      ),
+      isTrue,
+    );
+    expect(
+      calls.map((call) => call.method),
+      containsAll(<String>[
+        'TextInput.setEditableSizeAndTransform',
+        'TextInput.setCaretRect',
+      ]),
+    );
 
     session.dispose();
     controller.dispose();
@@ -903,6 +1119,7 @@ final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
   final List<Intent> intents = <Intent>[];
   final List<RawFloatingCursorPoint> floatingCursorPoints =
       <RawFloatingCursorPoint>[];
+  final List<TextRange> autocorrectionPromptRanges = <TextRange>[];
   int toolbarCount = 0;
   int transientCancelCount = 0;
 
@@ -918,6 +1135,11 @@ final class _FakeCommandDelegate implements HomericTextInputCommandDelegate {
   @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {
     floatingCursorPoints.add(point);
+  }
+
+  @override
+  void showAutocorrectionPromptRect(TextRange range) {
+    autocorrectionPromptRanges.add(range);
   }
 
   @override

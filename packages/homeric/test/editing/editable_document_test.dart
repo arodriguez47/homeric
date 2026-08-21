@@ -201,6 +201,33 @@ void main() {
       lessThan(25),
     );
 
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final drag = await tester.startGesture(
+      tester.getCenter(find.descendant(
+        of: startHandle,
+        matching: find.byType(GestureDetector),
+      )),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(24, 24));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue,
+        reason: 'the canonical stationary endpoint stays usable off-screen');
+    expect(key.currentState!.debugTouchMovingEndpoint,
+        HomericSelectionEndpoint.start);
+    await drag.up();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+
     final reached = key.currentState!.scrollToBlock('block-99');
     for (var frame = 0; frame < 10; frame++) {
       await tester.pump();
@@ -218,6 +245,88 @@ void main() {
           .length,
       lessThan(25),
     );
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('stationary host recycling preserves a canonical handle drag',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(
+      List<String>.generate(100, (index) => 'row $index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 1),
+        head: document.positionAt(99, 2),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    final stationaryOwner = Object();
+    final stationaryLink = LayerLink();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.registerSelectionHost(
+      'block-99',
+      owner: stationaryOwner,
+      globalRect: () => const Rect.fromLTWH(0, 10000, 100, 20),
+      hitTest: (_) => null,
+      wordRangeAt: (_) => null,
+      globalRangeRects: (_) => null,
+      activeCaretGeometry: () => null,
+      magnifierInfo: (_) => null,
+      selectionEndpointGeometry: (_, __, ___) => (
+        globalRect: const Rect.fromLTWH(0, 10000, 1, 20),
+        layoutGeneration: 1,
+        layerLink: stationaryLink,
+        textDirection: TextDirection.ltr,
+      ),
+    );
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final drag = await tester.startGesture(
+      tester.getCenter(find.descendant(
+        of: startHandle,
+        matching: find.byType(GestureDetector),
+      )),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(24, 24));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+
+    key.currentState!.unregisterSelectionHost('block-99', stationaryOwner);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue,
+        reason: 'row recycling must clear only the optional geometry witness');
+    key.currentState!.selectionHostLayoutChanged(
+      'block-99',
+      owner: stationaryOwner,
+      layoutGeneration: 2,
+    );
+    expect(key.currentState!.pointerSelectionDragActive, isTrue,
+        reason: 'a detached host cannot revoke the canonical drag later');
+
+    await drag.up();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -280,6 +389,25 @@ void main() {
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
 
+    final cancelled = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await cancelled.moveTo(beta);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    final selectionBeforeCancel = controller.selection;
+    await cancelled.cancel();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    await cancelled.moveTo(alpha);
+    await tester.pump();
+    expect(controller.selection, selectionBeforeCancel,
+        reason: 'retained movement after cancellation is inert');
+
     final interrupted = await tester.startGesture(
       alpha,
       kind: PointerDeviceKind.touch,
@@ -317,6 +445,7 @@ void main() {
   testWidgets('touch start handle crosses its stationary endpoint',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final document = _document(const <String>['alpha beta']);
     final controller = HomericEditorController(
       document: document,
@@ -358,11 +487,23 @@ void main() {
             .first
             .toRect()
             .centerLeft;
+    final stationary = origin +
+        geometry
+            .caretRect(
+              const DocOffset(5),
+            )
+            .value
+            .center;
     final handles = find.byType(CompositedTransformFollower);
     expect(handles, findsNWidgets(2));
     final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
       const ValueKey<(HomericSelectionEndpoint, String)>(
         (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final endTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.end, 'block-0'),
       ),
     ));
     final startHandle = find.byWidgetPredicate(
@@ -382,23 +523,126 @@ void main() {
     );
     await drag.moveBy(const Offset(0, 24));
     await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    await drag.moveTo(stationary);
+    await tester.pump();
+    expect(controller.selection!.isCollapsed, isTrue);
+    expect(key.currentState!.debugTouchStartHandleVisible, isTrue,
+        reason: 'the moving physical start handle remains visible at crossing');
+    expect(key.currentState!.debugTouchEndHandleVisible, isTrue,
+        reason: 'both physical links stay mounted until the drag completes');
     await drag.moveTo(beta);
+    await tester.pump();
     await tester.pump();
 
     var selection = key.currentState!.selectionFragmentForBlock('block-0')!;
     expect(selection.anchor, 5);
     expect(selection.head, greaterThan(5));
+    final crossedStartTarget =
+        tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final crossedEndTarget =
+        tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.end, 'block-0'),
+      ),
+    ));
+    expect(crossedStartTarget.link, same(endTarget.link),
+        reason: 'the stationary endpoint keeps the physical end-handle link');
+    expect(crossedEndTarget.link, same(startTarget.link),
+        reason: 'the dragged physical start handle follows the moving head');
     expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
 
     await drag.moveTo(alpha);
     await tester.pump();
+    await tester.pump();
     selection = key.currentState!.selectionFragmentForBlock('block-0')!;
     expect(selection.anchor, 5);
     expect(selection.head, lessThan(5));
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.start, 'block-0'),
+            ),
+          ))
+          .link,
+      same(startTarget.link),
+      reason: 'crossing back restores the moving start-handle target',
+    );
     await drag.up();
     await tester.pump();
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+
+    controller.setSelection(HomericSelection(
+      anchor: controller.document.positionAt(0, 5),
+      head: controller.document.positionAt(0, 10),
+    ));
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+    final currentEndTarget =
+        tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.end, 'block-0'),
+      ),
+    ));
+    final endHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, currentEndTarget.link),
+    );
+    final endHandleGesture = find.descendant(
+      of: endHandle,
+      matching: find.byType(GestureDetector),
+    );
+    final reverseDrag = await tester.startGesture(
+      tester.getCenter(endHandleGesture),
+      kind: PointerDeviceKind.touch,
+    );
+    await reverseDrag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    await reverseDrag.moveTo(stationary);
+    await tester.pump();
+    expect(controller.selection!.isCollapsed, isTrue);
+    expect(key.currentState!.debugTouchStartHandleVisible, isTrue,
+        reason: 'both physical links stay mounted until the drag completes');
+    expect(key.currentState!.debugTouchEndHandleVisible, isTrue,
+        reason: 'the moving physical end handle remains visible at crossing');
+    await reverseDrag.moveTo(alpha);
+    await tester.pump();
+    await tester.pump();
+    selection = key.currentState!.selectionFragmentForBlock('block-0')!;
+    expect(selection.anchor, 5);
+    expect(selection.head, lessThan(5));
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.start, 'block-0'),
+            ),
+          ))
+          .link,
+      same(endTarget.link),
+      reason: 'the dragged physical end handle follows the moving head',
+    );
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.end, 'block-0'),
+            ),
+          ))
+          .link,
+      same(startTarget.link),
+      reason: 'the stationary endpoint keeps the physical start-handle link',
+    );
+    await reverseDrag.up();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
 
     controller.setSelection(HomericSelection(
       anchor: controller.document.positionAt(0, 0),
@@ -422,6 +666,488 @@ void main() {
     expect(key.currentState!.debugTouchMovingEndpoint, isNull);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
     await interrupted.up();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('touch handle release resyncs a collapsed single-child overlay',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 5),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 500,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: 'block-0',
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        ),
+      ),
+    )));
+    await tester.pump();
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.activeBlockId, 'block-0');
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+
+    final paragraph = find.byType(HomericParagraph);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final stationary = tester.getTopLeft(paragraph) +
+        geometry.caretRect(const DocOffset(5)).value.center;
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final rawHandle = tester.widget<RawGestureDetector>(find.descendant(
+      of: startHandle,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is RawGestureDetector &&
+            widget.gestures.containsKey(PanGestureRecognizer),
+      ),
+    ));
+    final factory = rawHandle.gestures[PanGestureRecognizer]!;
+    final recognizer = factory.constructor() as PanGestureRecognizer;
+    factory.initializer(recognizer);
+    addTearDown(recognizer.dispose);
+    final handleCenter = tester.getCenter(startHandle);
+    recognizer.onStart!(DragStartDetails(
+      globalPosition: handleCenter,
+      kind: PointerDeviceKind.touch,
+    ));
+    recognizer.onUpdate!(DragUpdateDetails(
+      globalPosition: stationary,
+      delta: stationary - handleCenter,
+    ));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(controller.selection!.isCollapsed, isTrue);
+    expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
+    expect(key.currentState!.debugTouchEndHandleVisible, isTrue,
+        reason: 'drag-time physical endpoint mapping remains until release');
+
+    recognizer.onEnd!(DragEndDetails());
+    await tester.pump();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
+    expect(key.currentState!.debugTouchEndHandleVisible, isFalse,
+        reason: 'release must resync the collapsed caret overlay');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('platform close revokes document-owned touch handle drag',
+      (tester) async {
+    TextInputConnection.debugResetId();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 5),
+    ));
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final handleGesture = find.descendant(
+      of: startHandle,
+      matching: find.byType(GestureDetector),
+    );
+    final drag = await tester.startGesture(
+      tester.getCenter(handleGesture),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchMovingEndpoint,
+        HomericSelectionEndpoint.start);
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    final selectionBeforeClose = controller.selection;
+
+    final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+      'method': 'TextInputClient.onConnectionClosed',
+      'args': <Object?>[1],
+    });
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'flutter/textinput',
+      message,
+      (_) {},
+    );
+    await tester.pump();
+
+    expect(session.isAttached, isFalse);
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMovingEndpoint, isNull);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    expect(key.currentState!.touchSelectionChromeVisible, isFalse);
+    await drag.moveBy(const Offset(80, 0));
+    await drag.up();
+    await tester.pump();
+    expect(controller.selection, selectionBeforeClose,
+        reason: 'the retained physical drag is inert after platform close');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('touch handle keeps physical ownership across mounted rows',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha', 'beta gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 5),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+
+    final firstParagraph = find.byType(HomericParagraph).at(0);
+    final secondParagraph = find.byType(HomericParagraph).at(1);
+    final firstGeometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(firstParagraph),
+    );
+    final secondGeometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(secondParagraph),
+    );
+    final firstOrigin = tester.getTopLeft(firstParagraph);
+    final secondOrigin = tester.getTopLeft(secondParagraph);
+    final firstStart =
+        firstOrigin + firstGeometry.caretRect(const DocOffset(0)).value.center;
+    final secondWord = secondOrigin +
+        secondGeometry
+            .rectsForRange(
+              DocRange(const DocOffset(5), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final drag = await tester.startGesture(
+      tester.getCenter(find.descendant(
+        of: startHandle,
+        matching: find.byType(GestureDetector),
+      )),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    await drag.moveTo(secondWord);
+    await tester.pump();
+    await tester.pump();
+
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    final crossed = controller.document.resolve(controller.selection!.head);
+    expect(crossed, isA<InlinePosition>());
+    expect((crossed as InlinePosition).block.id, 'block-1');
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.end, 'block-1'),
+            ),
+          ))
+          .link,
+      same(startTarget.link),
+      reason: 'the moving physical handle retains one document-owned link',
+    );
+
+    await drag.moveTo(firstStart);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.selection!.isCollapsed, isFalse);
+    final returned = controller.document.resolve(controller.selection!.head);
+    expect((returned as InlinePosition).block.id, 'block-0',
+        reason: 'the original drag recognizer remains live after row crossing');
+    await drag.up();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('platform close revokes paragraph-owned long press drag',
+      (tester) async {
+    TextInputConnection.debugResetId();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byType(HomericParagraph);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final origin = tester.getTopLeft(paragraph);
+    final alpha = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(0), const DocOffset(5)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final beta = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(6), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    expect(
+      await key.currentState!.settleFocusOnBlock('block-0'),
+      HomericFocusSettlementResult.focused,
+    );
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    final gesture = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await gesture.moveTo(beta);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    final selectionBeforeClose = controller.selection;
+
+    final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+      'method': 'TextInputClient.onConnectionClosed',
+      'args': <Object?>[1],
+    });
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'flutter/textinput',
+      message,
+      (_) {},
+    );
+    await tester.pump();
+    expect(session.isAttached, isFalse);
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+
+    await gesture.moveTo(alpha);
+    await tester.pump();
+    expect(controller.selection, selectionBeforeClose);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    await gesture.up();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('stationary endpoint relayout revokes document handle drag',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 5),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+    final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.start, 'block-0'),
+      ),
+    ));
+    final startHandle = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, startTarget.link),
+    );
+    final drag = await tester.startGesture(
+      tester.getCenter(find.descendant(
+        of: startHandle,
+        matching: find.byType(GestureDetector),
+      )),
+      kind: PointerDeviceKind.touch,
+    );
+    await drag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    final selectionBeforeRelayout = controller.selection;
+
+    await tester.pumpWidget(MediaQuery(
+      data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+      child: _editableDocument(controller, session, key: key),
+    ));
+    await tester.pump();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMovingEndpoint, isNull);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    await drag.moveBy(const Offset(80, 0));
+    await tester.pump();
+    expect(controller.selection, selectionBeforeRelayout,
+        reason: 'the old handle capability is inert after relayout');
+    await drag.up();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('rotation revokes active document touch capabilities',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    tester.view
+      ..physicalSize = const Size(500, 300)
+      ..devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byType(HomericParagraph);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final origin = tester.getTopLeft(paragraph);
+    final alpha = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(0), const DocOffset(5)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final beta = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(6), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final gesture = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await gesture.moveTo(beta);
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchMagnifierVisible, isTrue);
+    final selectionBeforeRotation = controller.selection;
+
+    tester.view.physicalSize = const Size(300, 500);
+    await tester.pump();
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isFalse);
+    expect(key.currentState!.debugTouchMovingEndpoint, isNull);
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
+    await gesture.moveTo(alpha);
+    await tester.pump();
+    expect(key.currentState!.debugTouchMagnifierVisible, isFalse,
+        reason: 'a retained long-press callback cannot revive the magnifier');
+    await gesture.up();
+    await tester.pump();
+    expect(controller.selection, selectionBeforeRotation);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -518,6 +1244,44 @@ void main() {
       controller.document.blocks.last.id,
       reason: 'each synchronous break must advance the platform shadow to '
           'the newest trailing block',
+    );
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['al', 'pha']);
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['alpha']);
+    expect(controller.undo(), isFalse);
+  });
+
+  testWidgets('two immediate hardware Enters survive pending-row settlement',
+      (tester) async {
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      <String>['al', '', 'pha'],
+      reason: 'a second physical Return must not disappear while the first '
+          'split waits for its new row host',
     );
     expect(controller.undo(), isTrue);
     expect(controller.document.blocks.map((block) => block.text),
@@ -1681,12 +2445,25 @@ void main() {
     // `Color.a` postdates Homeric's Flutter 3.24 minimum.
     // ignore: deprecated_member_use
     expect(handleText.style?.color?.alpha, 255);
+    expect(
+      find.ancestor(
+        of: firstHandle,
+        matching: find.byType(AnimatedOpacity),
+      ),
+      findsNothing,
+      reason: 'the always-visible default must not mount hover animation work',
+    );
     final mouseRegion = find.ancestor(
       of: firstHandle,
       matching: find.byType(MouseRegion),
     );
-    expect(tester.widget<MouseRegion>(mouseRegion).cursor,
-        SystemMouseCursors.grab);
+    expect(
+      tester
+          .widgetList<MouseRegion>(mouseRegion)
+          .where((region) => region.cursor == SystemMouseCursors.grab),
+      hasLength(1),
+      reason: 'only the 44px drag target owns the grab cursor',
+    );
 
     final focusedNode = FocusManager.instance.primaryFocus;
     expect(focusedNode, isNotNull);
@@ -1731,6 +2508,104 @@ void main() {
           .text,
       'beXta',
     );
+  });
+
+  testWidgets('consumer can hide the grabber until its row is hovered',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final semantics = tester.ensureSemantics();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      blockGrabberStyle: const HomericBlockGrabberStyle(
+        idleOpacity: 0,
+        hoverOpacity: 0.96,
+        fadeDuration: Duration.zero,
+        textStyle: TextStyle(
+          color: Color(0xFF12AB34),
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    ));
+    await tester.pump();
+
+    final firstGrabber = find.text('⋮').first;
+    final opacity = find.ancestor(
+      of: firstGrabber,
+      matching: find.byType(AnimatedOpacity),
+    );
+    expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0,
+        reason: 'a hover-only consumer must not paint grabbers at rest');
+    final target = find.ancestor(
+      of: firstGrabber,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is SizedBox && widget.width == 44 && widget.height == 44,
+      ),
+    );
+    expect(tester.getSize(target), const Size(44, 44),
+        reason: 'paint-only hiding must retain the physical drag target');
+    final semanticsNode = tester.getSemantics(
+      find.bySemanticsLabel('Move block, block 1 of 2'),
+    );
+    // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(semanticsNode.hasFlag(SemanticsFlag.isButton), isTrue);
+    // ignore: deprecated_member_use
+    expect(semanticsNode.hasFlag(SemanticsFlag.isEnabled), isTrue);
+    final moveDownId = CustomSemanticsAction.getIdentifier(
+      const CustomSemanticsAction(label: 'Move block down'),
+    );
+    expect(
+      semanticsNode.getSemanticsData().customSemanticsActionIds,
+      contains(moveDownId),
+      reason: 'an invisible glyph must retain the accessible move command',
+    );
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: const Offset(-100, -100));
+    await mouse.moveTo(tester.getCenter(
+      find.byKey(const ValueKey('homeric-editable-block-0')),
+    ));
+    await tester.pump();
+
+    expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0.96,
+        reason: 'hovering the row handle must reveal the configured grabber');
+    final text = tester.widget<Text>(firstGrabber);
+    expect(text.style?.color, const Color(0xFF12AB34));
+    expect(text.style?.fontWeight, FontWeight.w700);
+
+    await mouse.moveTo(tester.getCenter(
+      find.byKey(const ValueKey('homeric-editable-block-1')),
+    ));
+    await tester.pump();
+    expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0,
+        reason: 'leaving a row must hide only its own grabber again');
+
+    // `rootPipelineOwner` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    tester.binding.pipelineOwner.semanticsOwner!.performAction(
+      semanticsNode.id,
+      SemanticsAction.customAction,
+      moveDownId,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      controller.document.blocks.map((block) => block.id),
+      <String>['block-1', 'block-0'],
+      reason: 'the idle hidden target must move the block exactly once',
+    );
+    semantics.dispose();
   });
 
   testWidgets('edge grabber can apply one consumer-prepared grouped move',
@@ -2507,11 +3382,33 @@ void main() {
     addTearDown(session.dispose);
     addTearDown(controller.dispose);
 
-    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      blockGrabberStyle: const HomericBlockGrabberStyle(
+        idleOpacity: 0,
+        hoverOpacity: 1,
+        fadeDuration: Duration.zero,
+      ),
+    ));
     await tester.pump();
 
     final before = controller.document;
     final handle = find.text('⋮').at(1);
+    final opacity = find.ancestor(
+      of: handle,
+      matching: find.byType(AnimatedOpacity),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: const Offset(-100, -100));
+    await mouse.moveTo(tester.getCenter(
+      find.byKey(const ValueKey('homeric-editable-block-1')),
+    ));
+    await tester.pump();
+    expect(tester.widget<AnimatedOpacity>(opacity).opacity, 0,
+        reason:
+            'hover must not advertise a reorder that is currently disabled');
     await tester.drag(handle, const Offset(0, -70));
     await _sendBlockMoveShortcut(tester, LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
@@ -2531,6 +3428,8 @@ void main() {
       HomericSelection.collapsed(controller.document.positionAt(1, 2)),
     );
     await tester.pump();
+    expect(tester.widget<AnimatedOpacity>(opacity).opacity, 1,
+        reason: 'the same hovered row reveals once reordering is available');
     final enabledSemantics = tester.getSemantics(
       find.bySemanticsLabel('Move block, block 2 of 3'),
     );
@@ -2830,6 +3729,7 @@ Widget _editableDocument(
   HomericBlockMoveHandler? onMoveBlock,
   ValueChanged<HomericBlockMoveRejection>? onMoveRejected,
   ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
+  HomericBlockGrabberStyle blockGrabberStyle = const HomericBlockGrabberStyle(),
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -2842,6 +3742,7 @@ Widget _editableDocument(
         onMoveBlock: onMoveBlock,
         onMoveRejected: onMoveRejected,
         onCommandRejected: onCommandRejected,
+        blockGrabberStyle: blockGrabberStyle,
         cacheExtent: 0,
         estimatedBlockHeight: 44,
         blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
@@ -3022,6 +3923,9 @@ final class _CommandDelegate implements HomericTextInputCommandDelegate {
 
   @override
   void showToolbar() {}
+
+  @override
+  void showAutocorrectionPromptRect(TextRange range) {}
 
   @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {}

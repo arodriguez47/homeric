@@ -188,6 +188,8 @@ class HomericEditableParagraph extends StatefulWidget {
     this.baseStyle,
     this.textAlign = TextAlign.start,
     this.textScaler,
+    this.placeholderText,
+    this.placeholderStyle,
     this.deriveDecorations,
     this.slotBuilder,
     this.slotLayoutRevision,
@@ -239,6 +241,17 @@ class HomericEditableParagraph extends StatefulWidget {
 
   /// Explicit text scaling override.
   final TextScaler? textScaler;
+
+  /// Optional prompt painted while this empty paragraph owns live input.
+  ///
+  /// The prompt is presentation-only: it does not enter canonical content,
+  /// paragraph layout, selection geometry, clipboard output, or history.
+  final String? placeholderText;
+
+  /// Optional visual style for [placeholderText].
+  ///
+  /// When omitted, [baseStyle] is used when available.
+  final TextStyle? placeholderStyle;
 
   /// Derives consumer-owned, non-history decorations from the live block.
   ///
@@ -350,6 +363,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   ({int position, HomericCaretAffinity affinity})? _pendingIosTap;
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
+  int? _geometryDocumentRevision;
   ParagraphGeometry? _paragraphGeometry;
   final LayerLink _selectionStartLayerLink = LayerLink();
   final LayerLink _selectionEndLayerLink = LayerLink();
@@ -390,7 +404,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   Offset? _floatingCursorStartCenter;
   ({int offset, HomericCaretAffinity affinity})? _floatingCursorCandidate;
   int? _floatingCursorDocumentRevision;
+  int? _floatingCursorLayoutGeneration;
   int? _floatingCursorHostEpoch;
+  ({
+    BlockTextRange range,
+    int contentRevision,
+    HomericTextRange? composing,
+  })? _autocorrectionPrompt;
+  bool _ownsInput = false;
+  bool _inputSessionSyncScheduled = false;
   bool _disposing = false;
 
   HomericEditorController get _controller => widget.controller;
@@ -413,6 +435,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _renewHostBindings();
     _captureCaretState();
     _controller.addListener(_controllerChanged);
+    _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
+    widget.inputSession.addListener(_inputSessionChanged);
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -437,6 +461,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   @override
   void didChangeMetrics() {
     _cancelFloatingCursor();
+    if (_longPressActive) _longPressCancel();
     if (!_localTouchSelectionRequested) return;
     _disposeLocalTouchSelectionOverlay();
     _scheduleLocalTouchSelectionSync();
@@ -499,6 +524,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
     }
+    if (sessionChanged) {
+      oldWidget.inputSession.removeListener(_inputSessionChanged);
+      widget.inputSession.addListener(_inputSessionChanged);
+    }
+    if (sessionChanged || blockChanged) {
+      _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
+    }
     if (focusNodeChanged) {
       if (oldWidget.focusNode == null) _focusNode.dispose();
       _focusNode = widget.focusNode ?? FocusNode();
@@ -549,6 +581,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _documentHost?.unregisterCommandHost(widget.blockId, _commandDelegate);
     _documentHost?.unregisterSelectionHost(widget.blockId, this);
     _controller.removeListener(_controllerChanged);
+    widget.inputSession.removeListener(_inputSessionChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
       widget.inputSession.blur();
     }
@@ -579,6 +612,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   bool get _ownsEditingFocus =>
       _focusNode.hasFocus || (_contextMenuController?.isShown ?? false);
+
+  void _inputSessionChanged() {
+    final ownsInput = widget.inputSession.activeBlockId == widget.blockId;
+    if (_ownsInput == ownsInput || _inputSessionSyncScheduled) return;
+    _inputSessionSyncScheduled = true;
+    scheduleMicrotask(() {
+      _inputSessionSyncScheduled = false;
+      if (!mounted) return;
+      final currentOwnsInput =
+          widget.inputSession.activeBlockId == widget.blockId;
+      if (_ownsInput == currentOwnsInput) return;
+      setState(() => _ownsInput = currentOwnsInput);
+    });
+  }
 
   bool _attachInput() =>
       !_controller.isReadOnly &&
@@ -619,6 +666,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         _spellingSuggestions.first.contentRevision !=
             _controller.contentRevision) {
       _spellingSuggestions = const [];
+    }
+    final autocorrectionPrompt = _autocorrectionPrompt;
+    if (autocorrectionPrompt != null &&
+        (autocorrectionPrompt.contentRevision != _controller.contentRevision ||
+            autocorrectionPrompt.composing != _controller.composing)) {
+      _clearAutocorrectionPrompt();
     }
     final caretStateChanged = _captureCaretState();
     if (caretStateChanged) _syncCaretBlink(resetVisible: true);
@@ -675,6 +728,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final block = _block;
     if (block == null) return const SizedBox.shrink();
     final localSelection = _localSelection();
+    final placeholderVisible = widget.placeholderText != null &&
+        block.contentLength == 0 &&
+        localSelection != null &&
+        _focusNode.hasFocus &&
+        !_controller.isReadOnly &&
+        _ownsInput;
     final fullySelectedEmptyBlock = block.contentLength == 0 &&
         (_documentHost?.isBlockFullySelected(widget.blockId) ?? false);
     final localComposing = _localComposing();
@@ -729,6 +788,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final editingLayers = <PaintLayer>[
       ...widget.paintLayers,
       ...derivedPaintLayers,
+      if (_autocorrectionPrompt?.range case final range?)
+        PaintLayer(
+          range: DocRange(
+            DocOffset(range.start),
+            DocOffset(range.end),
+          ),
+          band: PaintBand.underlay,
+          painter: solidWashPainter,
+          spec: SolidWashSpec(selectionColor),
+        ),
       if (localSelection != null && !localSelection.isCollapsed)
         PaintLayer(
           range: DocRange(
@@ -785,6 +854,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       overlayBuilder: (overlayContext, geometry) {
         _overlayContext = overlayContext;
         final geometryDocumentRevision = _controller.documentRevision;
+        _geometryDocumentRevision = geometryDocumentRevision;
         final consumerGeometry = HomericEditableBlockGeometry._(
           blockId: widget.blockId,
           documentRevision: geometryDocumentRevision,
@@ -930,36 +1000,40 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                 )
                 .value
             : null;
-        final selectionPlane = TextSelectionGestureDetector(
+        final selectionPlane = Listener(
           behavior: HitTestBehavior.translucent,
-          onTapDown: (details) => _tapDown(geometry, details),
-          onSingleTapUp: (details) {
-            if (!consumerGeometry.isCurrent) return;
-            _completeSingleTap(details.kind);
-            widget.onSingleTap?.call(
-              consumerGeometry,
-              details.localPosition,
-              details.globalPosition,
-            );
-          },
-          onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
-          onTripleTapDown: (details) => _tripleTapDown(geometry, details),
-          onSingleLongTapStart: (details) => _longPressStart(geometry, details),
-          onSingleLongTapMoveUpdate: (details) =>
-              _longPressMoveUpdate(geometry, details),
-          onSingleLongTapEnd: (_) => _longPressEnd(),
-          onSingleLongTapCancel: _longPressCancel,
-          onDragSelectionStart: (details) =>
-              _startSelectionDrag(geometry, details),
-          onDragSelectionUpdate: (details) =>
-              _updateSelectionDrag(geometry, details.localPosition),
-          onDragSelectionEnd: (_) => _endSelectionPointer(),
-          onSingleTapCancel: _cancelSelectionPointer,
-          onTapTrackReset: _cancelSelectionPointer,
-          onSecondaryTapDown: (details) =>
-              _secondaryTapDown(geometry, details.localPosition),
-          onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
-          child: const SizedBox.expand(),
+          onPointerCancel: (_) => _cancelGestureSequence(),
+          child: TextSelectionGestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapDown: (details) => _tapDown(geometry, details),
+            onSingleTapUp: (details) {
+              if (!consumerGeometry.isCurrent) return;
+              _completeSingleTap(details.kind);
+              widget.onSingleTap?.call(
+                consumerGeometry,
+                details.localPosition,
+                details.globalPosition,
+              );
+            },
+            onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
+            onTripleTapDown: (details) => _tripleTapDown(geometry, details),
+            onSingleLongTapStart: (details) =>
+                _longPressStart(geometry, details),
+            onSingleLongTapMoveUpdate: (details) =>
+                _longPressMoveUpdate(geometry, details),
+            onSingleLongTapEnd: (_) => _longPressEnd(),
+            onDragSelectionStart: (details) =>
+                _startSelectionDrag(geometry, details),
+            onDragSelectionUpdate: (details) =>
+                _updateSelectionDrag(geometry, details.localPosition),
+            onDragSelectionEnd: (_) => _endSelectionPointer(),
+            onSingleTapCancel: _cancelGestureSequence,
+            onTapTrackReset: _cancelGestureSequence,
+            onSecondaryTapDown: (details) =>
+                _secondaryTapDown(geometry, details.localPosition),
+            onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
+            child: const SizedBox.expand(),
+          ),
         );
         final hoverPlane = widget.onHover == null && widget.onHoverExit == null
             ? selectionPlane
@@ -989,6 +1063,35 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                     'homeric-empty-selection-${widget.blockId}',
                   ),
                   color: focused ? selectionColor : inactiveSelectionColor,
+                ),
+              ),
+            ),
+          if (placeholderVisible)
+            Positioned.fromRect(
+              rect: geometry.blockRect.value,
+              child: IgnorePointer(
+                child: ExcludeSemantics(
+                  child: RichText(
+                    key: ValueKey<String>(
+                      'homeric-placeholder-${widget.blockId}',
+                    ),
+                    text: TextSpan(
+                      text: widget.placeholderText,
+                      style: widget.placeholderStyle ??
+                          widget.baseStyle ??
+                          const TextStyle(),
+                    ),
+                    textAlign: widget.textAlign,
+                    textDirection:
+                        widget.paragraphSpec.direction == ParagraphDirection.rtl
+                            ? TextDirection.rtl
+                            : TextDirection.ltr,
+                    textScaler: widget.textScaler ??
+                        MediaQuery.textScalerOf(overlayContext),
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    softWrap: false,
+                  ),
                 ),
               ),
             ),
@@ -1100,7 +1203,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       ),
       HomericInsertParagraphBreakIntent:
           _HostAction<HomericInsertParagraphBreakIntent>(
-        enabled: (_) => _canMutateActions && _documentHost != null,
+        enabled: (_) =>
+            _ownsEditingFocus &&
+            (_documentHost?.acceptsPendingRowStructuralKey ?? false),
         invoke: (_) => _controller.insertParagraphBreak(),
       ),
       DismissIntent: _HostAction<DismissIntent>(
@@ -1226,6 +1331,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           );
     return _EditableSemantics(
       value: block.text,
+      hint: placeholderVisible ? widget.placeholderText : null,
       selection: semanticsSelection,
       focused: _focusNode.hasFocus,
       editable:
@@ -1425,10 +1531,25 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
   }
 
-  LayerLink _selectionLayerLink(HomericSelectionEndpoint endpoint) =>
-      endpoint == HomericSelectionEndpoint.start
-          ? _selectionStartLayerLink
-          : _selectionEndLayerLink;
+  LayerLink _selectionLayerLink(HomericSelectionEndpoint endpoint) {
+    final documentHost = _documentHost;
+    if (documentHost != null) {
+      return documentHost.touchSelectionLayerLink(endpoint);
+    }
+    final selection = _controller.selection;
+    final physicalEndpoint = selection == null
+        ? endpoint
+        : homericPhysicalSelectionEndpoint(
+            endpoint: endpoint,
+            selectionStart: selection.start,
+            selectionEnd: selection.end,
+            selectionHead: selection.head,
+            movingEndpoint: _localTouchMovingEndpoint,
+          );
+    return physicalEndpoint == HomericSelectionEndpoint.start
+        ? _selectionStartLayerLink
+        : _selectionEndLayerLink;
+  }
 
   List<Widget> _selectionEndpointTargets(ParagraphGeometry geometry) {
     if (_resolvedTouchSelectionConfiguration == null) {
@@ -1628,7 +1749,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         _controller.globalPositionForBlockOffset(widget.blockId, word.end),
         owner: this,
       );
-      documentHost.updateTouchSelectionMagnifier(details.globalPosition);
+      documentHost.updateTouchSelectionMagnifier(
+        details.globalPosition,
+        owner: this,
+      );
     } else {
       _updateLocalTouchMagnifier(geometry, details.globalPosition);
     }
@@ -1638,10 +1762,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     ParagraphGeometry geometry,
     LongPressMoveUpdateDetails details,
   ) {
+    if (!_longPressActive) return;
     final documentHost = _documentHost;
     if (documentHost != null) {
-      documentHost.updatePointerSelectionDrag(details.globalPosition);
-      documentHost.updateTouchSelectionMagnifier(details.globalPosition);
+      if (!documentHost.updatePointerSelectionDrag(
+        details.globalPosition,
+        owner: this,
+      )) {
+        _longPressActive = false;
+        return;
+      }
+      documentHost.updateTouchSelectionMagnifier(
+        details.globalPosition,
+        owner: this,
+      );
       return;
     }
     _updateSelectionDrag(geometry, details.localPosition);
@@ -1660,6 +1794,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _documentHost?.hideTouchSelectionMagnifier();
     _localTouchOverlayCoordinator.hideMagnifier();
     _cancelSelectionPointer();
+  }
+
+  void _cancelGestureSequence() {
+    if (_longPressActive) {
+      _longPressCancel();
+    } else {
+      _cancelSelectionPointer();
+    }
   }
 
   void _updateLocalTouchMagnifier(
@@ -1746,16 +1888,26 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _disposeLocalTouchSelectionOverlay();
       return;
     }
-    final start = _localTouchEndpoint(
+    var start = _localTouchEndpoint(
       HomericSelectionEndpoint.start,
       geometry,
       render,
     );
-    final end = _localTouchEndpoint(
+    var end = _localTouchEndpoint(
       HomericSelectionEndpoint.end,
       geometry,
       render,
     );
+    if (homericPhysicalSelectionEndpoint(
+          endpoint: HomericSelectionEndpoint.start,
+          selectionStart: selection.start,
+          selectionEnd: selection.end,
+          selectionHead: selection.head,
+          movingEndpoint: _localTouchMovingEndpoint,
+        ) ==
+        HomericSelectionEndpoint.end) {
+      (start, end) = (end, start);
+    }
     if (start == null || end == null) {
       _disposeLocalTouchSelectionOverlay();
       return;
@@ -1766,7 +1918,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       controls: configuration.selectionControls,
       magnifierConfiguration: configuration.magnifierConfiguration,
       toolbarLayerLink: _localTouchToolbarLayerLink,
-      collapsed: selection.isCollapsed,
+      collapsed: selection.isCollapsed && _localTouchMovingEndpoint == null,
       start: start,
       end: end,
       onSelectionHandleTapped: _showContextMenu,
@@ -1863,7 +2015,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (documentHost?.pointerSelectionDragActive ?? false) {
       final render = _overlayContext?.findRenderObject();
       if (render is RenderBox && render.attached) {
-        documentHost!.updatePointerSelectionDrag(render.localToGlobal(point));
+        documentHost!.updatePointerSelectionDrag(
+          render.localToGlobal(point),
+          owner: this,
+        );
       }
       return;
     }
@@ -1974,6 +2129,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final point =
         useSecondaryAnchor ? _secondaryLocalPosition : _selectionMenuAnchor();
     if (context == null || point == null || !_canUseSelectionActions) return;
+    if (_currentGeometry() == null) return;
     if (!useSecondaryAnchor) {
       final geometry = _currentGeometry();
       final selection = _localSelection();
@@ -2006,41 +2162,55 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       if (mounted && !_disposing) _focusNode.requestFocus();
     });
     _contextMenuController = menu;
-    var focusScheduled = false;
     menu.show(
       context: context,
       debugRequiredFor: widget,
       contextMenuBuilder: (menuContext) {
-        if (!focusScheduled) {
-          focusScheduled = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && menu.isShown) {
-              FocusScope.of(menuContext).nextFocus();
-            }
-          });
-        }
-        return Shortcuts(
-          shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-            SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
-            SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
-          },
-          child: Focus(
-            canRequestFocus: false,
-            onFocusChange: (focused) {
-              if (!focused && menu.isShown) _dismissContextMenu();
+        final buttonItems = _contextMenuItems(witness);
+        final adaptiveButtons = AdaptiveTextSelectionToolbar.getAdaptiveButtons(
+          menuContext,
+          buttonItems,
+        ).toList(growable: false);
+        return _HomericContextMenuFocusScope(
+          canFocus: () =>
+              mounted && menu.isShown && _isMenuWitnessCurrent(witness),
+          onStale: _dismissContextMenu,
+          child: Shortcuts(
+            shortcuts: const <ShortcutActivator, Intent>{
+              SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+              SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
+              SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
             },
-            onKeyEvent: (_, event) {
-              if (event is KeyDownEvent &&
-                  event.logicalKey == LogicalKeyboardKey.escape) {
-                _dismissContextMenu();
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-            },
-            child: AdaptiveTextSelectionToolbar.buttonItems(
-              anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
-              buttonItems: _contextMenuItems(witness),
+            child: Focus(
+              canRequestFocus: false,
+              onFocusChange: (focused) {
+                if (!focused && menu.isShown) _dismissContextMenu();
+              },
+              onKeyEvent: (_, event) {
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.escape) {
+                  _dismissContextMenu();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: AdaptiveTextSelectionToolbar(
+                anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
+                children: <Widget>[
+                  for (var index = 0; index < adaptiveButtons.length; index++)
+                    Actions(
+                      actions: <Type, Action<Intent>>{
+                        ActivateIntent: CallbackAction<ActivateIntent>(
+                          onInvoke: (_) {
+                            buttonItems[index].onPressed?.call();
+                            return null;
+                          },
+                        ),
+                      },
+                      child: adaptiveButtons[index],
+                    ),
+                ],
+              ),
             ),
           ),
         );
@@ -2217,6 +2387,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   void _clearTransientState() {
     _cancelFloatingCursor(notify: false);
+    _clearAutocorrectionPrompt();
     _resetPointerState();
     _hideLocalTouchSelectionChrome();
     _secondaryLocalPosition = null;
@@ -2270,6 +2441,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       affinity: selection.affinity,
     );
     _floatingCursorDocumentRevision = _controller.documentRevision;
+    _floatingCursorLayoutGeneration = geometry.generation;
     _floatingCursorHostEpoch = epoch;
     _floatingCursorCaretRect = caret;
     _stopCaretBlink();
@@ -2282,9 +2454,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final geometry = _currentGeometry();
     final origin = _floatingCursorOffsetOrigin;
     final startCenter = _floatingCursorStartCenter;
-    if (!_floatingCursorWitnessIsCurrent(epoch) ||
-        geometry == null ||
-        !_isCurrentGeometry(geometry) ||
+    if (geometry == null ||
+        !_floatingCursorWitnessIsCurrent(
+          epoch,
+          layoutGeneration: geometry.generation,
+        ) ||
         origin == null ||
         startCenter == null) {
       _cancelFloatingCursor();
@@ -2392,9 +2566,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     ));
   }
 
-  bool _floatingCursorWitnessIsCurrent(int epoch) =>
+  bool _floatingCursorWitnessIsCurrent(
+    int epoch, {
+    int? layoutGeneration,
+  }) =>
       _floatingCursorHostEpoch == epoch &&
       _floatingCursorDocumentRevision == _controller.documentRevision &&
+      _floatingCursorLayoutGeneration ==
+          (layoutGeneration ?? _currentGeometry()?.generation) &&
       _controller.activeBlockId == widget.blockId &&
       !_controller.isReadOnly &&
       _controller.composing == null &&
@@ -2413,6 +2592,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _floatingCursorStartCenter = null;
     _floatingCursorCandidate = null;
     _floatingCursorDocumentRevision = null;
+    _floatingCursorLayoutGeneration = null;
     _floatingCursorHostEpoch = null;
     _syncCaretBlink(resetVisible: true);
     if (notify && mounted) setState(() {});
@@ -2420,9 +2600,34 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   void _cancelPlatformTransientInput() {
     _cancelFloatingCursor();
+    _clearAutocorrectionPrompt(notify: true);
     _endLocalTouchHandleDrag();
-    _documentHost?.cancelPointerSelectionDrag(owner: this);
+    _documentHost?.cancelTransientTouchInput(owner: this);
     _resetPointerState();
+  }
+
+  void _showAutocorrectionPromptRect(TextRange range, int epoch) {
+    final block = _block;
+    if (!_isHostEpochCurrent(epoch) ||
+        block == null ||
+        !range.isValid ||
+        range.isCollapsed ||
+        range.end > block.contentLength) {
+      return;
+    }
+    final prompt = (
+      range: BlockTextRange(range.start, range.end),
+      contentRevision: _controller.contentRevision,
+      composing: _controller.composing,
+    );
+    if (_autocorrectionPrompt == prompt) return;
+    setState(() => _autocorrectionPrompt = prompt);
+  }
+
+  void _clearAutocorrectionPrompt({bool notify = false}) {
+    if (_autocorrectionPrompt == null) return;
+    _autocorrectionPrompt = null;
+    if (notify && mounted) setState(() {});
   }
 
   Iterable<_ResolvedSpellingSuggestion> get _currentSpellingSuggestions =>
@@ -2750,6 +2955,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   ParagraphGeometry? _currentGeometry() {
     final render = _renderParagraph;
     if (render == null ||
+        _geometryDocumentRevision != _controller.documentRevision ||
         !render.hasCurrentGeometry ||
         render.layoutGeneration != _renderGeneration) {
       return null;
@@ -2764,18 +2970,33 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   bool _isCurrentGeometry(ParagraphGeometry geometry) {
     final render = _renderParagraph;
     return render != null &&
+        _geometryDocumentRevision == _controller.documentRevision &&
         render.hasCurrentGeometry &&
         render.layoutGeneration == _renderGeneration &&
         geometry.generation == _renderGeneration;
   }
 
   void _geometryChanged(RenderHomericParagraph render, int generation) {
-    if (!identical(_renderParagraph, render) ||
-        _renderGeneration != generation) {
+    final geometryChanged =
+        !identical(_renderParagraph, render) || _renderGeneration != generation;
+    if (_floatingCursorHostEpoch != null &&
+        _floatingCursorLayoutGeneration != generation) {
+      _cancelFloatingCursor(notify: false);
+    }
+    if (geometryChanged &&
+        (_longPressActive || _localTouchMovingEndpoint != null)) {
+      _cancelPlatformTransientInput();
+    }
+    if (geometryChanged) {
       _paragraphGeometry = null;
     }
     _renderParagraph = render;
     _renderGeneration = generation;
+    _documentHost?.selectionHostLayoutChanged(
+      widget.blockId,
+      owner: this,
+      layoutGeneration: generation,
+    );
   }
 
   void _setLocalSelection(
@@ -2852,6 +3073,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       return;
     }
     final serial = ++_geometryPublicationSerial;
+    final geometryLease = widget.inputSession.geometryLeaseFor(
+      blockId: widget.blockId,
+      owner: _commandDelegate,
+    );
+    if (geometryLease == null) return;
     final documentRevision = _controller.document;
     final generation = geometry.generation;
     final blockRect = geometry.blockRect;
@@ -2887,6 +3113,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       final render = overlayContext.findRenderObject();
       if (render is! RenderBox || !render.attached) return;
       widget.inputSession.publishGeometry(
+        lease: geometryLease,
         documentRevision: documentRevision,
         layoutGeneration: generation,
         editableSize: blockRect.value.size,
@@ -2899,6 +3126,54 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   static int _assoc(HomericCaretAffinity affinity) =>
       affinity == HomericCaretAffinity.upstream ? -1 : 1;
+}
+
+class _HomericContextMenuFocusScope extends StatefulWidget {
+  const _HomericContextMenuFocusScope({
+    required this.canFocus,
+    required this.onStale,
+    required this.child,
+  });
+
+  final bool Function() canFocus;
+  final VoidCallback onStale;
+  final Widget child;
+
+  @override
+  State<_HomericContextMenuFocusScope> createState() =>
+      _HomericContextMenuFocusScopeState();
+}
+
+class _HomericContextMenuFocusScopeState
+    extends State<_HomericContextMenuFocusScope> {
+  final FocusScopeNode _scope = FocusScopeNode(
+    debugLabel: 'Homeric context menu',
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!widget.canFocus()) {
+        widget.onStale();
+        return;
+      }
+      _scope.nextFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scope.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FocusScope(
+        node: _scope,
+        child: widget.child,
+      );
 }
 
 final class _MoveCaretIntent extends Intent {
@@ -3101,6 +3376,11 @@ final class _EditableHostCommandDelegate
   }
 
   @override
+  void showAutocorrectionPromptRect(TextRange range) {
+    state._showAutocorrectionPromptRect(range, epoch);
+  }
+
+  @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {
     state._updateFloatingCursor(point, epoch);
   }
@@ -3117,6 +3397,7 @@ const _selectAllSemanticsAction = CustomSemanticsAction(label: 'Select all');
 final class _EditableSemantics extends SingleChildRenderObjectWidget {
   const _EditableSemantics({
     required this.value,
+    required this.hint,
     required this.selection,
     required this.focused,
     required this.editable,
@@ -3134,6 +3415,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
   });
 
   final String value;
+  final String? hint;
   final TextSelection? selection;
   final bool focused;
   final bool editable;
@@ -3152,6 +3434,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
   RenderObject createRenderObject(BuildContext context) =>
       _RenderEditableSemantics(
         value: value,
+        hint: hint,
         selection: selection,
         focused: focused,
         editable: editable,
@@ -3172,6 +3455,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
       BuildContext context, _RenderEditableSemantics renderObject) {
     renderObject
       ..value = value
+      ..hint = hint
       ..selection = selection
       ..focused = focused
       ..editable = editable
@@ -3191,6 +3475,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
 final class _RenderEditableSemantics extends RenderProxyBox {
   _RenderEditableSemantics({
     required String value,
+    required String? hint,
     required TextSelection? selection,
     required bool focused,
     required bool editable,
@@ -3205,6 +3490,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     required VoidCallback? onPaste,
     required VoidCallback? onSelectAll,
   })  : _value = value,
+        _hint = hint,
         _selection = selection,
         _focused = focused,
         _editable = editable,
@@ -3220,6 +3506,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
         _onSelectAll = onSelectAll;
 
   String _value;
+  String? _hint;
   TextSelection? _selection;
   bool _focused;
   bool _editable;
@@ -3237,6 +3524,12 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   set value(String value) {
     if (_value == value) return;
     _value = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  set hint(String? value) {
+    if (_hint == value) return;
+    _hint = value;
     markNeedsSemanticsUpdate();
   }
 
@@ -3327,6 +3620,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
       ..textDirection = _textDirection
       ..onFocus = _onFocus
       ..onTap = _onTap;
+    if (_hint case final hint?) config.hint = hint;
     if (!_editable) return;
     config
       ..isTextField = true

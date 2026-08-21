@@ -1,8 +1,8 @@
 /// Internal platform touch-selection chrome shared by editable hosts.
 library;
 
-import 'package:flutter/foundation.dart' show internal;
 import 'package:flutter/widgets.dart';
+import 'package:meta/meta.dart' show internal;
 
 /// One current canonical selection endpoint projected into Flutter geometry.
 @internal
@@ -32,11 +32,12 @@ final class HomericSelectionOverlayCoordinator {
   TextMagnifierConfiguration? _magnifierConfiguration;
   MagnifierInfo? _magnifierInfo;
   bool _magnifierRequested = false;
+  bool _magnifierVisible = false;
 
   bool get visible => _overlay != null;
   bool get startHandleVisible => _startHandleVisible.value;
   bool get endHandleVisible => _endHandleVisible.value;
-  bool get magnifierVisible => _overlay?.magnifierExists ?? false;
+  bool get magnifierVisible => _overlay != null && _magnifierVisible;
 
   void sync({
     required BuildContext context,
@@ -141,14 +142,23 @@ final class HomericSelectionOverlayCoordinator {
   }
 
   void showOrUpdateMagnifier(MagnifierInfo info) {
+    if (identical(
+      _magnifierConfiguration,
+      TextMagnifierConfiguration.disabled,
+    )) {
+      _magnifierRequested = false;
+      _magnifierInfo = null;
+      return;
+    }
     _magnifierRequested = true;
     _magnifierInfo = info;
     final overlay = _overlay;
     if (overlay == null) return;
-    if (overlay.magnifierExists) {
+    if (_magnifierVisible) {
       overlay.updateMagnifier(info);
     } else {
       overlay.showMagnifier(info);
+      _magnifierVisible = true;
     }
   }
 
@@ -156,6 +166,7 @@ final class HomericSelectionOverlayCoordinator {
     _magnifierRequested = false;
     _magnifierInfo = null;
     _overlay?.hideMagnifier();
+    _magnifierVisible = false;
   }
 
   void hide() {
@@ -170,6 +181,7 @@ final class HomericSelectionOverlayCoordinator {
     _endLayerLink = null;
     _controls = null;
     _magnifierConfiguration = null;
+    _magnifierVisible = false;
     _startHandleVisible.value = false;
     _endHandleVisible.value = false;
   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/cupertino.dart' show CupertinoButton;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart'
     show
@@ -201,9 +202,21 @@ void main() {
             .first
             .toRect()
             .center;
+    final stationary = origin +
+        geometry
+            .caretRect(
+              const DocOffset(5),
+            )
+            .value
+            .center;
     final startTarget = tester.widget<CompositedTransformTarget>(find.byKey(
       const ValueKey<(HomericSelectionEndpoint, String)>(
         (HomericSelectionEndpoint.start, 'b'),
+      ),
+    ));
+    final endTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.end, 'b'),
       ),
     ));
     final startFollower = find.byWidgetPredicate(
@@ -224,14 +237,91 @@ void main() {
     );
     await drag.moveBy(const Offset(0, 24));
     await tester.pump();
+    await drag.moveTo(stationary);
+    await tester.pump();
+    expect(controller.selection!.isCollapsed, isTrue);
     await drag.moveTo(beta);
+    await tester.pump();
     await tester.pump();
 
     expect(controller.selection!.anchor, document.positionAt(0, 5));
     expect(controller.selection!.head, greaterThan(document.positionAt(0, 5)));
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.start, 'b'),
+            ),
+          ))
+          .link,
+      same(endTarget.link),
+      reason: 'the stationary endpoint keeps the physical end-handle link',
+    );
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.end, 'b'),
+            ),
+          ))
+          .link,
+      same(startTarget.link),
+      reason: 'the dragged physical start handle follows the moving head',
+    );
     await drag.up();
     await tester.pump();
     expect(controller.selection!.anchor, document.positionAt(0, 5));
+
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 5),
+      head: document.positionAt(0, 10),
+    ));
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+    final currentEndTarget =
+        tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.end, 'b'),
+      ),
+    ));
+    final endFollower = find.byWidgetPredicate(
+      (widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, currentEndTarget.link),
+    );
+    final endHandleGesture = find
+        .descendant(
+          of: endFollower,
+          matching: find.byType(RawGestureDetector),
+        )
+        .first;
+    final reverseDrag = await tester.startGesture(
+      tester.getCenter(endHandleGesture),
+      kind: PointerDeviceKind.touch,
+    );
+    await reverseDrag.moveBy(const Offset(0, 24));
+    await tester.pump();
+    await reverseDrag.moveTo(stationary);
+    await tester.pump();
+    expect(controller.selection!.isCollapsed, isTrue);
+    await reverseDrag.moveTo(alpha);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.selection!.anchor, document.positionAt(0, 5));
+    expect(controller.selection!.head, lessThan(document.positionAt(0, 5)));
+    expect(
+      tester
+          .widget<CompositedTransformTarget>(find.byKey(
+            const ValueKey<(HomericSelectionEndpoint, String)>(
+              (HomericSelectionEndpoint.start, 'b'),
+            ),
+          ))
+          .link,
+      same(endTarget.link),
+      reason: 'the standalone physical end handle follows the moving head',
+    );
+    await reverseDrag.up();
+    await tester.pump();
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -374,6 +464,142 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(controller.selection, selectionBeforeClose,
         reason: 'a retained callback from the closed epoch is inert');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('standalone rotation revokes retained long-press updates',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view
+      ..physicalSize = const Size(500, 300)
+      ..devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final document = _document('alpha beta');
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 200,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: 'b',
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    final paragraph = find.byType(HomericParagraph);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final origin = tester.getTopLeft(paragraph);
+    final alpha = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(0), const DocOffset(5)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final beta = origin +
+        geometry
+            .rectsForRange(
+              DocRange(const DocOffset(6), const DocOffset(10)),
+            )
+            .value
+            .first
+            .toRect()
+            .center;
+    final gesture = await tester.startGesture(
+      alpha,
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await gesture.moveTo(beta);
+    await tester.pump();
+    final selectionBeforeRotation = controller.selection;
+
+    tester.view.physicalSize = const Size(300, 500);
+    await tester.pump();
+    await tester.pump();
+    await gesture.moveTo(alpha);
+    await tester.pump();
+    expect(controller.selection, selectionBeforeRotation,
+        reason: 'the retained callback is inert after geometry changes');
+    await gesture.up();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('floating cursor is revoked by a new layout generation',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final document = _document('alpha beta');
+    final initial = HomericSelection.collapsed(document.positionAt(0, 1));
+    final controller = HomericEditorController(
+      document: document,
+      selection: initial,
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    var scaler = TextScaler.noScaling;
+    late StateSetter rebuild;
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: StatefulBuilder(builder: (context, setState) {
+          rebuild = setState;
+          return SizedBox(
+            width: 200,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: 'b',
+              focusNode: focusNode,
+              textScaler: scaler,
+              resolveStyle: (_) => _style,
+            ),
+          );
+        }),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    final callback = session.debugFloatingCursorCallback!;
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Start,
+      offset: Offset.zero,
+    ));
+    callback(RawFloatingCursorPoint(
+      state: FloatingCursorDragState.Update,
+      offset: const Offset(60, 0),
+    ));
+    await tester.pump();
+    expect(
+        find.byKey(const ValueKey('homeric-floating-caret-b')), findsOneWidget);
+
+    rebuild(() => scaler = const TextScaler.linear(1.5));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('homeric-floating-caret-b')), findsNothing,
+        reason: 'layout replacement synchronously revokes stale cursor paint');
+    callback(RawFloatingCursorPoint(state: FloatingCursorDragState.End));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.selection, initial,
+        reason: 'stale geometry cannot settle a canonical caret');
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -828,6 +1054,7 @@ void main() {
     ));
     focusNode.requestFocus();
     await tester.pump();
+    await tester.pump();
     expect(session.activeBlockId, 'a');
 
     rebuild(() => blockId = 'b');
@@ -1002,6 +1229,214 @@ void main() {
     );
     await tester.pump();
     expect(controller.document.blocks.single.text, 'plain');
+    handle.dispose();
+  });
+
+  testWidgets(
+      'placeholder is layout-neutral, pointer-transparent, and uses the editable semantics node',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    final document = _document('');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    var singleTaps = 0;
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+      placeholderText: 'Start writing',
+      placeholderStyle: const TextStyle(
+        color: Color(0xFF777777),
+        fontSize: 14,
+      ),
+      onSingleTap: (_, __, ___) => singleTaps++,
+    )));
+    await tester.pump();
+
+    final paragraph = find.byType(HomericParagraph);
+    final sizeBefore = tester.getSize(paragraph);
+    final caretBefore = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    ).caretRect(const DocOffset(0)).value;
+    expect(find.byKey(const ValueKey('homeric-placeholder-b')), findsNothing);
+
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+
+    expect(session.activeBlockId, 'b');
+    expect(find.byKey(const ValueKey('homeric-placeholder-b')), findsOneWidget);
+    expect(tester.getSize(paragraph), sizeBefore);
+    expect(
+      ParagraphGeometry(
+        tester.renderObject<RenderHomericParagraph>(paragraph),
+      ).caretRect(const DocOffset(0)).value,
+      caretBefore,
+    );
+    final textFields = find.semantics.byPredicate(
+      // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+      // ignore: deprecated_member_use
+      (node) => node.getSemanticsData().hasFlag(ui.SemanticsFlag.isTextField),
+    );
+    expect(textFields, findsOneWidget);
+    expect(
+      tester
+          .getSemantics(find.byType(HomericEditableParagraph))
+          .getSemanticsData()
+          .hint,
+      'Start writing',
+    );
+    final promptAnnouncements = find.semantics.byPredicate((node) {
+      final data = node.getSemanticsData();
+      return data.label == 'Start writing' || data.hint == 'Start writing';
+    });
+    expect(promptAnnouncements, findsOneWidget);
+    final promptData = promptAnnouncements.evaluate().single.getSemanticsData();
+    // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(promptData.hasFlag(ui.SemanticsFlag.isTextField), isTrue);
+    // ignore: deprecated_member_use
+    expect(promptData.hasFlag(ui.SemanticsFlag.isFocused), isTrue);
+
+    await tester.tapAt(tester.getCenter(
+      find.byKey(const ValueKey('homeric-placeholder-b')),
+    ));
+    await tester.pump();
+    expect(focusNode.hasFocus, isTrue);
+    expect(controller.selection,
+        HomericSelection.collapsed(document.positionAt(0, 0)));
+    expect(singleTaps, 1);
+    handle.dispose();
+  });
+
+  testWidgets(
+      'placeholder visibility follows eligibility and one real input history unit',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    final document = Document([
+      Block(id: 'b', type: 'paragraph', runs: const []),
+      Block(id: 'other', type: 'paragraph', runs: [InlineRun('other')]),
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    var commits = 0;
+    final subscription = controller.committedChanges.listen((_) => commits++);
+    addTearDown(subscription.cancel);
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+      placeholderText: 'Start writing',
+      placeholderStyle: _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    final placeholder = find.byKey(const ValueKey('homeric-placeholder-b'));
+    void expectPlaceholder(bool visible, {String? reason}) {
+      expect(
+        placeholder,
+        visible ? findsOneWidget : findsNothing,
+        reason: reason,
+      );
+      expect(
+        tester
+            .getSemantics(find.byType(HomericEditableParagraph))
+            .getSemanticsData()
+            .hint,
+        visible ? 'Start writing' : isEmpty,
+        reason: reason,
+      );
+    }
+
+    expectPlaceholder(true);
+
+    focusNode.unfocus();
+    await tester.pump();
+    await tester.pump();
+    expectPlaceholder(false, reason: 'actual focus is required');
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+    expectPlaceholder(true);
+
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(1, 0)),
+    );
+    await tester.pump();
+    expectPlaceholder(false, reason: 'selection belongs elsewhere');
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    await tester.pump();
+    expectPlaceholder(true);
+
+    expect(controller.setReadOnly(true), isTrue);
+    await tester.pump();
+    expectPlaceholder(false, reason: 'controller is read-only');
+    expect(controller.setReadOnly(false), isTrue);
+    await tester.pump();
+    expectPlaceholder(true);
+
+    session.blur();
+    await tester.pump();
+    await tester.pump();
+    expectPlaceholder(false, reason: 'input capability was revoked');
+    focusNode.unfocus();
+    await tester.pump();
+    focusNode.requestFocus();
+    await tester.pump();
+    expectPlaceholder(true);
+
+    session.debugDeltaCallback!(const <TextEditingDelta>[
+      TextEditingDeltaInsertion(
+        oldText: '',
+        textInserted: 'X',
+        insertionOffset: 0,
+        selection: TextSelection.collapsed(offset: 1),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blockById('b')!.text, 'X');
+    expectPlaceholder(false, reason: 'content is canonical only');
+    expect(commits, 1);
+    expect(controller.undo(), isTrue);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.document.blockById('b')!.text, isEmpty);
+    expect(controller.activeBlockId, 'b');
+    expect(focusNode.hasFocus, isTrue);
+    expect(controller.isReadOnly, isFalse);
+    expect(session.activeBlockId, 'b');
+    expectPlaceholder(true);
+    expect(controller.undo(), isFalse);
+
+    final data = tester
+        .getSemantics(find.byType(HomericEditableParagraph))
+        .getSemanticsData();
+    expect(data.value, isEmpty);
+    expect(data.hint, 'Start writing');
     handle.dispose();
   });
 
@@ -1322,6 +1757,85 @@ void main() {
         reason: 'blur keeps the logical selection');
     expect(controller.composing, isNull,
         reason: 'blur commits and clears visible composition');
+  });
+
+  testWidgets('iOS autocorrection prompt paints transiently and clears',
+      (tester) async {
+    const promptColor = Color(0x663366FF);
+    final document = Document([
+      Block(
+        id: 'b',
+        type: 'paragraph',
+        runs: [InlineRun('alpha')],
+      ),
+      Block(
+        id: 'c',
+        type: 'paragraph',
+        runs: [InlineRun('beta')],
+      ),
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: const HomericSelection.collapsed(2),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      selectionColor: promptColor,
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+
+    await _sendAutocorrectionPrompt(binding, 1, 1, 4);
+    await tester.pump();
+    var render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect(render.paintLayers, hasLength(1));
+    expect(render.paintLayers.single.band, PaintBand.underlay);
+    expect(render.paintLayers.single.range,
+        DocRange(const DocOffset(1), const DocOffset(4)));
+    expect(
+      (render.paintLayers.single.spec as SolidWashSpec).color,
+      promptColor,
+    );
+
+    expect(controller.replaceSelection('X'), isTrue);
+    await tester.pump();
+    render = tester
+        .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph));
+    expect(render.paintLayers, isEmpty,
+        reason: 'an edit invalidates the platform prompt range');
+
+    await _sendAutocorrectionPrompt(binding, 1, 0, 2);
+    await tester.pump();
+    expect(render.paintLayers, hasLength(1));
+    session.blur();
+    await tester.pump();
+    expect(render.paintLayers, isEmpty,
+        reason: 'ending the input epoch dismisses platform prompt paint');
+
+    focusNode.unfocus();
+    await tester.pump();
+    focusNode.requestFocus();
+    await tester.pump();
+    await _sendAutocorrectionPrompt(binding, 2, 0, 2);
+    await tester.pump();
+    expect(render.paintLayers, hasLength(1));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(1, 0)),
+    );
+    await tester.pump();
+    expect(render.paintLayers, isEmpty,
+        reason: 'moving input ownership to another block dismisses the range');
   });
 
   testWidgets('empty paragraph is hit-testable and accepts its first input',
@@ -1776,18 +2290,29 @@ void main() {
     await tester.pump();
     expect(_localSelection(controller),
         const BlockTextSelection(anchor: 0, head: 3));
-    final toolbar = tester.widget<AdaptiveTextSelectionToolbar>(
-      find.byType(AdaptiveTextSelectionToolbar),
+    final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+    final menuButtons = tester
+        .widgetList<CupertinoButton>(
+          find.descendant(of: toolbar, matching: find.byType(CupertinoButton)),
+        )
+        .toList(growable: false);
+    expect(
+      find.descendant(of: toolbar, matching: find.text('Cut')),
+      findsOneWidget,
     );
-    expect(toolbar.buttonItems!.map((item) => item.type), [
-      ContextMenuButtonType.cut,
-      ContextMenuButtonType.copy,
-      ContextMenuButtonType.paste,
-      ContextMenuButtonType.selectAll,
-      ContextMenuButtonType.custom,
-      ContextMenuButtonType.custom,
-    ]);
-    expect(toolbar.buttonItems!.map((item) => item.onPressed != null), [
+    expect(
+      find.descendant(of: toolbar, matching: find.text('Copy')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: toolbar, matching: find.text('Paste')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: toolbar, matching: find.text('Select All')),
+      findsOneWidget,
+    );
+    expect(menuButtons.map((button) => button.onPressed != null), [
       true,
       true,
       true,
@@ -1795,7 +2320,7 @@ void main() {
       false,
       false,
     ]);
-    final staleCut = toolbar.buttonItems!.first.onPressed!;
+    final staleCut = menuButtons.first.onPressed!;
     controller.setSelection(const HomericSelection.collapsed(8));
     await tester.pump();
     staleCut();
@@ -2127,11 +2652,15 @@ void main() {
       buttons: kSecondaryMouseButton,
     );
     await tester.pump();
-    final toolbar = tester.widget<AdaptiveTextSelectionToolbar>(
-      find.byType(AdaptiveTextSelectionToolbar),
+    final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+    final suggestion = tester.widget<CupertinoButton>(
+      find
+          .descendant(of: toolbar, matching: find.byType(CupertinoButton))
+          .first,
     );
-    expect(toolbar.buttonItems!.first.label, 'strong');
-    toolbar.buttonItems!.first.onPressed!();
+    expect(find.descendant(of: toolbar, matching: find.text('strong')),
+        findsOneWidget);
+    suggestion.onPressed!();
     await tester.pump();
     expect(controller.document.blocks.single.text, 'strong');
     expect(controller.canUndo, isTrue);
@@ -2377,6 +2906,23 @@ Future<void> _sendShowToolbar(
   });
   await binding.defaultBinaryMessenger.handlePlatformMessage(
     'flutter/textinput',
+    message,
+    (_) {},
+  );
+}
+
+Future<void> _sendAutocorrectionPrompt(
+  TestWidgetsFlutterBinding binding,
+  int clientId,
+  int start,
+  int end,
+) async {
+  final message = SystemChannels.textInput.codec.encodeMethodCall(MethodCall(
+    'TextInputClient.showAutocorrectionPromptRect',
+    <Object?>[clientId, start, end],
+  ));
+  await binding.defaultBinaryMessenger.handlePlatformMessage(
+    SystemChannels.textInput.name,
     message,
     (_) {},
   );

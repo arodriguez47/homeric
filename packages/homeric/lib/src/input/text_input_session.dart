@@ -19,6 +19,9 @@ abstract interface class HomericTextInputCommandDelegate {
   /// Requests the current host's editing toolbar.
   void showToolbar();
 
+  /// Highlights the canonical block-local range targeted by iOS autocorrect.
+  void showAutocorrectionPromptRect(TextRange range);
+
   /// Forwards one ordered platform floating-cursor callback.
   void updateFloatingCursor(RawFloatingCursorPoint point);
 
@@ -32,18 +35,27 @@ final class HomericInsertParagraphBreakIntent extends Intent {
   const HomericInsertParagraphBreakIntent();
 }
 
+/// Opaque capability for publishing platform caret and composing geometry.
+///
+/// A session replaces this object whenever its attached block or host command
+/// capability changes. Consumers capture it with the geometry they measure;
+/// stale rows can then be rejected without exposing or guessing epoch values.
+final class HomericTextInputGeometryLease {
+  HomericTextInputGeometryLease._();
+}
+
 /// Connects one focused canonical block to Flutter's delta text-input model.
 ///
 /// This surface is experimental until a real Nexus consumer validates it. The
 /// platform value always contains raw block text; projected view offsets never
 /// cross this boundary.
-final class HomericTextInputSession {
+final class HomericTextInputSession extends ChangeNotifier {
   /// Creates a session that observes [controller].
   HomericTextInputSession({
     required this.controller,
     TextInputConfiguration configuration = const TextInputConfiguration(
       inputType: TextInputType.text,
-      inputAction: TextInputAction.none,
+      inputAction: TextInputAction.newline,
       enableDeltaModel: true,
     ),
   }) : _configuration = configuration {
@@ -68,6 +80,8 @@ final class HomericTextInputSession {
   int _nextEpoch = 0;
   int? _currentEpoch;
   int? _geometryGeneration;
+  HomericTextInputGeometryLease? _geometryLease;
+  Object? _geometryOwner;
   HomericTextInputCommandDelegate? _commandDelegate;
   bool _applyingRemote = false;
   bool _deltasSuspended = false;
@@ -81,6 +95,15 @@ final class HomericTextInputSession {
   /// Stable id of the block exposed to the platform, if connected.
   String? get activeBlockId => isAttached ? _blockId : null;
 
+  /// Returns the current geometry capability only to its exact attached host.
+  HomericTextInputGeometryLease? geometryLeaseFor({
+    required String blockId,
+    required Object owner,
+  }) =>
+      isAttached && _blockId == blockId && identical(_geometryOwner, owner)
+          ? _geometryLease
+          : null;
+
   /// Captures the current adapter's epoch-bound delta callback for tests.
   ///
   /// The opaque callback proves that a superseded adapter cannot act as the
@@ -88,7 +111,7 @@ final class HomericTextInputSession {
   @visibleForTesting
   ValueChanged<List<TextEditingDelta>>? get debugDeltaCallback {
     final client = _client;
-    return client?.updateEditingValueWithDeltas;
+    return client?.debugDeltaCallback;
   }
 
   /// Captures the current adapter's epoch-bound selector callback for tests.
@@ -104,14 +127,23 @@ final class HomericTextInputSession {
   ValueChanged<RawFloatingCursorPoint>? get debugFloatingCursorCallback =>
       _client?.updateFloatingCursor;
 
+  /// Captures the current adapter's epoch-bound autocorrection callback.
+  @visibleForTesting
+  void Function(int start, int end)? get debugAutocorrectionPromptCallback =>
+      _client?.showAutocorrectionPromptRect;
+
   /// Opens platform input for [blockId], or reuses its live connection.
   ///
   /// A valid canonical selection is sufficient; layout geometry may arrive
-  /// later through [publishGeometry].
+  /// later through [publishGeometry]. [geometryOwner] may identify a host that
+  /// does not install a [commandDelegate]; without either owner, geometry
+  /// publication stays disabled rather than accepting an ambiguous callback.
   bool attach({
     required String blockId,
     HomericTextInputCommandDelegate? commandDelegate,
+    Object? geometryOwner,
   }) {
+    final resolvedGeometryOwner = geometryOwner ?? commandDelegate;
     if (_disposed ||
         controller.isReadOnly ||
         controller.activeBlockId != blockId ||
@@ -120,11 +152,12 @@ final class HomericTextInputSession {
     }
     if (isAttached &&
         _blockId == blockId &&
-        identical(_commandDelegate, commandDelegate)) {
+        identical(_commandDelegate, commandDelegate) &&
+        identical(_geometryOwner, resolvedGeometryOwner)) {
       return true;
     }
 
-    _close(CompositionInterruption.activeBlockSwitch);
+    _close(CompositionInterruption.activeBlockSwitch, notify: false);
     final value = _canonicalValue(blockId);
     if (value == null) return false;
 
@@ -136,10 +169,15 @@ final class HomericTextInputSession {
     _connection = connection;
     _blockId = blockId;
     _commandDelegate = commandDelegate;
+    _geometryOwner = resolvedGeometryOwner;
     _shadowValue = value;
     _geometryGeneration = null;
+    _geometryLease = resolvedGeometryOwner == null
+        ? null
+        : HomericTextInputGeometryLease._();
     connection.setEditingState(value);
     connection.show();
+    notifyListeners();
     return true;
   }
 
@@ -164,26 +202,42 @@ final class HomericTextInputSession {
   bool retarget({
     required String blockId,
     HomericTextInputCommandDelegate? commandDelegate,
+    Object? geometryOwner,
   }) {
+    final resolvedGeometryOwner = geometryOwner ?? commandDelegate;
     if (_disposed ||
         controller.isReadOnly ||
         controller.activeBlockId != blockId) {
       return false;
     }
     if (!isAttached) {
-      return attach(blockId: blockId, commandDelegate: commandDelegate);
+      return attach(
+        blockId: blockId,
+        commandDelegate: commandDelegate,
+        geometryOwner: geometryOwner,
+      );
     }
     final value = _canonicalValue(blockId);
     if (value == null) return false;
+    final blockChanged = _blockId != blockId;
+    final hostChanged = !identical(_commandDelegate, commandDelegate) ||
+        !identical(_geometryOwner, resolvedGeometryOwner);
     _blockId = blockId;
     _commandDelegate = commandDelegate;
+    _geometryOwner = resolvedGeometryOwner;
     _shadowValue = value;
     _geometryGeneration = null;
+    if (blockChanged || hostChanged) {
+      _geometryLease = resolvedGeometryOwner == null
+          ? null
+          : HomericTextInputGeometryLease._();
+    }
     _connection!.setEditingState(value);
     // Reassert the platform first responder as well as the canonical value.
     // AppKit may release it while a selector-triggered structural edit moves
     // the active row even though Flutter retains the same FocusNode.
     _connection!.show();
+    if (blockChanged || hostChanged) notifyListeners();
     return true;
   }
 
@@ -192,10 +246,15 @@ final class HomericTextInputSession {
 
   /// Publishes current-layout platform geometry for the connected block.
   ///
+  /// [lease] is the opaque attachment witness captured with the geometry. A
+  /// recycled row or replaced same-block host therefore cannot position the
+  /// current platform caret or IME candidate window.
+  ///
   /// [documentRevision] is an identity witness: geometry from any prior
   /// immutable [Document] is rejected. A regressing [layoutGeneration] is also
   /// rejected, allowing the host to race layout safely without pausing input.
   bool publishGeometry({
+    required HomericTextInputGeometryLease lease,
     required Document documentRevision,
     required int layoutGeneration,
     required Size editableSize,
@@ -207,6 +266,9 @@ final class HomericTextInputSession {
     if (_disposed ||
         connection == null ||
         !connection.attached ||
+        !identical(_geometryLease, lease) ||
+        controller.activeBlockId != _blockId ||
+        controller.isReadOnly ||
         !identical(documentRevision, controller.document) ||
         (_geometryGeneration != null &&
             layoutGeneration < _geometryGeneration!)) {
@@ -453,10 +515,15 @@ final class HomericTextInputSession {
     }
     final blockChanged = _blockId != survivorId;
     _blockId = survivorId;
-    if (blockChanged) _commandDelegate = null;
+    if (blockChanged) {
+      _commandDelegate = null;
+      _geometryOwner = null;
+      _geometryLease = null;
+    }
     _shadowValue = canonical;
     _geometryGeneration = null;
     _connection?.setEditingState(canonical);
+    if (blockChanged) notifyListeners();
   }
 
   void _legacyUpdate(int epoch, TextEditingValue value) {
@@ -512,12 +579,20 @@ final class HomericTextInputSession {
     _blockId = null;
     _shadowValue = null;
     _geometryGeneration = null;
+    _geometryLease = null;
+    _geometryOwner = null;
     _commandDelegate = null;
     controller.interruptComposition(CompositionInterruption.platformClose);
+    notifyListeners();
   }
 
-  void _close(CompositionInterruption interruption) {
+  void _close(
+    CompositionInterruption interruption, {
+    bool notify = true,
+  }) {
     final connection = _connection;
+    final hadAttachment =
+        _currentEpoch != null || _blockId != null || connection != null;
     _commandDelegate?.cancelTransientInput();
     _invalidateEpoch();
     _connection = null;
@@ -525,6 +600,8 @@ final class HomericTextInputSession {
     _blockId = null;
     _shadowValue = null;
     _geometryGeneration = null;
+    _geometryLease = null;
+    _geometryOwner = null;
     _commandDelegate = null;
     _deltasSuspended = false;
     _suppressedSelector = null;
@@ -532,6 +609,7 @@ final class HomericTextInputSession {
     _suppressedSelectorTimer = null;
     controller.interruptComposition(interruption);
     connection?.close();
+    if (notify && hadAttachment) notifyListeners();
   }
 
   void _invalidateEpoch() {
@@ -584,20 +662,26 @@ final class HomericTextInputSession {
   }
 
   /// Invalidates and closes the live connection exactly once.
+  @override
   void dispose() {
     if (_disposed) return;
-    _disposed = true;
     controller.removeListener(_controllerChanged);
     _suppressedSelectorTimer?.cancel();
-    _close(CompositionInterruption.disposal);
+    _close(CompositionInterruption.disposal, notify: false);
+    _disposed = true;
+    super.dispose();
   }
 }
 
 final class _EpochTextInputClient with DeltaTextInputClient {
-  const _EpochTextInputClient(this.session, this.epoch);
+  _EpochTextInputClient(this.session, this.epoch);
 
   final HomericTextInputSession session;
   final int epoch;
+
+  /// Stable test capability whose identity changes only with the client epoch.
+  late final ValueChanged<List<TextEditingDelta>> debugDeltaCallback =
+      updateEditingValueWithDeltas;
 
   @override
   TextEditingValue? get currentTextEditingValue =>
@@ -631,7 +715,20 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   }
 
   @override
-  void showAutocorrectionPromptRect(int start, int end) {}
+  void showAutocorrectionPromptRect(int start, int end) {
+    final value = session._shadowValue;
+    if (epoch != session._currentEpoch ||
+        session._disposed ||
+        value == null ||
+        start < 0 ||
+        end <= start ||
+        end > value.text.length) {
+      return;
+    }
+    session._commandDelegate?.showAutocorrectionPromptRect(
+      TextRange(start: start, end: end),
+    );
+  }
 
   // Flutter added this optional hook after Homeric's 3.24 minimum.
   // ignore: annotate_overrides

@@ -8,7 +8,8 @@ library homeric;
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';
 export 'src/editing/editor_controller.dart';
-export 'src/editing/editable_document.dart';
+export 'src/editing/editable_document.dart'
+    hide homericPhysicalSelectionEndpoint;
 export 'src/editing/spell_check.dart'
     show HomericSpellCheckProvider, HomericSpellCheckRequest;
 export 'src/editing/editor_clipboard.dart'

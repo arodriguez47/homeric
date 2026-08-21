@@ -520,21 +520,23 @@ void main() {
       await tester.pumpAndSettle();
 
       final undo = tester.widget<OutlinedButton>(
-        find.widgetWithText(OutlinedButton, 'Undo'),
+        find.byKey(const ValueKey<String>('transaction-undo')),
       );
       final redo = tester.widget<OutlinedButton>(
-        find.widgetWithText(OutlinedButton, 'Redo'),
+        find.byKey(const ValueKey<String>('transaction-redo')),
       );
       expect(undo.onPressed, isNotNull);
       expect(redo.onPressed, isNull);
-      await tester.ensureVisible(find.widgetWithText(OutlinedButton, 'Undo'));
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Undo'));
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('transaction-undo')),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('transaction-undo')));
       await tester.pump();
       expect(vm.canRedo, isTrue);
       expect(
         tester
             .widget<OutlinedButton>(
-              find.widgetWithText(OutlinedButton, 'Redo'),
+              find.byKey(const ValueKey<String>('transaction-redo')),
             )
             .onPressed,
         isNotNull,

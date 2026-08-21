@@ -5,12 +5,18 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart'
     show cupertinoTextSelectionHandleControls;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart'
+    show
+        TargetPlatform,
+        ValueListenable,
+        defaultTargetPlatform,
+        visibleForTesting;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show RawFloatingCursorPoint;
 import 'package:flutter/widgets.dart';
+import 'package:meta/meta.dart' show internal;
 
 import '../input/text_input_session.dart';
 import '../model/block.dart';
@@ -28,6 +34,35 @@ typedef HomericEditableBlockBuilder = Widget Function(
   Block block,
   FocusNode focusNode,
 );
+
+/// Consumer-owned presentation for the document edge grabber.
+///
+/// Homeric keeps the 44px reorder target and its semantics stable while the
+/// consumer chooses how prominently the `⋮` glyph is painted. The default
+/// remains fully visible for products that want an explicit affordance;
+/// setting [idleOpacity] to zero creates a hover-only desktop handle without
+/// changing drag or accessibility behavior.
+final class HomericBlockGrabberStyle {
+  const HomericBlockGrabberStyle({
+    this.idleOpacity = 1,
+    this.hoverOpacity = 1,
+    this.fadeDuration = const Duration(milliseconds: 100),
+    this.textStyle,
+  })  : assert(idleOpacity >= 0 && idleOpacity <= 1),
+        assert(hoverOpacity >= 0 && hoverOpacity <= 1);
+
+  /// Glyph opacity while the pointer is outside this block's handle.
+  final double idleOpacity;
+
+  /// Glyph opacity while the pointer is over this block's handle.
+  final double hoverOpacity;
+
+  /// Duration used when moving between idle and hover opacity.
+  final Duration fadeDuration;
+
+  /// Optional glyph style merged over the inherited text color.
+  final TextStyle? textStyle;
+}
 
 /// Platform-adaptive touch-selection policy for an editable host.
 final class HomericTouchSelectionConfiguration {
@@ -288,6 +323,30 @@ typedef HomericDocumentSelectionHitTest = HomericDocumentSelectionHit? Function(
 /// Which normalized edge of the canonical selection is being queried.
 enum HomericSelectionEndpoint { start, end }
 
+/// Maps a normalized selection edge to the physical handle that owns it.
+@internal
+HomericSelectionEndpoint homericPhysicalSelectionEndpoint({
+  required HomericSelectionEndpoint endpoint,
+  required int selectionStart,
+  required int selectionEnd,
+  required int selectionHead,
+  required HomericSelectionEndpoint? movingEndpoint,
+}) {
+  if (movingEndpoint == null) return endpoint;
+  final opposite = movingEndpoint == HomericSelectionEndpoint.start
+      ? HomericSelectionEndpoint.end
+      : HomericSelectionEndpoint.start;
+  if (selectionStart == selectionEnd) {
+    return endpoint == HomericSelectionEndpoint.start
+        ? movingEndpoint
+        : opposite;
+  }
+  final position = endpoint == HomericSelectionEndpoint.start
+      ? selectionStart
+      : selectionEnd;
+  return position == selectionHead ? movingEndpoint : opposite;
+}
+
 /// Revocable geometry for one normalized canonical selection endpoint.
 final class HomericSelectionEndpointGeometry {
   const HomericSelectionEndpointGeometry._({
@@ -385,6 +444,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
   })  : blockBuilder = null,
+        blockGrabberStyle = const HomericBlockGrabberStyle(),
         scrollController = null,
         padding = EdgeInsets.zero,
         scrollPadding = null,
@@ -407,6 +467,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.onMoveBlock,
     this.onMoveRejected,
     this.onCommandRejected,
+    this.blockGrabberStyle = const HomericBlockGrabberStyle(),
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
   })  : assert(cacheExtent >= 0),
@@ -443,6 +504,9 @@ class HomericEditableDocument extends StatefulWidget {
   /// Receives typed rejected-command feedback.
   final ValueChanged<HomericDocumentCommandRejection>? onCommandRejected;
 
+  /// Presentation applied to every document edge grabber.
+  final HomericBlockGrabberStyle blockGrabberStyle;
+
   /// Touch-selection policy shared by every mounted paragraph.
   final HomericTouchSelectionConfiguration touchSelectionConfiguration;
 
@@ -467,10 +531,15 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   final Map<String, _MountedSelectionHost> _selectionHosts =
       <String, _MountedSelectionHost>{};
   final LayerLink _touchToolbarLayerLink = LayerLink();
+  final LayerLink _touchStartHandleLayerLink = LayerLink();
+  final LayerLink _touchEndHandleLayerLink = LayerLink();
   final HomericSelectionOverlayCoordinator _touchOverlayCoordinator =
       HomericSelectionOverlayCoordinator();
   final Object _touchHandleDragOwner = Object();
   HomericSelectionEndpoint? _touchMovingEndpoint;
+  String? _touchStationaryBlockId;
+  Object? _touchStationaryHostOwner;
+  int? _touchStationaryLayoutGeneration;
   bool _touchSelectionRequested = false;
   bool _touchSelectionSyncScheduled = false;
   late BlockHeightCache _heightCache;
@@ -551,7 +620,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   @override
   void didChangeMetrics() {
-    cancelPointerSelectionDrag();
+    _cancelPointerSelectionDragWithoutRetarget();
     if (!_touchSelectionRequested) return;
     _disposeTouchSelectionOverlay();
     _scheduleTouchSelectionSync();
@@ -666,11 +735,16 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   /// Extends the current pointer selection through mounted row geometry.
-  void updatePointerSelectionDrag(Offset globalPoint) {
-    if (!_selectionDragActive || _selectionDragAnchor == null) return;
+  bool updatePointerSelectionDrag(
+    Offset globalPoint, {
+    Object? owner,
+  }) {
+    if (owner != null && !identical(owner, _selectionDragOwner)) return false;
+    if (!_selectionDragActive || _selectionDragAnchor == null) return false;
     _selectionDragPointer = globalPoint;
     _updatePointerSelectionHead(globalPoint);
     _syncSelectionAutoscroll(globalPoint);
+    return true;
   }
 
   /// Ends the pointer generation and retargets platform input once.
@@ -688,7 +762,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _focusLossCheckGeneration++;
     if (wasTouchHandleDrag) {
       _touchMovingEndpoint = null;
+      _clearTouchStationaryWitness();
       _touchOverlayCoordinator.hideMagnifier();
+      if (_touchSelectionRequested) _scheduleTouchSelectionSync();
     }
     return endSelectionDrag();
   }
@@ -714,6 +790,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _focusLossCheckGeneration++;
     if (wasTouchHandleDrag) {
       _touchMovingEndpoint = null;
+      _clearTouchStationaryWitness();
       _touchOverlayCoordinator.hideMagnifier();
     }
     if (_selectionDragActive) {
@@ -762,8 +839,37 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   void unregisterSelectionHost(String blockId, Object owner) {
     if (identical(_selectionHosts[blockId]?.owner, owner)) {
       _selectionHosts.remove(blockId);
-      if (_touchSelectionRequested) _scheduleTouchSelectionSync();
+      final stationaryHostRecycled = blockId == _touchStationaryBlockId &&
+          identical(owner, _touchStationaryHostOwner);
+      if (stationaryHostRecycled) {
+        _touchStationaryHostOwner = null;
+        _touchStationaryLayoutGeneration = null;
+      }
+      if (_touchSelectionRequested &&
+          !(stationaryHostRecycled &&
+              identical(_selectionDragOwner, _touchHandleDragOwner))) {
+        _scheduleTouchSelectionSync();
+      }
     }
+  }
+
+  /// Revokes a handle drag only when its stationary geometry changes.
+  @internal
+  void selectionHostLayoutChanged(
+    String blockId, {
+    required Object owner,
+    required int layoutGeneration,
+  }) {
+    if (!identical(_selectionDragOwner, _touchHandleDragOwner) ||
+        blockId != _touchStationaryBlockId) {
+      return;
+    }
+    if (_touchStationaryHostOwner == null) return;
+    if (identical(owner, _touchStationaryHostOwner) &&
+        layoutGeneration == _touchStationaryLayoutGeneration) {
+      return;
+    }
+    cancelTransientTouchInput();
   }
 
   /// Retargets once to the final selection head and resumes platform input.
@@ -941,6 +1047,28 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   HomericSelectionEndpoint? get debugTouchMovingEndpoint =>
       _touchMovingEndpoint;
 
+  /// Stable document-owned attachment for one logical selection endpoint.
+  ///
+  /// During a drag the logical start/end may swap, but the physical handle
+  /// being dragged must retain its layer link across rows and at the exact
+  /// collapsed crossing point.
+  @internal
+  LayerLink touchSelectionLayerLink(HomericSelectionEndpoint endpoint) {
+    final selection = widget.controller.selection;
+    final physicalEndpoint = selection == null
+        ? endpoint
+        : homericPhysicalSelectionEndpoint(
+            endpoint: endpoint,
+            selectionStart: selection.start,
+            selectionEnd: selection.end,
+            selectionHead: selection.head,
+            movingEndpoint: _touchMovingEndpoint,
+          );
+    return physicalEndpoint == HomericSelectionEndpoint.start
+        ? _touchStartHandleLayerLink
+        : _touchEndHandleLayerLink;
+  }
+
   /// Shows touch handles for the current canonical selection after layout.
   void showTouchSelectionChrome() {
     if (resolvedTouchSelectionConfiguration == null ||
@@ -952,14 +1080,44 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _scheduleTouchSelectionSync();
   }
 
+  /// Whether a still-focused recycled row may forward one structural key.
+  ///
+  /// A paragraph break advances the canonical active block synchronously,
+  /// before the fresh row can mount and take focus. Hardware can deliver a
+  /// second Return during that gap; the document remains the command owner and
+  /// accepts it unless another transient document gesture or mutation gate is
+  /// active.
+  @internal
+  bool get acceptsPendingRowStructuralKey =>
+      mounted &&
+      !_selectionDragActive &&
+      !widget.controller.isReadOnly &&
+      widget.controller.composing == null &&
+      widget.controller.activeBlockId != null;
+
   /// Hides every document-owned touch overlay without changing selection.
   void hideTouchSelectionChrome() {
     _touchSelectionRequested = false;
     _touchSelectionSyncScheduled = false;
     if (identical(_selectionDragOwner, _touchHandleDragOwner)) {
-      cancelPointerSelectionDrag(owner: _touchHandleDragOwner);
+      _cancelPointerSelectionDragWithoutRetarget();
     }
     _disposeTouchSelectionOverlay();
+  }
+
+  /// Revokes touch state owned by [owner] or by the document handle overlay.
+  ///
+  /// Platform connection closure must not retarget input while it is already
+  /// being torn down, so this cancellation never calls [endSelectionDrag].
+  @internal
+  void cancelTransientTouchInput({Object? owner}) {
+    final dragOwner = _selectionDragOwner;
+    if (owner == null ||
+        identical(dragOwner, owner) ||
+        identical(dragOwner, _touchHandleDragOwner)) {
+      _cancelPointerSelectionDragWithoutRetarget();
+    }
+    hideTouchSelectionChrome();
   }
 
   void _scheduleTouchSelectionSync() {
@@ -981,10 +1139,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
     final rawStart = selectionEndpointGeometry(HomericSelectionEndpoint.start);
     final rawEnd = selectionEndpointGeometry(HomericSelectionEndpoint.end);
-    final start =
+    var start =
         rawStart != null && _touchEndpointIsVisible(rawStart) ? rawStart : null;
-    final end =
-        rawEnd != null && _touchEndpointIsVisible(rawEnd) ? rawEnd : null;
+    var end = rawEnd != null && _touchEndpointIsVisible(rawEnd) ? rawEnd : null;
+    if (homericPhysicalSelectionEndpoint(
+          endpoint: HomericSelectionEndpoint.start,
+          selectionStart: selection.start,
+          selectionEnd: selection.end,
+          selectionHead: selection.head,
+          movingEndpoint: _touchMovingEndpoint,
+        ) ==
+        HomericSelectionEndpoint.end) {
+      (start, end) = (end, start);
+    }
     if (start == null && end == null) {
       _disposeTouchSelectionOverlay();
       return;
@@ -995,7 +1162,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       controls: configuration.selectionControls,
       magnifierConfiguration: configuration.magnifierConfiguration,
       toolbarLayerLink: _touchToolbarLayerLink,
-      collapsed: selection.isCollapsed,
+      collapsed: selection.isCollapsed && _touchMovingEndpoint == null,
       start: _touchOverlayEndpoint(start),
       end: _touchOverlayEndpoint(end),
       onSelectionHandleTapped: _showTouchToolbar,
@@ -1025,11 +1192,26 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       _endTouchHandleDrag();
       return;
     }
-    _touchMovingEndpoint = endpoint;
-    final stationary = endpoint == HomericSelectionEndpoint.start
-        ? selection.end
-        : selection.start;
+    final stationaryEndpoint = endpoint == HomericSelectionEndpoint.start
+        ? HomericSelectionEndpoint.end
+        : HomericSelectionEndpoint.start;
+    final stationary = stationaryEndpoint == HomericSelectionEndpoint.start
+        ? selection.start
+        : selection.end;
+    final resolved = widget.controller.document.resolve(stationary);
+    if (resolved is! InlinePosition) {
+      _touchOverlayCoordinator.hideMagnifier();
+      return;
+    }
+    final stationaryGeometry = selectionEndpointGeometry(stationaryEndpoint);
+    final stationaryOwner = stationaryGeometry == null
+        ? null
+        : _selectionHosts[stationaryGeometry.blockId]?.owner;
     beginPointerSelectionDrag(stationary, owner: _touchHandleDragOwner);
+    _touchMovingEndpoint = endpoint;
+    _touchStationaryBlockId = resolved.block.id;
+    _touchStationaryHostOwner = stationaryOwner;
+    _touchStationaryLayoutGeneration = stationaryGeometry?.layoutGeneration;
     _updateTouchMagnifier(globalPosition);
   }
 
@@ -1038,7 +1220,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         !identical(_selectionDragOwner, _touchHandleDragOwner)) {
       return;
     }
-    updatePointerSelectionDrag(globalPosition);
+    updatePointerSelectionDrag(globalPosition, owner: _touchHandleDragOwner);
     _updateTouchMagnifier(globalPosition);
   }
 
@@ -1046,9 +1228,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     endPointerSelectionDrag(owner: _touchHandleDragOwner);
   }
 
+  void _clearTouchStationaryWitness() {
+    _touchStationaryBlockId = null;
+    _touchStationaryHostOwner = null;
+    _touchStationaryLayoutGeneration = null;
+  }
+
   /// Updates the document-owned magnifier from a current touch gesture.
-  void updateTouchSelectionMagnifier(Offset globalPosition) {
+  bool updateTouchSelectionMagnifier(
+    Offset globalPosition, {
+    Object? owner,
+  }) {
+    if (owner != null && !identical(owner, _selectionDragOwner)) return false;
     _updateTouchMagnifier(globalPosition);
+    return true;
   }
 
   /// Hides the document-owned magnifier without changing logical selection.
@@ -2072,6 +2265,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                       (_selectionDragActive &&
                           widget.inputSession.activeBlockId == block.id),
                   canReorder: () => canReorderBlock(block.id),
+                  grabberStyle: widget.blockGrabberStyle,
                   onMove: (delta) => moveBlockBy(block.id, delta),
                   onHeight: _recordHeight,
                   onMount: (context, focusNode) {
@@ -2122,6 +2316,9 @@ final class _PendingRowCommandDelegate
 
   @override
   void showToolbar() {}
+
+  @override
+  void showAutocorrectionPromptRect(TextRange range) {}
 
   @override
   void updateFloatingCursor(RawFloatingCursorPoint point) {}
@@ -2214,6 +2411,7 @@ class _DocumentBlockRow extends StatefulWidget {
     required this.witness,
     required this.keepAlive,
     required this.canReorder,
+    required this.grabberStyle,
     required this.onMove,
     required this.onHeight,
     required this.onMount,
@@ -2229,6 +2427,7 @@ class _DocumentBlockRow extends StatefulWidget {
   final BlockHeightWitness witness;
   final ValueGetter<bool> keepAlive;
   final ValueGetter<bool> canReorder;
+  final HomericBlockGrabberStyle grabberStyle;
   final ValueChanged<int> onMove;
   final void Function(BlockHeightWitness witness, double height) onHeight;
   final void Function(BuildContext context, FocusNode focusNode) onMount;
@@ -2241,6 +2440,7 @@ class _DocumentBlockRow extends StatefulWidget {
 class _DocumentBlockRowState extends State<_DocumentBlockRow>
     with AutomaticKeepAliveClientMixin<_DocumentBlockRow> {
   late final FocusNode _focusNode = FocusNode();
+  ValueNotifier<bool>? _grabberHovered;
 
   @override
   bool get wantKeepAlive => widget.keepAlive();
@@ -2276,6 +2476,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
   void dispose() {
     widget.onUnmount(context, _focusNode);
     widget.controller.removeListener(_controllerChanged);
+    _grabberHovered?.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -2286,6 +2487,11 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
     final inheritedColor =
         DefaultTextStyle.of(context).style.color ?? const Color(0xFF000000);
     final canReorder = widget.canReorder();
+    final hoverChangesOpacity =
+        widget.grabberStyle.idleOpacity != widget.grabberStyle.hoverOpacity;
+    final grabberTextStyle = TextStyle(
+      color: inheritedColor.withAlpha(255),
+    ).merge(widget.grabberStyle.textStyle);
     final canMoveUp = canReorder && widget.index > 0;
     final canMoveDown = canReorder && widget.index + 1 < widget.totalCount;
     final actions = <CustomSemanticsAction, VoidCallback>{
@@ -2298,48 +2504,78 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           widget.onMove(1);
         },
     };
-    return _MeasureNaturalHeight(
-      witness: widget.witness,
-      onHeight: widget.onHeight,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Semantics(
-            container: true,
-            excludeSemantics: true,
-            button: true,
+    Widget grabber = Text(
+      '⋮',
+      style: grabberTextStyle,
+    );
+    if (hoverChangesOpacity) {
+      final hovered = _grabberHovered ??= ValueNotifier<bool>(false);
+      grabber = ValueListenableBuilder<bool>(
+        valueListenable: hovered,
+        builder: (context, isHovered, child) => AnimatedOpacity(
+          opacity: isHovered && canReorder
+              ? widget.grabberStyle.hoverOpacity
+              : widget.grabberStyle.idleOpacity,
+          duration: widget.grabberStyle.fadeDuration,
+          child: child,
+        ),
+        child: grabber,
+      );
+    } else if (widget.grabberStyle.idleOpacity != 1) {
+      grabber = Opacity(
+        opacity: widget.grabberStyle.idleOpacity,
+        child: grabber,
+      );
+    }
+    final row = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Semantics(
+          container: true,
+          excludeSemantics: true,
+          button: true,
+          enabled: canReorder,
+          label:
+              'Move block, block ${widget.index + 1} of ${widget.totalCount}',
+          customSemanticsActions: actions,
+          child: ReorderableDragStartListener(
+            index: widget.index,
             enabled: canReorder,
-            label:
-                'Move block, block ${widget.index + 1} of ${widget.totalCount}',
-            customSemanticsActions: actions,
-            child: ReorderableDragStartListener(
-              index: widget.index,
-              enabled: canReorder,
-              child: MouseRegion(
-                cursor:
-                    canReorder ? SystemMouseCursors.grab : MouseCursor.defer,
-                child: SizedBox(
-                  width: 44,
-                  height: 44,
-                  child: Center(
-                    child: Text(
-                      '⋮',
-                      style: TextStyle(color: inheritedColor.withAlpha(255)),
-                    ),
-                  ),
-                ),
+            child: MouseRegion(
+              cursor: canReorder ? SystemMouseCursors.grab : MouseCursor.defer,
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Center(child: grabber),
               ),
             ),
           ),
-          Expanded(
-            child: HomericParagraphLayoutCacheScope(
-              cache: widget.paragraphLayoutCache,
-              cacheKey: widget.block.id,
-              child: widget.builder(context, widget.block, _focusNode),
-            ),
+        ),
+        Expanded(
+          child: HomericParagraphLayoutCacheScope(
+            cache: widget.paragraphLayoutCache,
+            cacheKey: widget.block.id,
+            child: widget.builder(context, widget.block, _focusNode),
           ),
-        ],
-      ),
+        ),
+      ],
+    );
+    return _MeasureNaturalHeight(
+      witness: widget.witness,
+      onHeight: widget.onHeight,
+      child: hoverChangesOpacity
+          ? MouseRegion(
+              onEnter: (_) {
+                _grabberHovered!.value = true;
+              },
+              onExit: (_) {
+                if (_grabberHovered!.value) {
+                  _grabberHovered!.value = false;
+                }
+              },
+              child: row,
+            )
+          : row,
     );
   }
 }

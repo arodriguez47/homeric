@@ -59,6 +59,31 @@ flutter test integration_test/ime_editing_test.dart -d <android-device-id>
 The trace reports `synthetic_framework_adapter: true` so its result cannot be
 mistaken for physical keyboard or IME certification.
 
+## Native macOS acceptance runner
+
+From `packages/homeric/examples/playground`, launch the actual profile app:
+
+```bash
+flutter run -d macos --profile -t lib/native_ime_acceptance.dart
+```
+
+The runner opens one focused paragraph over the normal Homeric controller and
+`TextInputConnection`. Follow the five on-screen steps: type `Z`, undo, redo,
+enter `é` with the Option-E dead-key sequence, and undo it. Each accepted stage
+prints `HOMERIC_NATIVE_IME_PASS`; a complete sequence ends with
+`HOMERIC_NATIVE_IME_COMPLETE result=pass`. The accompanying
+`HOMERIC_NATIVE_IME_STATE` JSON records canonical text, directional selection,
+composition, history availability, active block, input owner, attachment, and
+revision so the run can be retained as an artifact rather than a recollection.
+
+This entrypoint uses no test messenger or debug client id. It is suitable for a
+direct macOS record, but launching it alone is not a pass: retain the complete
+terminal output, record the named hardware/OS/Flutter/build/input method, and
+perform the candidate-geometry and VoiceOver checks separately. Automated Mac
+UI capture in the current environment sees the Flutter surface as black and
+exposes only the window container, so it cannot supply those visual or
+accessibility results.
+
 ## Manual platform record
 
 Create one record per tested OS/device. Include hardware, OS version, Flutter

@@ -89,7 +89,9 @@ remains unrun. Cross-platform IME certification remains
 [HOM-21](https://linear.app/xana-studios/issue/HOM-21). Its
 [platform IME acceptance ledger](docs/testing/ime-acceptance.md) now records
 the automated epoch/composition/autocorrection and geometry-capability coverage
-separately from the still-open physical platform matrix.
+separately from the still-open physical platform matrix, and provides a focused
+native macOS runner that emits a retained state trace for the manual dead-key
+and history sequence.
 HOM-19's automated, release-build, and manual evidence is tracked separately in
 the [desktop editing acceptance ledger](docs/testing/desktop-editing-acceptance.md).
 

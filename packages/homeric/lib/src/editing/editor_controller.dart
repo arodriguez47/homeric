@@ -627,6 +627,9 @@ class HomericEditorController extends ChangeNotifier {
   bool _disposed = false;
   HomericCommandRejected? _lastCommandRejection;
 
+  bool get _mutationUnavailable =>
+      _disposed || _disposePending || _notifyingTransition;
+
   /// Called synchronously before a mutation touching hidden canonical text.
   ///
   /// The target is the full replace-decoration range, not merely the
@@ -682,6 +685,7 @@ class HomericEditorController extends ChangeNotifier {
   /// The returned callback removes only this registration. Interceptors run in
   /// registration order and stop at the first handled or rejected outcome.
   VoidCallback addCommandInterceptor(HomericCommandInterceptor interceptor) {
+    if (_disposed || _disposePending) return () {};
     _commandInterceptors.add(interceptor);
     var registered = true;
     return () {
@@ -722,7 +726,7 @@ class HomericEditorController extends ChangeNotifier {
   /// Entering read-only mode commits an accepted platform composition as its
   /// existing single history unit before input is disabled.
   bool setReadOnly(bool value) {
-    if (_notifyingTransition || _readOnly == value) return false;
+    if (_mutationUnavailable || _readOnly == value) return false;
     if (value) _finishComposition(notify: false);
     _readOnly = value;
     _notifyTransition();
@@ -765,7 +769,7 @@ class HomericEditorController extends ChangeNotifier {
     double? preferredX,
     bool resetPreferredX = false,
   }) {
-    if (_notifyingTransition) return false;
+    if (_mutationUnavailable) return false;
     final nextPreferredX = resetPreferredX ? null : preferredX ?? _preferredX;
     if (_compositionStart != null ||
         _composing != null ||
@@ -781,7 +785,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Commits composition, then applies a pointer-derived selection.
   bool relocateSelection(HomericSelection value) {
-    if (_notifyingTransition || !_isValidSelection(_document, value)) {
+    if (_mutationUnavailable || !_isValidSelection(_document, value)) {
       return false;
     }
     final compositionChanged = _finishComposition(notify: false);
@@ -797,7 +801,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Retains [value] for subsequent vertical movement.
   bool setPreferredX(double value) {
-    if (_notifyingTransition || !value.isFinite || value == _preferredX) {
+    if (_mutationUnavailable || !value.isFinite || value == _preferredX) {
       return false;
     }
     _preferredX = value;
@@ -807,7 +811,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Clears vertical navigation's retained x coordinate.
   bool resetPreferredX() {
-    if (_notifyingTransition || _preferredX == null) return false;
+    if (_mutationUnavailable || _preferredX == null) return false;
     _preferredX = null;
     _notifyTransition();
     return true;
@@ -885,7 +889,7 @@ class HomericEditorController extends ChangeNotifier {
     BlockTextSelection? replacementSelection,
     BlockTextRange? replacementComposing,
   }) {
-    if (_notifyingTransition ||
+    if (_mutationUnavailable ||
         _readOnly ||
         _compositionStart != null ||
         _composing != null) {
@@ -1025,7 +1029,7 @@ class HomericEditorController extends ChangeNotifier {
   /// the model preserves endpoints and affinity, not a non-contiguous set of
   /// content when a moved block crosses the other endpoint.
   bool moveBlock(BlockMoveRequest request) {
-    if (_notifyingTransition ||
+    if (_mutationUnavailable ||
         _readOnly ||
         _compositionStart != null ||
         _composing != null ||
@@ -1081,7 +1085,10 @@ class HomericEditorController extends ChangeNotifier {
   bool deleteForward() => _deleteCanonical(backward: false);
 
   bool _deleteCanonical({required bool backward}) {
-    if (_readOnly || _compositionStart != null || _composing != null) {
+    if (_mutationUnavailable ||
+        _readOnly ||
+        _compositionStart != null ||
+        _composing != null) {
       return false;
     }
     final current = _selection;
@@ -1205,12 +1212,7 @@ class HomericEditorController extends ChangeNotifier {
       return false;
     }
     final before = _snapshot();
-    final callback = onBeforeCanonicalMutation;
-    if (callback != null) {
-      for (final target in revealTargets.toSet()) {
-        callback(target);
-      }
-    }
+    if (!_revealBeforeCanonicalMutation(revealTargets)) return false;
     _document = result.doc;
     _decorations = _decorations.map(result.mapping, result.changes);
     _selection = nextSelection;
@@ -1279,7 +1281,7 @@ class HomericEditorController extends ChangeNotifier {
     required BlockTextSelection selection,
     BlockTextRange? composing,
   }) {
-    if (_notifyingTransition || _readOnly) return false;
+    if (_mutationUnavailable || _readOnly) return false;
     final index = _document.indexOfBlockId(blockId);
     if (index == null) return false;
     if (!_validBlockSelection(
@@ -1358,12 +1360,7 @@ class HomericEditorController extends ChangeNotifier {
       _compositionMapping = Mapping();
       _compositionStructural.clear();
     }
-    final callback = onBeforeCanonicalMutation;
-    if (callback != null) {
-      for (final target in revealTargets.toSet()) {
-        callback(target);
-      }
-    }
+    if (!_revealBeforeCanonicalMutation(revealTargets)) return false;
 
     final nextSelection = HomericSelection(
       anchor: result.doc.positionAt(finalIndex, selection.anchor),
@@ -1417,7 +1414,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Applies a prebuilt external transaction and maps editor state through it.
   bool applyTransaction(Transaction transaction) {
-    if (_notifyingTransition || !identical(transaction.before, _document)) {
+    if (_mutationUnavailable || !identical(transaction.before, _document)) {
       return false;
     }
     if (!transaction.docChanged) {
@@ -1473,7 +1470,7 @@ class HomericEditorController extends ChangeNotifier {
   /// checkpoint is history-only: it produces neither a listener notification
   /// nor a [HomericCommittedChange].
   bool applyPreparedCommand(HomericPreparedCommand command) {
-    if (_notifyingTransition ||
+    if (_mutationUnavailable ||
         _readOnly ||
         _compositionStart != null ||
         _composing != null) {
@@ -1697,7 +1694,7 @@ class HomericEditorController extends ChangeNotifier {
   /// parallel decoration set beside the controller. An active composition is
   /// committed first, and [undo] restores the exact prior editor snapshot.
   bool replaceDecorations(DecorationSet value) {
-    if (_notifyingTransition || _readOnly) return false;
+    if (_mutationUnavailable || _readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (identical(value, _decorations)) {
       if (compositionChanged) _notifyTransition();
@@ -1721,7 +1718,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Applies the composition policy for [event].
   bool interruptComposition(CompositionInterruption event) {
-    if (_notifyingTransition || event == CompositionInterruption.staleEpoch) {
+    if (_mutationUnavailable || event == CompositionInterruption.staleEpoch) {
       return false;
     }
     return _finishComposition(notify: true);
@@ -1729,7 +1726,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Restores the exact state before the latest committed edit group.
   bool undo() {
-    if (_notifyingTransition || _readOnly) return false;
+    if (_mutationUnavailable || _readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (_undoStack.isEmpty) {
       if (compositionChanged) _notifyTransition();
@@ -1780,7 +1777,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Restores the exact state most recently displaced by [undo].
   bool redo() {
-    if (_notifyingTransition || _readOnly) return false;
+    if (_mutationUnavailable || _readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (_redoStack.isEmpty) {
       if (compositionChanged) _notifyTransition();
@@ -1944,10 +1941,10 @@ class HomericEditorController extends ChangeNotifier {
     List<HomericRetainedHistoryMutation> retainedHistoryMutations =
         const <HomericRetainedHistoryMutation>[],
   }) {
-    if (_notifyingTransition || _readOnly) return false;
+    if (_mutationUnavailable || _readOnly) return false;
     final policy = mutationPolicy;
     if (policy == null) return true;
-    return policy(HomericMutationRequest(
+    final allowed = policy(HomericMutationRequest(
       origin: origin,
       before: before,
       after: after,
@@ -1957,6 +1954,19 @@ class HomericEditorController extends ChangeNotifier {
         retainedHistoryMutations,
       ),
     ));
+    return allowed && !_mutationUnavailable;
+  }
+
+  bool _revealBeforeCanonicalMutation(
+    Iterable<CanonicalEditTarget> targets,
+  ) {
+    final callback = onBeforeCanonicalMutation;
+    if (callback == null) return !_mutationUnavailable;
+    for (final target in targets.toSet()) {
+      callback(target);
+      if (_mutationUnavailable) return false;
+    }
+    return true;
   }
 
   _CommandDispatch _intercept(HomericEditorCommand command) {
@@ -2004,12 +2014,15 @@ class HomericEditorController extends ChangeNotifier {
     }
   }
 
-  bool? _interceptedResult(HomericEditorCommand command) =>
-      switch (_intercept(command)) {
-        _CommandDispatch.proceed => null,
-        _CommandDispatch.handled => true,
-        _CommandDispatch.rejected => false,
-      };
+  bool? _interceptedResult(HomericEditorCommand command) {
+    final dispatch = _intercept(command);
+    if (_mutationUnavailable) return false;
+    return switch (dispatch) {
+      _CommandDispatch.proceed => null,
+      _CommandDispatch.handled => true,
+      _CommandDispatch.rejected => false,
+    };
+  }
 
   void _notifyTransition({
     bool documentChanged = false,

@@ -449,6 +449,86 @@ void main() {
       expect(() => controller.replaceSelection('x'), returnsNormally);
     });
 
+    test('stale input mutation is inert after controller disposal', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+      controller.dispose();
+
+      late bool accepted;
+      expect(
+        () => accepted = controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [CanonicalTextEdit(1, 1, 'x')],
+          selection: const BlockTextSelection.collapsed(2),
+        ),
+        returnsNormally,
+      );
+      expect(accepted, isFalse);
+      expect(controller.document, same(doc));
+      expect(controller.stateRevision, 0);
+      expect(controller.documentRevision, 0);
+    });
+
+    test('mutation policy disposal cancels the pending edit', () {
+      final doc = _document(['ab']);
+      late HomericEditorController controller;
+      controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+        mutationPolicy: (_) {
+          controller.dispose();
+          return true;
+        },
+      );
+
+      late bool accepted;
+      expect(
+          () => accepted = controller.replaceSelection('x'), returnsNormally);
+      expect(accepted, isFalse);
+      expect(controller.document, same(doc));
+      expect(controller.stateRevision, 0);
+    });
+
+    test('command interceptor disposal cancels the built-in edit', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+      controller.addCommandInterceptor((_) {
+        controller.dispose();
+        return HomericCommandInterception.ignored;
+      });
+
+      late bool accepted;
+      expect(
+          () => accepted = controller.replaceSelection('x'), returnsNormally);
+      expect(accepted, isFalse);
+      expect(controller.document, same(doc));
+      expect(controller.stateRevision, 0);
+    });
+
+    test('reveal callback disposal cancels the pending edit', () {
+      final doc = _document(['**x**']);
+      final hidden = Decoration.replace('a', 0, 2, replacementLength: 0);
+      late HomericEditorController controller;
+      controller = HomericEditorController(
+        document: doc,
+        decorations: DecorationSet.of([hidden]),
+        selection: HomericSelection.collapsed(doc.positionAt(0, 2)),
+        onBeforeCanonicalMutation: (_) => controller.dispose(),
+      );
+
+      late bool accepted;
+      expect(() => accepted = controller.deleteBackward(), returnsNormally);
+      expect(accepted, isFalse);
+      expect(controller.document, same(doc));
+      expect(controller.stateRevision, 0);
+    });
+
     test('selection and preferred-x changes preserve redo', () {
       final doc = _document(['ab']);
       final controller = HomericEditorController(

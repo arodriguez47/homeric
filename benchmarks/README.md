@@ -9,6 +9,20 @@ focused run, for example:
 dart run benchmarks/run.dart tiny-generated large-generated
 ```
 
+Profile visual-caret navigation independently from document scrolling:
+
+```sh
+cd packages/homeric/examples/playground
+flutter run --profile --no-pub -d macos \
+  -t benchmark/visual_caret_benchmark.dart
+```
+
+The benchmark takes five samples over one 2,500-word paragraph. Its median
+first movement must remain at or below 100 ms, and 200 cached movements near
+the end of the paragraph must average at or below 50 µs each. The first bound
+covers one-time grapheme/visual-stop enumeration; the second catches growth in
+the repeated lookup path without conflating it with layout or frame delivery.
+
 `baseline.json` preserves the pre-HOM-6 `ListView.builder` control. Current
 runs exercise the production `HomericEditableDocument` playground route with
 a 1440×900 logical viewport, DPR 1, text scale 1, and 250px cache extent. Every

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
@@ -84,7 +85,7 @@ Future<void> main() async {
 
     stdout.writeln(jsonEncode(<String, Object>{
       'benchmark': 'visual_caret_navigation',
-      'profile': true,
+      'build_mode': kProfileMode ? 'profile' : 'release',
       'words': _wordCount,
       'code_units': text.length,
       'samples': _sampleCount,

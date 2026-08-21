@@ -70,15 +70,18 @@ flutter run -d macos --profile -t lib/native_ime_acceptance.dart
 The runner opens one focused paragraph over the normal Homeric controller and
 `TextInputConnection`. Follow the five on-screen steps: type `Z`, undo, redo,
 enter `é` with the Option-E dead-key sequence, and undo it. Each accepted stage
-prints `HOMERIC_NATIVE_IME_PASS`; a complete sequence ends with
+prints `HOMERIC_NATIVE_IME_PASS` only after canonical text and the expected
+undo/redo availability both match. A complete sequence ends with
 `HOMERIC_NATIVE_IME_COMPLETE result=pass`. The accompanying
 `HOMERIC_NATIVE_IME_STATE` JSON records canonical text, directional selection,
 composition, history availability, active block, input owner, attachment, and
 revision so the run can be retained as an artifact rather than a recollection.
 
 This entrypoint uses no test messenger or debug client id. It is suitable for a
-direct macOS record, but launching it alone is not a pass: retain the complete
-terminal output, record the named hardware/OS/Flutter/build/input method, and
+direct macOS record, but its markers are state checkpoints rather than proof of
+which physical key produced them. Launching it alone is not a pass: perform the
+named physical actions, retain the complete terminal output, record the named
+hardware/OS/Flutter/build/input method, and
 perform the candidate-geometry and VoiceOver checks separately. Automated Mac
 UI capture in the current environment sees the Flutter surface as black and
 exposes only the window container, so it cannot supply those visual or

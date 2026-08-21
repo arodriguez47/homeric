@@ -14,18 +14,49 @@ class _NativeImeAcceptanceApp extends StatefulWidget {
 }
 
 class _NativeImeAcceptanceAppState extends State<_NativeImeAcceptanceApp> {
-  static const _stages = <({String instruction, String expected})>[
-    (instruction: 'Type Z', expected: 'alphaZ'),
-    (instruction: 'Press Command-Z', expected: 'alpha'),
-    (instruction: 'Press Command-Shift-Z', expected: 'alphaZ'),
-    (instruction: 'Press Option-E, then E', expected: 'alphaZé'),
-    (instruction: 'Press Command-Z', expected: 'alphaZ'),
+  static const _stages = <({
+    String instruction,
+    String expected,
+    bool canUndo,
+    bool canRedo,
+  })>[
+    (
+      instruction: 'Type Z',
+      expected: 'alphaZ',
+      canUndo: true,
+      canRedo: false,
+    ),
+    (
+      instruction: 'Press Command-Z',
+      expected: 'alpha',
+      canUndo: false,
+      canRedo: true,
+    ),
+    (
+      instruction: 'Press Command-Shift-Z',
+      expected: 'alphaZ',
+      canUndo: true,
+      canRedo: false,
+    ),
+    (
+      instruction: 'Press Option-E, then E',
+      expected: 'alphaZé',
+      canUndo: true,
+      canRedo: false,
+    ),
+    (
+      instruction: 'Press Command-Z',
+      expected: 'alphaZ',
+      canUndo: true,
+      canRedo: true,
+    ),
   ];
 
   final _documentKey = GlobalKey<HomericEditableDocumentState>();
   late final HomericEditorController _controller;
   late final HomericTextInputSession _inputSession;
   var _stage = 0;
+  var _failed = false;
 
   @override
   void initState() {
@@ -47,6 +78,17 @@ class _NativeImeAcceptanceAppState extends State<_NativeImeAcceptanceApp> {
       final result = await _documentKey.currentState?.settleFocusOnBlock(
         'native-ime',
       );
+      if (result != HomericFocusSettlementResult.focused ||
+          !_inputSession.isAttached ||
+          _inputSession.activeBlockId != 'native-ime') {
+        _failed = true;
+        debugPrint(
+          'HOMERIC_NATIVE_IME_COMPLETE result=fail '
+          'reason=focus_not_ready focus=${result?.name}',
+        );
+        if (mounted) setState(() {});
+        return;
+      }
       debugPrint(
         'HOMERIC_NATIVE_IME_READY '
         'focus=${result?.name} stage=$_stage '
@@ -67,10 +109,16 @@ class _NativeImeAcceptanceAppState extends State<_NativeImeAcceptanceApp> {
 
   void _reportState() {
     final text = _controller.document.blockById('native-ime')!.text;
-    if (_stage < _stages.length && text == _stages[_stage].expected) {
+    final expected = _stage < _stages.length ? _stages[_stage] : null;
+    if (!_failed &&
+        expected != null &&
+        text == expected.expected &&
+        _controller.canUndo == expected.canUndo &&
+        _controller.canRedo == expected.canRedo) {
       debugPrint(
         'HOMERIC_NATIVE_IME_PASS stage=$_stage '
-        'text=${jsonEncode(text)}',
+        'text=${jsonEncode(text)} '
+        'canUndo=${_controller.canUndo} canRedo=${_controller.canRedo}',
       );
       _stage += 1;
       if (_stage == _stages.length) {
@@ -114,9 +162,12 @@ class _NativeImeAcceptanceAppState extends State<_NativeImeAcceptanceApp> {
   Widget build(BuildContext context) {
     final text = _controller.document.blockById('native-ime')!.text;
     final complete = _stage == _stages.length;
-    final instruction = complete
-        ? 'Acceptance sequence complete.'
-        : '${_stage + 1}/${_stages.length}: ${_stages[_stage].instruction}.';
+    final instruction = _failed
+        ? 'Acceptance could not acquire the focused native input owner.'
+        : complete
+            ? 'Acceptance sequence complete.'
+            : '${_stage + 1}/${_stages.length}: '
+                '${_stages[_stage].instruction}.';
     return MaterialApp(
       title: 'Homeric native IME acceptance',
       home: Scaffold(

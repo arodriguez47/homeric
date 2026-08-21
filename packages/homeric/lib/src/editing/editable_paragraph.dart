@@ -190,6 +190,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.textScaler,
     this.placeholderText,
     this.placeholderStyle,
+    this.semanticsHeader = false,
     this.deriveDecorations,
     this.slotBuilder,
     this.slotLayoutRevision,
@@ -252,6 +253,12 @@ class HomericEditableParagraph extends StatefulWidget {
   ///
   /// When omitted, [baseStyle] is used when available.
   final TextStyle? placeholderStyle;
+
+  /// Whether this paragraph's editable semantics node is a heading.
+  ///
+  /// The role is applied directly to the text-bearing boundary so native
+  /// accessibility bridges do not split the heading flag from its value.
+  final bool semanticsHeader;
 
   /// Derives consumer-owned, non-history decorations from the live block.
   ///
@@ -1332,6 +1339,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     return _EditableSemantics(
       value: block.text,
       hint: placeholderVisible ? widget.placeholderText : null,
+      header: widget.semanticsHeader,
       selection: semanticsSelection,
       focused: _focusNode.hasFocus,
       editable:
@@ -3398,6 +3406,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
   const _EditableSemantics({
     required this.value,
     required this.hint,
+    required this.header,
     required this.selection,
     required this.focused,
     required this.editable,
@@ -3416,6 +3425,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
 
   final String value;
   final String? hint;
+  final bool header;
   final TextSelection? selection;
   final bool focused;
   final bool editable;
@@ -3435,6 +3445,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
       _RenderEditableSemantics(
         value: value,
         hint: hint,
+        header: header,
         selection: selection,
         focused: focused,
         editable: editable,
@@ -3456,6 +3467,7 @@ final class _EditableSemantics extends SingleChildRenderObjectWidget {
     renderObject
       ..value = value
       ..hint = hint
+      ..header = header
       ..selection = selection
       ..focused = focused
       ..editable = editable
@@ -3476,6 +3488,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   _RenderEditableSemantics({
     required String value,
     required String? hint,
+    required bool header,
     required TextSelection? selection,
     required bool focused,
     required bool editable,
@@ -3491,6 +3504,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     required VoidCallback? onSelectAll,
   })  : _value = value,
         _hint = hint,
+        _header = header,
         _selection = selection,
         _focused = focused,
         _editable = editable,
@@ -3507,6 +3521,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
 
   String _value;
   String? _hint;
+  bool _header;
   TextSelection? _selection;
   bool _focused;
   bool _editable;
@@ -3530,6 +3545,12 @@ final class _RenderEditableSemantics extends RenderProxyBox {
   set hint(String? value) {
     if (_hint == value) return;
     _hint = value;
+    markNeedsSemanticsUpdate();
+  }
+
+  set header(bool value) {
+    if (_header == value) return;
+    _header = value;
     markNeedsSemanticsUpdate();
   }
 
@@ -3616,6 +3637,7 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     super.describeSemanticsConfiguration(config);
     config
       ..isSemanticBoundary = true
+      ..isHeader = _header
       ..value = _value
       ..textDirection = _textDirection
       ..onFocus = _onFocus

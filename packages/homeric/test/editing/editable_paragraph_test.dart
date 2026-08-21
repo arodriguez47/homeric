@@ -1232,6 +1232,44 @@ void main() {
     handle.dispose();
   });
 
+  testWidgets('consumer header role stays on the editable value node',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    final controller = HomericEditorController(document: _document('Heading'));
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+      semanticsHeader: true,
+    )));
+    await tester.pump();
+
+    final data = tester
+        .getSemantics(find.byType(HomericEditableParagraph))
+        .getSemanticsData();
+    expect(data.value, 'Heading');
+    // `flagsCollection` postdates Homeric's Flutter 3.24 minimum.
+    // ignore: deprecated_member_use
+    expect(data.hasFlag(ui.SemanticsFlag.isHeader), isTrue);
+    // ignore: deprecated_member_use
+    expect(data.hasFlag(ui.SemanticsFlag.isTextField), isTrue);
+    expect(
+      find.semantics.byPredicate((node) {
+        final semantics = node.getSemanticsData();
+        // ignore: deprecated_member_use
+        return semantics.hasFlag(ui.SemanticsFlag.isHeader) &&
+            semantics.value == 'Heading';
+      }),
+      findsOneWidget,
+    );
+    handle.dispose();
+  });
+
   testWidgets(
       'placeholder is layout-neutral, pointer-transparent, and uses the editable semantics node',
       (tester) async {

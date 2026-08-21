@@ -277,7 +277,11 @@ final class HomericTextInputSession extends ChangeNotifier {
     _geometryGeneration = layoutGeneration;
     connection.setEditableSizeAndTransform(editableSize, transform);
     connection.setCaretRect(caretRect);
-    connection.setComposingRect(composingRect ?? Rect.zero);
+    if (composingRect != null) {
+      connection.setComposingRect(composingRect);
+    } else if (controller.composing == null) {
+      connection.setComposingRect(Rect.zero);
+    }
     return true;
   }
 

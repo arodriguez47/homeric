@@ -623,6 +623,8 @@ class HomericEditorController extends ChangeNotifier {
   int _structureRevision = 0;
   bool _dispatchingCommandInterceptor = false;
   bool _notifyingTransition = false;
+  bool _disposePending = false;
+  bool _disposed = false;
   HomericCommandRejected? _lastCommandRejection;
 
   /// Called synchronously before a mutation touching hidden canonical text.
@@ -666,6 +668,9 @@ class HomericEditorController extends ChangeNotifier {
   ///
   /// Selection, focus, composition lifecycle, and presentation-only changes
   /// do not emit events on this stream.
+  ///
+  /// Events are delivered synchronously. Mutations attempted from an event
+  /// callback are rejected; schedule follow-up mutations after publication.
   Stream<HomericCommittedChange> get committedChanges =>
       _committedChanges.stream;
 
@@ -2041,9 +2046,13 @@ class HomericEditorController extends ChangeNotifier {
           origin: committedOrigin,
         ));
       }
-      notifyListeners();
+      if (!_disposePending) notifyListeners();
     } finally {
       _notifyingTransition = false;
+      if (_disposePending) {
+        _releaseController();
+        super.dispose();
+      }
     }
   }
 
@@ -2095,9 +2104,21 @@ class HomericEditorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed || _disposePending) return;
+    if (_notifyingTransition) {
+      _disposePending = true;
+      return;
+    }
+    _releaseController();
+    super.dispose();
+  }
+
+  void _releaseController() {
+    if (_disposed) return;
+    _disposed = true;
+    _disposePending = false;
     _finishComposition(notify: false);
     _committedChanges.close();
-    super.dispose();
   }
 
   static bool _validEdit(CanonicalTextEdit edit, int length) =>

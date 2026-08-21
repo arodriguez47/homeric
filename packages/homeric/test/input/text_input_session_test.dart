@@ -831,11 +831,20 @@ void main() {
       ]),
     );
 
+    expect(
+      controller.applyBlockEditBatch(
+        blockId: 'a',
+        edits: const <CanonicalTextEdit>[],
+        selection: const BlockTextSelection.collapsed(1),
+        composing: const BlockTextRange(0, 1),
+      ),
+      isTrue,
+    );
     calls.clear();
     expect(
       session.publishGeometry(
         lease: geometryLease,
-        documentRevision: document,
+        documentRevision: controller.document,
         layoutGeneration: 6,
         editableSize: const Size(100, 20),
         transform: Matrix4.identity(),
@@ -843,12 +852,36 @@ void main() {
       ),
       isTrue,
     );
-    final clearedComposingRect = calls.singleWhere(
-      (call) => call.method == 'TextInput.setMarkedTextRect',
+    expect(
+      calls.where((call) => call.method == 'TextInput.setMarkedTextRect'),
+      isEmpty,
+      reason: 'missing layout boxes must retain the last active marked rect',
+    );
+
+    expect(
+      controller.interruptComposition(CompositionInterruption.blur),
+      isTrue,
+    );
+    calls.clear();
+    expect(
+      session.publishGeometry(
+        lease: geometryLease,
+        documentRevision: controller.document,
+        layoutGeneration: 7,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(10, 0, 1, 20),
+      ),
+      isTrue,
     );
     expect(
-      clearedComposingRect.arguments,
+      calls
+          .singleWhere(
+            (call) => call.method == 'TextInput.setMarkedTextRect',
+          )
+          .arguments,
       <String, double>{'width': 0, 'height': 0, 'x': 0, 'y': 0},
+      reason: 'ending composition must clear the platform marked rect',
     );
 
     expect(controller.replaceSelection('X'), isTrue);

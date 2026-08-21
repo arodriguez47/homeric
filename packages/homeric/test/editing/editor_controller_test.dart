@@ -423,6 +423,30 @@ void main() {
       expect(controller.structureRevision, 2);
       expect(controller.undo(), isTrue);
       expect(controller.structureRevision, 2);
+
+      final beforeMoveRevision = controller.documentRevision;
+      expect(
+        controller.moveBlock(BlockMoveRequest(
+          blockId: 'a',
+          targetIndex: 1,
+          documentRevision: beforeMoveRevision,
+          previousBlockId: null,
+          nextBlockId: 'b',
+        )),
+        isTrue,
+      );
+      expect(controller.structureRevision, 3);
+    });
+
+    test('commit subscriber may synchronously dispose the controller', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+      controller.committedChanges.listen((_) => controller.dispose());
+
+      expect(() => controller.replaceSelection('x'), returnsNormally);
     });
 
     test('selection and preferred-x changes preserve redo', () {

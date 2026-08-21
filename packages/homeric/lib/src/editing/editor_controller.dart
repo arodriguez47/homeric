@@ -620,7 +620,9 @@ class HomericEditorController extends ChangeNotifier {
   int _stateRevision = 0;
   int _contentRevision = 0;
   int _documentRevision = 0;
+  int _structureRevision = 0;
   bool _dispatchingCommandInterceptor = false;
+  bool _notifyingTransition = false;
   HomericCommandRejected? _lastCommandRejection;
 
   /// Called synchronously before a mutation touching hidden canonical text.
@@ -696,6 +698,12 @@ class HomericEditorController extends ChangeNotifier {
   /// Unlike [contentRevision], a reorder of text-identical blocks does.
   int get documentRevision => _documentRevision;
 
+  /// Monotonic witness for block membership or order changes.
+  ///
+  /// Block-local text and attribute edits preserve this revision even though
+  /// they advance [documentRevision].
+  int get structureRevision => _structureRevision;
+
   /// Stable id of the selection's active block, or `null` without selection.
   String? get activeBlockId {
     final current = _selection;
@@ -709,7 +717,7 @@ class HomericEditorController extends ChangeNotifier {
   /// Entering read-only mode commits an accepted platform composition as its
   /// existing single history unit before input is disabled.
   bool setReadOnly(bool value) {
-    if (_readOnly == value) return false;
+    if (_notifyingTransition || _readOnly == value) return false;
     if (value) _finishComposition(notify: false);
     _readOnly = value;
     _notifyTransition();
@@ -752,6 +760,7 @@ class HomericEditorController extends ChangeNotifier {
     double? preferredX,
     bool resetPreferredX = false,
   }) {
+    if (_notifyingTransition) return false;
     final nextPreferredX = resetPreferredX ? null : preferredX ?? _preferredX;
     if (_compositionStart != null ||
         _composing != null ||
@@ -767,7 +776,9 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Commits composition, then applies a pointer-derived selection.
   bool relocateSelection(HomericSelection value) {
-    if (!_isValidSelection(_document, value)) return false;
+    if (_notifyingTransition || !_isValidSelection(_document, value)) {
+      return false;
+    }
     final compositionChanged = _finishComposition(notify: false);
     if (value == _selection) {
       if (compositionChanged) _notifyTransition();
@@ -781,7 +792,9 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Retains [value] for subsequent vertical movement.
   bool setPreferredX(double value) {
-    if (!value.isFinite || value == _preferredX) return false;
+    if (_notifyingTransition || !value.isFinite || value == _preferredX) {
+      return false;
+    }
     _preferredX = value;
     _notifyTransition();
     return true;
@@ -789,7 +802,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Clears vertical navigation's retained x coordinate.
   bool resetPreferredX() {
-    if (_preferredX == null) return false;
+    if (_notifyingTransition || _preferredX == null) return false;
     _preferredX = null;
     _notifyTransition();
     return true;
@@ -867,7 +880,10 @@ class HomericEditorController extends ChangeNotifier {
     BlockTextSelection? replacementSelection,
     BlockTextRange? replacementComposing,
   }) {
-    if (_readOnly || _compositionStart != null || _composing != null) {
+    if (_notifyingTransition ||
+        _readOnly ||
+        _compositionStart != null ||
+        _composing != null) {
       return false;
     }
     final current = _selection;
@@ -1004,7 +1020,8 @@ class HomericEditorController extends ChangeNotifier {
   /// the model preserves endpoints and affinity, not a non-contiguous set of
   /// content when a moved block crosses the other endpoint.
   bool moveBlock(BlockMoveRequest request) {
-    if (_readOnly ||
+    if (_notifyingTransition ||
+        _readOnly ||
         _compositionStart != null ||
         _composing != null ||
         _selectionHost(_document, _selection) == null ||
@@ -1257,7 +1274,7 @@ class HomericEditorController extends ChangeNotifier {
     required BlockTextSelection selection,
     BlockTextRange? composing,
   }) {
-    if (_readOnly) return false;
+    if (_notifyingTransition || _readOnly) return false;
     final index = _document.indexOfBlockId(blockId);
     if (index == null) return false;
     if (!_validBlockSelection(
@@ -1395,7 +1412,9 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Applies a prebuilt external transaction and maps editor state through it.
   bool applyTransaction(Transaction transaction) {
-    if (!identical(transaction.before, _document)) return false;
+    if (_notifyingTransition || !identical(transaction.before, _document)) {
+      return false;
+    }
     if (!transaction.docChanged) {
       final compositionChanged = _finishComposition(notify: false);
       if (compositionChanged) _notifyTransition();
@@ -1449,7 +1468,10 @@ class HomericEditorController extends ChangeNotifier {
   /// checkpoint is history-only: it produces neither a listener notification
   /// nor a [HomericCommittedChange].
   bool applyPreparedCommand(HomericPreparedCommand command) {
-    if (_readOnly || _compositionStart != null || _composing != null) {
+    if (_notifyingTransition ||
+        _readOnly ||
+        _compositionStart != null ||
+        _composing != null) {
       return false;
     }
     final stages = command._stages;
@@ -1670,7 +1692,7 @@ class HomericEditorController extends ChangeNotifier {
   /// parallel decoration set beside the controller. An active composition is
   /// committed first, and [undo] restores the exact prior editor snapshot.
   bool replaceDecorations(DecorationSet value) {
-    if (_readOnly) return false;
+    if (_notifyingTransition || _readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (identical(value, _decorations)) {
       if (compositionChanged) _notifyTransition();
@@ -1694,13 +1716,15 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Applies the composition policy for [event].
   bool interruptComposition(CompositionInterruption event) {
-    if (event == CompositionInterruption.staleEpoch) return false;
+    if (_notifyingTransition || event == CompositionInterruption.staleEpoch) {
+      return false;
+    }
     return _finishComposition(notify: true);
   }
 
   /// Restores the exact state before the latest committed edit group.
   bool undo() {
-    if (_readOnly) return false;
+    if (_notifyingTransition || _readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (_undoStack.isEmpty) {
       if (compositionChanged) _notifyTransition();
@@ -1751,7 +1775,7 @@ class HomericEditorController extends ChangeNotifier {
 
   /// Restores the exact state most recently displaced by [undo].
   bool redo() {
-    if (_readOnly) return false;
+    if (_notifyingTransition || _readOnly) return false;
     final compositionChanged = _finishComposition(notify: false);
     if (_redoStack.isEmpty) {
       if (compositionChanged) _notifyTransition();
@@ -1915,7 +1939,7 @@ class HomericEditorController extends ChangeNotifier {
     List<HomericRetainedHistoryMutation> retainedHistoryMutations =
         const <HomericRetainedHistoryMutation>[],
   }) {
-    if (_readOnly) return false;
+    if (_notifyingTransition || _readOnly) return false;
     final policy = mutationPolicy;
     if (policy == null) return true;
     return policy(HomericMutationRequest(
@@ -1990,24 +2014,37 @@ class HomericEditorController extends ChangeNotifier {
     ChangeList? committedChanges,
     HomericCommitOrigin? committedOrigin,
   }) {
-    _stateRevision++;
-    if (documentChanged) _documentRevision++;
-    if (contentChanged) _contentRevision++;
-    if (committedBefore != null &&
-        committedMapping != null &&
-        committedChanges != null &&
-        committedOrigin != null) {
-      _committedChanges.add(HomericCommittedChange(
-        before: committedBefore,
-        after: _document,
-        mapping: committedMapping,
-        changes: committedChanges,
-        contentRevision: _contentRevision,
-        documentRevision: _documentRevision,
-        origin: committedOrigin,
-      ));
+    if (_notifyingTransition) {
+      throw StateError('Editor transitions cannot be published reentrantly.');
     }
-    notifyListeners();
+    _notifyingTransition = true;
+    try {
+      _stateRevision++;
+      if (documentChanged) _documentRevision++;
+      if (contentChanged) _contentRevision++;
+      if (documentChanged &&
+          committedBefore != null &&
+          _blockStructureDiffers(committedBefore, _document)) {
+        _structureRevision++;
+      }
+      if (committedBefore != null &&
+          committedMapping != null &&
+          committedChanges != null &&
+          committedOrigin != null) {
+        _committedChanges.add(HomericCommittedChange(
+          before: committedBefore,
+          after: _document,
+          mapping: committedMapping,
+          changes: committedChanges,
+          contentRevision: _contentRevision,
+          documentRevision: _documentRevision,
+          origin: committedOrigin,
+        ));
+      }
+      notifyListeners();
+    } finally {
+      _notifyingTransition = false;
+    }
   }
 
   static bool _canonicalTextDiffers(Document before, Document after) {
@@ -2015,6 +2052,14 @@ class HomericEditorController extends ChangeNotifier {
     if (before.blockCount != after.blockCount) return true;
     for (var index = 0; index < before.blockCount; index++) {
       if (before.blocks[index].text != after.blocks[index].text) return true;
+    }
+    return false;
+  }
+
+  static bool _blockStructureDiffers(Document before, Document after) {
+    if (before.blockCount != after.blockCount) return true;
+    for (var index = 0; index < before.blockCount; index++) {
+      if (before.blocks[index].id != after.blocks[index].id) return true;
     }
     return false;
   }

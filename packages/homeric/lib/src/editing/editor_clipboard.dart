@@ -112,7 +112,9 @@ final class HomericEditorClipboard {
       return;
     }
     if (!_isCurrent(witness) || text == null || text.isEmpty) return;
-    controller.replaceSelectionStructurally(text);
+    if (!controller.replaceSelectionStructurally(text) && _isCurrent(witness)) {
+      onEvent?.call(const HomericPasteRejected());
+    }
   }
 
   _ClipboardWitness? _capture({required bool requireExpandedSelection}) {

@@ -831,6 +831,26 @@ void main() {
       ]),
     );
 
+    calls.clear();
+    expect(
+      session.publishGeometry(
+        lease: geometryLease,
+        documentRevision: document,
+        layoutGeneration: 6,
+        editableSize: const Size(100, 20),
+        transform: Matrix4.identity(),
+        caretRect: const Rect.fromLTWH(10, 0, 1, 20),
+      ),
+      isTrue,
+    );
+    final clearedComposingRect = calls.singleWhere(
+      (call) => call.method == 'TextInput.setMarkedTextRect',
+    );
+    expect(
+      clearedComposingRect.arguments,
+      <String, double>{'width': 0, 'height': 0, 'x': 0, 'y': 0},
+    );
+
     expect(controller.replaceSelection('X'), isTrue);
     calls.clear();
     expect(
@@ -859,6 +879,33 @@ void main() {
     );
     expect(calls, isEmpty);
 
+    session.dispose();
+    controller.dispose();
+  });
+
+  test('delta replacement never splits a surrogate pair', () async {
+    final document = _document('a😀');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 3)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    session.attach(blockId: 'a');
+    calls.clear();
+
+    await _sendDeltas(binding, 1, <Map<String, Object?>>[
+      _delta(
+        oldText: 'a😀',
+        deltaText: '😁',
+        start: 1,
+        end: 3,
+        selectionBase: 3,
+        selectionExtent: 3,
+      ),
+    ]);
+
+    expect(controller.document.blocks.single.text, 'a😁');
+    expect(controller.document.blocks.single.text.runes, <int>[0x61, 0x1F601]);
     session.dispose();
     controller.dispose();
   });

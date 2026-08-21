@@ -1763,7 +1763,7 @@ void main() {
     );
   });
 
-  testWidgets('external replacement outside the active block rebuilds order',
+  testWidgets('external replacement outside active block preserves order cache',
       (tester) async {
     final document = _document(<String>['alpha', 'beta', 'gamma']);
     final controller = HomericEditorController(
@@ -1802,7 +1802,7 @@ void main() {
     expect(controller.activeBlockId, 'block-2');
     expect(
       key.currentState!.debugHeightOrderRebuildCount,
-      initialRebuilds + 1,
+      initialRebuilds,
     );
     expect(find.text('alpha!'), findsOneWidget);
   });
@@ -1973,6 +1973,53 @@ void main() {
 
     expect(tester.getTopLeft(anchor).dy, closeTo(beforeTop, 0.5));
     expect(controller.document.blocks.last.id, 'block-0');
+  });
+
+  testWidgets('structural rebuild preserves a stable visible viewport anchor',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(60, (index) => 'row $index'),
+    );
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        cacheExtent: 100,
+        estimatedBlockHeight: 44,
+        blockBuilder: (context, block, focusNode) => SizedBox(
+          key: ValueKey('content-${block.id}'),
+          height: 30,
+        ),
+      ),
+    )));
+    final result = key.currentState!.scrollToBlock('block-20');
+    for (var frame = 0; frame < 10; frame++) {
+      await tester.pump();
+    }
+    expect(await result, HomericScrollToBlockResult.reached);
+    final anchor = find.byKey(const ValueKey('content-block-20'));
+    final beforeTop = tester.getTopLeft(anchor).dy;
+
+    final split = Transaction(controller.document)
+      ..splitBlock(
+        controller.document.positionAt(0, 0),
+        trailingBlockId: 'inserted-above',
+      );
+    expect(controller.applyTransaction(split), isTrue);
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.getTopLeft(anchor).dy, closeTo(beforeTop, 0.5));
+    expect(controller.document.blocks[1].id, 'inserted-above');
   });
 
   testWidgets('global selection exposes directional fragments and empty wash',

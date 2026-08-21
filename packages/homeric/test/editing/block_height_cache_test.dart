@@ -46,6 +46,26 @@ void main() {
         reason: 'subpixel noise does not schedule anchor correction');
   });
 
+  test('unchanged layout retains its in-flight measurement witness', () {
+    final cache = BlockHeightCache(estimatedHeight: 20)
+      ..replaceOrder(<String>['a']);
+    final pending = cache.prepareMeasurement(
+      blockId: 'a',
+      documentRevision: 1,
+      layoutSignature: 'wide',
+    );
+
+    final afterSelectionNotification = cache.prepareMeasurement(
+      blockId: 'a',
+      documentRevision: 2,
+      layoutSignature: 'wide',
+    );
+
+    expect(afterSelectionNotification, same(pending));
+    expect(cache.record(pending, 48), isNotNull);
+    expect(cache.heightFor('a'), 48);
+  });
+
   test('order replacement retains current IDs and evicts removed entries', () {
     final cache = BlockHeightCache(estimatedHeight: 20)
       ..replaceOrder(<String>['a', 'b', 'c']);

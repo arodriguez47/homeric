@@ -403,6 +403,28 @@ void main() {
       expect(controller.document.blocks.single.text, 'ab');
     });
 
+    test('structure revision changes only with block membership or order', () {
+      final doc = _document(['ab', 'cd']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+
+      expect(controller.replaceSelection('x'), isTrue);
+      expect(controller.structureRevision, 0);
+
+      expect(
+        controller.insertParagraphBreak(trailingBlockId: 'split'),
+        isTrue,
+      );
+      expect(controller.structureRevision, 1);
+
+      expect(controller.undo(), isTrue);
+      expect(controller.structureRevision, 2);
+      expect(controller.undo(), isTrue);
+      expect(controller.structureRevision, 2);
+    });
+
     test('selection and preferred-x changes preserve redo', () {
       final doc = _document(['ab']);
       final controller = HomericEditorController(
@@ -855,6 +877,45 @@ void main() {
       expect(controller.document.blocks.single.text, 'axb');
       expect(controller.undo(), isTrue);
       expect(controller.document, same(doc));
+    });
+
+    test('commit publication rejects reentrant editor mutations', () async {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+      final events = <HomericCommittedChange>[];
+      final nestedResults = <bool>[];
+      final subscription = controller.committedChanges.listen((event) {
+        events.add(event);
+        nestedResults
+          ..add(controller.replaceSelection('nested'))
+          ..add(controller.setSelection(
+            HomericSelection.collapsed(controller.document.positionAt(0, 0)),
+          ))
+          ..add(controller.undo());
+      });
+      var listenerCalls = 0;
+      controller.addListener(() {
+        listenerCalls++;
+        nestedResults.add(controller.setReadOnly(true));
+      });
+
+      expect(controller.replaceSelection('x'), isTrue);
+      expect(controller.document.blocks.single.text, 'axb');
+      expect(controller.stateRevision, 1);
+      expect(controller.documentRevision, 1);
+      expect(controller.contentRevision, 1);
+      expect(events, hasLength(1));
+      expect(listenerCalls, 1);
+      expect(nestedResults, everyElement(isFalse));
+      expect(controller.isReadOnly, isFalse);
+      expect(controller.canUndo, isTrue);
+
+      expect(controller.undo(), isTrue);
+      expect(controller.document, same(doc));
+      await subscription.cancel();
     });
 
     test('invalid edit batch is atomic and does not notify', () {

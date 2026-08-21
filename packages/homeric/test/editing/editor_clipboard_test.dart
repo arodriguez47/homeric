@@ -154,6 +154,30 @@ void main() {
     controller.dispose();
   });
 
+  test('structurally rejected paste emits typed host feedback', () async {
+    final events = <HomericHostEvent>[];
+    final controller = HomericEditorController(
+      document: _document('ab'),
+      selection: const HomericSelection.collapsed(2),
+      mutationPolicy: (_) => false,
+    );
+    final clipboard = HomericEditorClipboard(
+      controller: controller,
+      blockId: 'b',
+      adapter: _FakeClipboard(readValue: 'X'),
+      isHostCurrent: () => true,
+      onEvent: events.add,
+    );
+    addTearDown(clipboard.dispose);
+    addTearDown(controller.dispose);
+
+    await clipboard.paste();
+
+    expect(controller.document.blocks.single.text, 'ab');
+    expect(controller.canUndo, isFalse);
+    expect(events, <HomericHostEvent>[const HomericPasteRejected()]);
+  });
+
   test('null and empty paste are no-ops while adapter failure is typed',
       () async {
     final events = <HomericHostEvent>[];

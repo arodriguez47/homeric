@@ -277,7 +277,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     _geometryGeneration = layoutGeneration;
     connection.setEditableSizeAndTransform(editableSize, transform);
     connection.setCaretRect(caretRect);
-    if (composingRect != null) connection.setComposingRect(composingRect);
+    connection.setComposingRect(composingRect ?? Rect.zero);
     return true;
   }
 
@@ -470,7 +470,12 @@ final class HomericTextInputSession extends ChangeNotifier {
     final insertionOffset = initial.selection.extentOffset;
     if (edit == null ||
         edit.start != insertionOffset ||
-        edit.end != insertionOffset) {
+        edit.end != insertionOffset ||
+        shadow.selection.baseOffset < insertionOffset ||
+        shadow.selection.extentOffset < insertionOffset ||
+        (shadow.composing.isValid &&
+            (shadow.composing.start < insertionOffset ||
+                shadow.composing.end < insertionOffset))) {
       _syncCanonical(force: true);
       return;
     }
@@ -649,6 +654,12 @@ final class HomericTextInputSession extends ChangeNotifier {
         before.codeUnitAt(start) == after.codeUnitAt(start)) {
       start++;
     }
+    if (start > 0 &&
+        start < before.length &&
+        _isHighSurrogate(before.codeUnitAt(start - 1)) &&
+        _isLowSurrogate(before.codeUnitAt(start))) {
+      start--;
+    }
     var beforeEnd = before.length;
     var afterEnd = after.length;
     while (beforeEnd > start &&
@@ -657,9 +668,23 @@ final class HomericTextInputSession extends ChangeNotifier {
       beforeEnd--;
       afterEnd--;
     }
+    if (beforeEnd > start &&
+        beforeEnd < before.length &&
+        afterEnd < after.length &&
+        _isHighSurrogate(before.codeUnitAt(beforeEnd - 1)) &&
+        _isLowSurrogate(before.codeUnitAt(beforeEnd))) {
+      beforeEnd++;
+      afterEnd++;
+    }
     return CanonicalTextEdit(
         start, beforeEnd, after.substring(start, afterEnd));
   }
+
+  static bool _isHighSurrogate(int codeUnit) =>
+      codeUnit >= 0xD800 && codeUnit <= 0xDBFF;
+
+  static bool _isLowSurrogate(int codeUnit) =>
+      codeUnit >= 0xDC00 && codeUnit <= 0xDFFF;
 
   /// Invalidates and closes the live connection exactly once.
   @override

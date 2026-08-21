@@ -96,7 +96,10 @@ final class BlockHeightCache {
     required Object? layoutSignature,
   }) {
     final previous = _witnesses[blockId];
-    if (previous != null && previous.layoutSignature != layoutSignature) {
+    if (previous != null && previous.layoutSignature == layoutSignature) {
+      return previous;
+    }
+    if (previous != null) {
       final index = _indices[blockId];
       final oldHeight = _heights.remove(blockId);
       if (index != null && oldHeight != null) {

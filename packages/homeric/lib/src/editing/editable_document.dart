@@ -549,7 +549,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   double _pendingAnchorCorrection = 0;
   bool _anchorCorrectionScheduled = false;
   int _heightOrderDocumentRevision = -1;
-  int _heightOrderContentRevision = -1;
+  int _heightOrderStructureRevision = -1;
   int _heightOrderRebuildCount = 0;
   Document? _heightOrderDocument;
   Object? _globalLayoutSignature;
@@ -620,7 +620,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   @override
   void didChangeMetrics() {
-    _cancelPointerSelectionDragWithoutRetarget();
+    cancelPointerSelectionDrag();
     if (!_touchSelectionRequested) return;
     _disposeTouchSelectionOverlay();
     _scheduleTouchSelectionSync();
@@ -1328,10 +1328,15 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final selection = widget.controller.selection;
     if (selection == null || selection.isCollapsed) return const <Rect>[];
     final rects = <Rect>[];
-    for (final block in widget.controller.document.blocks) {
-      final host = _selectionHosts[block.id];
-      if (host == null) continue;
-      final fragment = selectionFragmentForBlock(block.id);
+    final mounted = <({int index, String blockId})>[];
+    for (final blockId in _selectionHosts.keys) {
+      final index = widget.controller.document.indexOfBlockId(blockId);
+      if (index != null) mounted.add((index: index, blockId: blockId));
+    }
+    mounted.sort((left, right) => left.index.compareTo(right.index));
+    for (final entry in mounted) {
+      final host = _selectionHosts[entry.blockId]!;
+      final fragment = selectionFragmentForBlock(entry.blockId);
       if (fragment == null || fragment.isCollapsed) continue;
       final current = host.globalRangeRects(
         BlockTextRange(fragment.start, fragment.end),
@@ -1505,6 +1510,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final selection = widget.controller.selection;
     if (selection == null) return false;
     final document = widget.controller.document;
+    if (document.isEmpty) return false;
     final lastIndex = document.blockCount - 1;
     final target = forward
         ? document.positionAt(
@@ -1523,15 +1529,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   /// Selects from the first block's start through the last block's end.
-  bool selectAll() => _setDocumentSelection(
-        widget.controller.document.positionAt(0, 0),
-        widget.controller.document.positionAt(
-          widget.controller.document.blockCount - 1,
-          widget.controller.document.blocks.last.contentLength,
-        ),
-        affinity: HomericCaretAffinity.downstream,
-        resetPreferredX: true,
-      );
+  bool selectAll() {
+    final document = widget.controller.document;
+    if (document.isEmpty) return false;
+    return _setDocumentSelection(
+      document.positionAt(0, 0),
+      document.positionAt(
+        document.blockCount - 1,
+        document.blocks.last.contentLength,
+      ),
+      affinity: HomericCaretAffinity.downstream,
+      resetPreferredX: true,
+    );
+  }
 
   bool _setDocumentSelection(
     int anchor,
@@ -1634,6 +1644,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       if ((isCurrent != null && !isCurrent()) ||
           revision != widget.controller.documentRevision) {
         return HomericScrollToBlockResult.stale;
+      }
+      if (!_scrollController.hasClients) {
+        return HomericScrollToBlockResult.notReached;
       }
       final position = _scrollController.position;
       final target = _heightCache
@@ -1992,12 +2005,24 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   _ViewportAnchor? _captureViewportAnchor(String movingBlockId) {
+    return _captureViewportAnchorIn(
+      widget.controller.document,
+      movingBlockId: movingBlockId,
+    );
+  }
+
+  _ViewportAnchor? _captureViewportAnchorIn(
+    Document document, {
+    String? movingBlockId,
+  }) {
     if (!_scrollController.hasClients) return null;
     final index = _heightCache.indexAtOffset(_scrollController.offset);
-    if (index == null) return null;
-    final blocks = widget.controller.document.blocks;
+    if (index == null || index >= document.blockCount) return null;
+    final blocks = document.blocks;
     var anchorIndex = index;
-    if (blocks[index].id == movingBlockId && blocks.length > 1) {
+    if (movingBlockId != null &&
+        blocks[index].id == movingBlockId &&
+        blocks.length > 1) {
       anchorIndex = index + 1 < blocks.length ? index + 1 : index - 1;
     }
     return _ViewportAnchor(
@@ -2057,50 +2082,23 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (!force && documentRevision == _heightOrderDocumentRevision) {
       return false;
     }
-    final contentRevision = widget.controller.contentRevision;
     final document = widget.controller.document;
+    final structureRevision = widget.controller.structureRevision;
     final previousDocument = _heightOrderDocument;
-    final activeBlockId = widget.controller.activeBlockId;
-    final expectedActiveIndex =
-        activeBlockId == null ? null : _heightCache.indexOf(activeBlockId);
-    final blockLocalContentChange = !force &&
-        contentRevision != _heightOrderContentRevision &&
-        previousDocument != null &&
-        document.blockCount == _heightCache.length &&
-        expectedActiveIndex != null &&
-        document.blocks[expectedActiveIndex].id == activeBlockId &&
-        _onlyActiveBlockChanged(
-          previousDocument,
-          document,
-          expectedActiveIndex,
-        );
     _heightOrderDocumentRevision = documentRevision;
-    _heightOrderContentRevision = contentRevision;
     _heightOrderDocument = document;
-    if (blockLocalContentChange) return false;
+    if (!force && structureRevision == _heightOrderStructureRevision) {
+      return false;
+    }
+    final viewportAnchor = !force && previousDocument != null
+        ? _captureViewportAnchorIn(previousDocument)
+        : null;
+    _heightOrderStructureRevision = structureRevision;
     final blockIds = document.blocks.map((block) => block.id).toList();
     _heightCache.replaceOrder(blockIds);
     _paragraphLayoutCache.retainKeys(blockIds.toSet());
     _heightOrderRebuildCount++;
-    return true;
-  }
-
-  bool _onlyActiveBlockChanged(
-    Document before,
-    Document after,
-    int activeIndex,
-  ) {
-    if (before.blockCount != after.blockCount ||
-        identical(before.blocks[activeIndex], after.blocks[activeIndex]) ||
-        before.blocks[activeIndex].id != after.blocks[activeIndex].id) {
-      return false;
-    }
-    for (var index = 0; index < after.blockCount; index++) {
-      if (index != activeIndex &&
-          !identical(before.blocks[index], after.blocks[index])) {
-        return false;
-      }
-    }
+    _restoreViewportAnchor(viewportAnchor);
     return true;
   }
 

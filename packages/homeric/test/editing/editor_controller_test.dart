@@ -529,6 +529,68 @@ void main() {
       expect(controller.stateRevision, 0);
     });
 
+    test('reveal disposal finalizes only the prior visible composition', () {
+      final doc = _document(['ab', '**c**']);
+      final hidden = Decoration.replace('b', 0, 2, replacementLength: 0);
+      late HomericEditorController controller;
+      controller = HomericEditorController(
+        document: doc,
+        decorations: DecorationSet.of([hidden]),
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+        onBeforeCanonicalMutation: (_) => controller.dispose(),
+      );
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [CanonicalTextEdit(1, 1, 'x')],
+          selection: const BlockTextSelection.collapsed(2),
+          composing: const BlockTextRange(1, 2),
+        ),
+        isTrue,
+      );
+      final acceptedComposition = controller.document;
+      final revision = controller.stateRevision;
+
+      late bool accepted;
+      expect(
+        () => accepted = controller.applyBlockEditBatch(
+          blockId: 'b',
+          edits: const [CanonicalTextEdit(0, 1, '')],
+          selection: const BlockTextSelection.collapsed(0),
+        ),
+        returnsNormally,
+      );
+
+      expect(accepted, isFalse);
+      expect(controller.document, same(acceptedComposition));
+      expect(controller.composing, isNull);
+      expect(controller.canUndo, isTrue);
+      expect(controller.stateRevision, revision);
+      expect(controller.undo(), isFalse);
+    });
+
+    test('handled interceptor stays successful when it disposes afterward', () {
+      final doc = _document(['ab']);
+      final controller = HomericEditorController(
+        document: doc,
+        selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+      );
+      controller.addCommandInterceptor((_) {
+        expect(controller.replaceSelection('handled'), isTrue);
+        controller.dispose();
+        return HomericCommandInterception.handled;
+      });
+
+      late bool accepted;
+      expect(
+        () => accepted = controller.replaceSelection('ignored'),
+        returnsNormally,
+      );
+      expect(accepted, isTrue);
+      expect(controller.document.blocks.single.text, 'ahandledb');
+      expect(controller.stateRevision, 1);
+    });
+
     test('selection and preferred-x changes preserve redo', () {
       final doc = _document(['ab']);
       final controller = HomericEditorController(

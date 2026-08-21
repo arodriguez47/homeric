@@ -2016,11 +2016,10 @@ class HomericEditorController extends ChangeNotifier {
 
   bool? _interceptedResult(HomericEditorCommand command) {
     final dispatch = _intercept(command);
-    if (_mutationUnavailable) return false;
     return switch (dispatch) {
-      _CommandDispatch.proceed => null,
       _CommandDispatch.handled => true,
       _CommandDispatch.rejected => false,
+      _CommandDispatch.proceed => _mutationUnavailable ? false : null,
     };
   }
 

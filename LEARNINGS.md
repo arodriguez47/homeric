@@ -2,6 +2,79 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## docs — 2026-08-22 — Caret ownership needs one release-evidence gate
+
+**What:** Review of the mirrored NEX-143 guidance exposed a gap between fresh
+geometry evidence and shipped-artifact evidence. A generation-valid local query
+and a passing stock renderer still cannot assign ownership if the final release
+artifact, public lifecycle state, or served preview provenance is unproved.
+
+**Why it mattered:** Release compilation can change lifecycle behavior before
+the consumer ever paints. Assigning ownership earlier can misclassify a
+release-only consumer failure as a Homeric geometry defect; editing the older
+learning in place would also erase how the evidence contract evolved.
+
+**Rule going forward:** Preserve dated learnings and append refinements. Before
+assigning a caret defect, build and execute the final release artifact on the
+target; capture public lifecycle readiness and runtime errors; construct fresh
+`ParagraphGeometry` at each query; use a valid document-coordinate `DocOffset`;
+verify source and layout generations against the current render witness and
+prove an intentionally stale query fails closed; then compare transformed final
+pixels with a stock renderer under identical constraints, text scale, style,
+clipping, focus, and blink conditions. Only after every gate passes does invalid
+geometry belong to Homeric or valid geometry with absent pixels belong to the
+consumer. Preview evidence must also verify its recorded commit and remote bundle
+hash against the final-release bundle actually served. Otherwise ownership
+remains unresolved.
+
+## docs — 2026-08-15 — Caret ownership starts at final pixels and preview provenance
+
+**What:** Nexus NEX-143 did not reproduce on its `origin/main` at `3c35986`.
+The consumer received valid `ParagraphGeometry.caretRect` output, exposed the
+configured cursor in AppFlowy's render tree, and painted opaque sentinel RGBA
+pixels inside the transformed caret rectangle. A stock AppFlowy paragraph did
+the same, and bounded live-Chrome checks showed the blinking caret across
+empty, end, wrapped trailing-space, palette, warm, and focus-mode cases. No
+Homeric runtime code or Nexus dependency pin changed.
+
+**Why it mattered:** Geometry is necessary but cannot prove that a writer sees
+a stroke after the consumer applies width, coordinates, clipping, layer order,
+color, selection state, and blink timing. Conversely, a missing-caret report
+without the exact preview provenance cannot justify changing geometry that is
+valid in both final-pixel and stock-renderer controls.
+
+**Rule going forward:** Before assigning a caret defect to Homeric, record the
+exact preview URL/build SHA and the platform, editability, focus, selection,
+offset, palette, mode, and overlays. Compare final pixels at the consumer's
+transformed delegate rectangle with a stock-renderer control. Invalid geometry
+at a valid document offset belongs here; valid geometry plus absent pixels
+belongs to the consumer integration; a green source SHA with a failing preview
+starts with artifact, cache, environment, or focus provenance. Never assign
+ownership from geometry alone or manufacture a red test when the reported
+artifact is unavailable.
+
+## docs — 2026-08-15 — Consumers need a release-safe geometry freshness contract
+
+**What:** Nexus NEX-143 eventually reproduced only in a dart2js release build.
+Its Homeric adapter used Flutter's `RenderObject.debugNeedsLayout` as a geometry
+guard; the debug-only backing state was not initialized in release, so cursor
+queries threw before AppFlowy could paint. The consumer replaced that diagnostic
+with Flutter's public attached/sized render-object lifecycle and continued
+reconstructing Homeric geometry per query. No Homeric runtime change was
+required, and Homeric's generation signal remained scoped to overlay rebuilds.
+
+**Why it mattered:** Debug widget tests proved correct caret rectangles and
+pixels while missing the production-only exception. The document still accepted
+input, which made transaction-level smoke checks green even though the user saw
+no insertion point.
+
+**Rule going forward:** Geometry consumers must use public lifecycle APIs, never
+a framework `debug*` member, to decide whether a render object is ready.
+Consumer integration tests should include the final release compiler and inspect
+runtime errors as well as geometry and document mutations. Invalid Homeric
+geometry belongs here; a release-unsafe consumer gate remains owned by the
+consumer repository.
+
 ## editor-architect — 2026-08-13 — A generation stamp is not a subscription
 
 **What:** With the journal flag on, inline aside chips rendered and footnote markers, mention hover targets, and annotation tap targets did not. That split *is* the diagnosis, and it localizes the bug before any debugging: chips are slots **inside** the paragraph and land on the first build; everything else is a positioned overlay **derived from** geometry, and geometry does not exist until after layout. The consumer subscribed to the editor's selection notifier and its AppFlowy `Node`; neither fires after first layout, so `overlayBuilder` returned nothing and waited for a next build that only arrived if the writer happened to type in that block.

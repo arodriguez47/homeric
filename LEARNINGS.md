@@ -26,12 +26,15 @@ source and layout generations against the current render witness; an intentional
 stale generation must fail closed before ownership is classified. Compare final
 pixels at the consumer's transformed delegate rectangle with a stock-renderer
 control under identical constraints, text scale, style, clipping, focus, and
-blink conditions. Fresh invalid geometry at a valid document offset belongs to
-Homeric. Fresh valid geometry plus absent transformed pixels belongs to the
-consumer only after the executed artifact and stock control are confirmed under
-those same conditions. Until artifact, cache, environment, focus, coordinate,
-and generation provenance are all known, keep ownership unresolved. Never
-manufacture a red test when the reported artifact is unavailable.
+blink conditions. Assign ownership only after the final release artifact has
+been built and executed on the target, public lifecycle readiness and runtime
+errors have been checked, geometry is generation-valid, and the stock control
+has run under those same conditions. At that point, invalid geometry at a valid
+document offset belongs to Homeric; valid geometry plus absent transformed
+pixels belongs to the consumer. Until artifact, cache, environment, focus,
+coordinate, lifecycle, runtime, and generation provenance are all known, keep
+ownership unresolved. Never manufacture a red test when the reported artifact
+is unavailable.
 
 ## docs — 2026-08-15 — Consumers need a release-safe geometry freshness contract
 

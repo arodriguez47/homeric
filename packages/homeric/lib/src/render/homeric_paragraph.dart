@@ -104,11 +104,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
+// Flutter 3.24 does not re-export `internal` from foundation.
+// ignore: unnecessary_import
+import 'package:meta/meta.dart';
 
 import '../view/view_map.dart';
 import 'paint_layers.dart';
+import 'paragraph_layout_instrumentation.dart';
 import 'paragraph_geometry.dart';
 import 'paragraph_source.dart';
+
+part 'paragraph_overlay.dart';
+part 'paragraph_layout_cache.dart';
 
 /// A paint-only per-run style adjustment — U5's repaint band.
 ///
@@ -556,8 +563,8 @@ class RenderHomericParagraph extends RenderBox
   set onGeometryChanged(GeometryChangedCallback? value) {
     final wasSilent = _onGeometryChanged == null;
     _onGeometryChanged = value;
-    if (wasSilent && value != null && hasSize && !debugNeedsLayout) {
-      _scheduleGeometryNotification();
+    if (wasSilent && value != null && hasCurrentGeometry) {
+      _scheduleGeometryNotification(defer: true);
     }
   }
 
@@ -570,8 +577,12 @@ class RenderHomericParagraph extends RenderBox
   List<PlaceholderDimensions>? _intrinsicsDimensions;
   bool _rebuildForPaint = false;
   int _layoutGeneration = 0;
+  bool _geometryReady = false;
   bool _geometryNotificationScheduled = false;
   bool _disposed = false;
+  HomericParagraphLayoutCache? _paragraphLayoutCache;
+  Object? _paragraphLayoutCacheKey;
+  double? _lastLayoutMaxWidth;
 
   /// Content equality for a [ParagraphSource] of any style-handle type
   /// (view text, spec, [ViewMap], segments) — shared by [source] and
@@ -616,15 +627,16 @@ class RenderHomericParagraph extends RenderBox
   /// frame, hop to a post-frame callback; otherwise fire synchronously.
   /// This costs no latency — geometry follows layout, which follows build,
   /// so a consumer's `setState` lands in the next frame either way.
-  void _scheduleGeometryNotification() {
+  void _scheduleGeometryNotification({bool defer = false}) {
     if (_onGeometryChanged == null) {
       // Nobody listens: no closure, no allocation, no post-frame
       // registration. This branch is the whole cost of the feature for
       // the paragraphs that never opt in.
       return;
     }
-    if (SchedulerBinding.instance.schedulerPhase ==
-        SchedulerPhase.persistentCallbacks) {
+    if (defer ||
+        SchedulerBinding.instance.schedulerPhase ==
+            SchedulerPhase.persistentCallbacks) {
       if (_geometryNotificationScheduled) {
         // Two layouts in one frame dispatch once, at the final
         // generation — see _dispatchGeometryChanged.
@@ -641,7 +653,7 @@ class RenderHomericParagraph extends RenderBox
   }
 
   void _dispatchGeometryChanged() {
-    if (_disposed) {
+    if (_disposed || !hasCurrentGeometry) {
       // A post-frame callback cannot be cancelled once registered; this
       // guard is the cancellation. Without it a queued dispatch would
       // hand over a render object whose layoutParagraph asserts
@@ -663,6 +675,41 @@ class RenderHomericParagraph extends RenderBox
     _lineTemplate?.dispose();
     _lineTemplate = null;
     _rebuildForPaint = false;
+    _lastLayoutMaxWidth = null;
+  }
+
+  void _releaseLiveParagraphToCache() {
+    final cache = _paragraphLayoutCache;
+    final key = _paragraphLayoutCacheKey;
+    final paragraph = _paragraph;
+    final dimensions = _liveDimensions;
+    final maxWidth = _lastLayoutMaxWidth;
+    if (cache == null ||
+        key == null ||
+        paragraph == null ||
+        dimensions == null ||
+        maxWidth == null ||
+        _rebuildForPaint) {
+      return;
+    }
+    _paragraph = null;
+    _liveDimensions = null;
+    _lastLayoutMaxWidth = null;
+    cache._release(
+      key,
+      _CachedHomericParagraph(
+        paragraph: paragraph,
+        source: _source,
+        baseStyle: _baseStyle,
+        textAlign: _textAlign,
+        textScaler: _textScaler,
+        slotAlignment: _slotAlignment,
+        slotBaseline: _slotBaseline,
+        paintStyler: _paintStyler,
+        dimensions: dimensions,
+        maxWidth: maxWidth,
+      ),
+    );
   }
 
   ui.ParagraphStyle _paragraphStyle() {
@@ -857,8 +904,13 @@ class RenderHomericParagraph extends RenderBox
     builder.pushStyle((_baseStyle ?? const TextStyle())
         .getTextStyle(textScaler: _textScaler));
     builder.addText(' ');
-    return _lineTemplate = builder.build()
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final template = builder.build();
+    HomericParagraphLayoutProbe.layout(
+      HomericParagraphLayoutCategory.template,
+      template,
+      const ui.ParagraphConstraints(width: double.infinity),
+    );
+    return _lineTemplate = template;
   }
 
   /// Lays [paragraph] out at [maxWidth] and returns its natural size.
@@ -866,11 +918,22 @@ class RenderHomericParagraph extends RenderBox
   /// An infinite max width gets a second pass at the max intrinsic width,
   /// so ParagraphStyle-driven alignment always works against a finite
   /// width (TextPainter's adjusted-max-width dance).
-  Size _layoutAt(ui.Paragraph paragraph, double maxWidth) {
-    paragraph.layout(ui.ParagraphConstraints(width: maxWidth));
+  Size _layoutAt(
+    ui.Paragraph paragraph,
+    double maxWidth,
+    HomericParagraphLayoutCategory category,
+  ) {
+    HomericParagraphLayoutProbe.layout(
+      category,
+      paragraph,
+      ui.ParagraphConstraints(width: maxWidth),
+    );
     if (!maxWidth.isFinite) {
-      paragraph
-          .layout(ui.ParagraphConstraints(width: paragraph.maxIntrinsicWidth));
+      HomericParagraphLayoutProbe.layout(
+        category,
+        paragraph,
+        ui.ParagraphConstraints(width: paragraph.maxIntrinsicWidth),
+      );
     }
     return Size(paragraph.width, paragraph.height);
   }
@@ -881,6 +944,15 @@ class RenderHomericParagraph extends RenderBox
   /// paragraph. Geometry results (U4) are stamped with this so stale
   /// reads become asserts. Paint-only rebuilds do not increment it.
   int get layoutGeneration => _layoutGeneration;
+
+  /// Whether the last completed layout still describes this render object.
+  ///
+  /// This is the release-safe counterpart to debug-only render lifecycle
+  /// probes. It becomes false synchronously when layout is invalidated and
+  /// true only after paragraph size and inline-child offsets are settled.
+  @internal
+  bool get hasCurrentGeometry =>
+      attached && hasSize && _geometryReady && _paragraph != null;
 
   /// The live, laid-out `ui.Paragraph`.
   ///
@@ -927,7 +999,14 @@ class RenderHomericParagraph extends RenderBox
   // --- Layout -------------------------------------------------------------
 
   @override
+  void markNeedsLayout() {
+    _geometryReady = false;
+    super.markNeedsLayout();
+  }
+
+  @override
   void performLayout() {
+    _geometryReady = false;
     // Children first, one pass, width-only constraint — they are never
     // re-laid-out after the text is (no feedback loop).
     final dimensions = childCount > 0
@@ -938,17 +1017,47 @@ class RenderHomericParagraph extends RenderBox
       // A slot changed size: content-level change, rebuild.
       paragraph.dispose();
       _paragraph = paragraph = null;
+      _lastLayoutMaxWidth = null;
     }
     if (paragraph == null) {
-      _paragraph = paragraph = _buildParagraph(dimensions);
-      // A fresh build already reflects the current paintStyler.
-      _rebuildForPaint = false;
+      final cache = _paragraphLayoutCache;
+      final key = _paragraphLayoutCacheKey;
+      final cached = cache == null || key == null
+          ? null
+          : cache._take(
+              key,
+              source: _source,
+              baseStyle: _baseStyle,
+              textAlign: _textAlign,
+              textScaler: _textScaler,
+              slotAlignment: _slotAlignment,
+              slotBaseline: _slotBaseline,
+              paintStyler: _paintStyler,
+              dimensions: dimensions,
+              maxWidth: constraints.maxWidth,
+            );
+      if (cached == null) {
+        _paragraph = paragraph = _buildParagraph(dimensions);
+        // A fresh build already reflects the current paintStyler.
+        _rebuildForPaint = false;
+      } else {
+        _paragraph = paragraph = cached.paragraph;
+        _lastLayoutMaxWidth = cached.maxWidth;
+      }
     }
     _liveDimensions = dimensions;
-    final natural = _layoutAt(paragraph, constraints.maxWidth);
+    final natural = _lastLayoutMaxWidth == constraints.maxWidth
+        ? Size(paragraph.width, paragraph.height)
+        : _layoutAt(
+            paragraph,
+            constraints.maxWidth,
+            HomericParagraphLayoutCategory.live,
+          );
+    _lastLayoutMaxWidth = constraints.maxWidth;
     _layoutGeneration += 1;
     size = constraints.constrain(natural);
     _positionChildren(paragraph);
+    _geometryReady = true;
     // Last, not at the generation bump above: `size` and the children's
     // paint offsets are only settled here, and blockRect/slotRectAt read
     // both. This is the sole dispatch site in the class, which is what
@@ -998,8 +1107,12 @@ class RenderHomericParagraph extends RenderBox
         ? _intrinsicWidthDimensions(
             (child) => child.getMinIntrinsicWidth(double.infinity))
         : _externalDimensions();
-    final paragraph = _intrinsicsFor(dimensions)
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final paragraph = _intrinsicsFor(dimensions);
+    HomericParagraphLayoutProbe.layout(
+      HomericParagraphLayoutCategory.intrinsic,
+      paragraph,
+      const ui.ParagraphConstraints(width: double.infinity),
+    );
     return paragraph.minIntrinsicWidth;
   }
 
@@ -1009,31 +1122,47 @@ class RenderHomericParagraph extends RenderBox
         ? _intrinsicWidthDimensions(
             (child) => child.getMaxIntrinsicWidth(double.infinity))
         : _externalDimensions();
-    final paragraph = _intrinsicsFor(dimensions)
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final paragraph = _intrinsicsFor(dimensions);
+    HomericParagraphLayoutProbe.layout(
+      HomericParagraphLayoutCategory.intrinsic,
+      paragraph,
+      const ui.ParagraphConstraints(width: double.infinity),
+    );
     return paragraph.maxIntrinsicWidth;
   }
 
   @override
-  double computeMinIntrinsicHeight(double width) =>
-      _layoutAt(_intrinsicsFor(_dryDimensions(width)), width).height;
+  double computeMinIntrinsicHeight(double width) => _layoutAt(
+        _intrinsicsFor(_dryDimensions(width)),
+        width,
+        HomericParagraphLayoutCategory.intrinsic,
+      ).height;
 
   @override
-  double computeMaxIntrinsicHeight(double width) =>
-      _layoutAt(_intrinsicsFor(_dryDimensions(width)), width).height;
+  double computeMaxIntrinsicHeight(double width) => _layoutAt(
+        _intrinsicsFor(_dryDimensions(width)),
+        width,
+        HomericParagraphLayoutCategory.intrinsic,
+      ).height;
 
   @override
   @protected
   Size computeDryLayout(covariant BoxConstraints constraints) =>
       constraints.constrain(_layoutAt(
-          _intrinsicsFor(_dryDimensions(constraints.maxWidth)),
-          constraints.maxWidth));
+        _intrinsicsFor(_dryDimensions(constraints.maxWidth)),
+        constraints.maxWidth,
+        HomericParagraphLayoutCategory.intrinsic,
+      ));
 
   @override
   double? computeDryBaseline(
       covariant BoxConstraints constraints, TextBaseline baseline) {
     final paragraph = _intrinsicsFor(_dryDimensions(constraints.maxWidth));
-    _layoutAt(paragraph, constraints.maxWidth);
+    _layoutAt(
+      paragraph,
+      constraints.maxWidth,
+      HomericParagraphLayoutCategory.intrinsic,
+    );
     if (paragraph.numberOfLines == 0) {
       return switch (baseline) {
         TextBaseline.alphabetic => preferredLineBaseline,
@@ -1075,8 +1204,12 @@ class RenderHomericParagraph extends RenderBox
       // (TextPainter.paint's _rebuildParagraphForPaint path). Slot
       // dimensions are the live ones: a paint-only change cannot resize
       // children.
-      final rebuilt = _buildParagraph(_liveDimensions!)
-        ..layout(ui.ParagraphConstraints(width: paragraph.width));
+      final rebuilt = _buildParagraph(_liveDimensions!);
+      HomericParagraphLayoutProbe.layout(
+        HomericParagraphLayoutCategory.paintRebuild,
+        rebuilt,
+        ui.ParagraphConstraints(width: paragraph.width),
+      );
       assert(() {
         if (rebuilt.width != paragraph.width ||
             rebuilt.height != paragraph.height ||
@@ -1165,7 +1298,11 @@ class RenderHomericParagraph extends RenderBox
     if (childOffset == null) {
       transform.setZero();
     } else {
-      transform.translateByDouble(childOffset.dx, childOffset.dy, 0, 1);
+      // Matrix4.translate is the public equivalent available at the package's
+      // Flutter 3.24 minimum. Newer vector_math versions deprecate it in favor
+      // of translateByDouble, which is not available at that minimum.
+      // ignore: deprecated_member_use
+      transform.translate(childOffset.dx, childOffset.dy);
     }
   }
 
@@ -1263,6 +1400,7 @@ class RenderHomericParagraph extends RenderBox
     // The mixin marks needs-layout (deferring while detached); glyph
     // metrics may all have changed, so every cached paragraph is stale.
     super.systemFontsDidChange();
+    _paragraphLayoutCache?.clear();
     _dropParagraphs();
   }
 
@@ -1270,6 +1408,7 @@ class RenderHomericParagraph extends RenderBox
   void dispose() {
     _disposed = true;
     _onGeometryChanged = null;
+    _releaseLiveParagraphToCache();
     _dropParagraphs();
     super.dispose();
   }
@@ -1325,33 +1464,26 @@ class RenderHomericParagraph extends RenderBox
 /// Anything positioned *from* the paragraph rather than *inside* it —
 /// footnote markers, hover and tap targets, a caret — cannot be placed on
 /// the first build, because geometry does not exist until after layout.
-/// Wrap the paragraph in a [Stack], take [onGeometryChanged], and rebuild
-/// the overlay children from `ParagraphGeometry(paragraph)`:
+/// Prefer `ParagraphOverlay`, which owns this subscription and structurally
+/// keeps overlay content out of paragraph layout. Take [onGeometryChanged]
+/// directly only when integrating with an existing overlay host.
 ///
 /// ```dart
-/// Stack(children: [
-///   HomericParagraph(
-///     source: source,
-///     onGeometryChanged: (paragraph, generation) {
-///       if (!mounted) return;
-///       setState(() { _paragraph = paragraph; _generation = generation; });
-///     },
-///   ),
-///   if (_paragraph != null)
+/// ParagraphOverlay(
+///   paragraph: HomericParagraph(source: source),
+///   slotLayoutRevision: null,
+///   overlayBuilder: (context, geometry) => [
 ///     Positioned.fromRect(
-///       rect: ParagraphGeometry(_paragraph!).caretRect(anchor).value,
+///       rect: geometry.caretRect(anchor).value,
 ///       child: const _Marker(),
 ///     ),
-/// ])
+///   ],
+/// )
 /// ```
 ///
-/// Overlay children must be **layout-neutral** ([Positioned],
-/// [IgnorePointer], and the like). A child that participates in the
-/// surrounding layout can change this paragraph's own constraints, and a
-/// callback that rebuilds it is then a genuine relayout → notify →
-/// rebuild loop. There is no runtime detector for this: one would have to
-/// run on every layout, which would cost exactly the "free when nobody
-/// listens" guarantee the signal is built around.
+/// A hand-rolled listener must keep overlay children layout-neutral. A child
+/// that participates in the surrounding layout can change this paragraph's
+/// own constraints and create a genuine relayout → notify → rebuild loop.
 class HomericParagraph extends MultiChildRenderObjectWidget {
   /// Creates a paragraph view over [source].
   ///
@@ -1440,6 +1572,22 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
   /// [RenderHomericParagraph.onGeometryChanged].
   final GeometryChangedCallback? onGeometryChanged;
 
+  HomericParagraph _observedBy(GeometryChangedCallback observer) =>
+      HomericParagraph(
+        key: key,
+        source: source,
+        baseStyle: baseStyle,
+        textAlign: textAlign,
+        textScaler: textScaler,
+        slotBuilder: slotBuilder,
+        slotAlignment: slotAlignment,
+        slotBaseline: slotBaseline,
+        paintStyler: paintStyler,
+        paintLayers: paintLayers,
+        semanticsSource: semanticsSource,
+        onGeometryChanged: observer,
+      );
+
   TextScaler _resolveTextScaler(BuildContext context) {
     final specScaler = source.spec.textScaler;
     return textScaler ??
@@ -1450,6 +1598,7 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
 
   @override
   RenderHomericParagraph createRenderObject(BuildContext context) {
+    final cacheScope = HomericParagraphLayoutCacheScope.maybeOf(context);
     return RenderHomericParagraph(
       source: source,
       baseStyle: baseStyle,
@@ -1461,17 +1610,22 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
       paintLayers: paintLayers,
       semanticsSource: semanticsSource,
       onGeometryChanged: onGeometryChanged,
-    );
+    )
+      .._paragraphLayoutCache = cacheScope?.cache
+      .._paragraphLayoutCacheKey = cacheScope?.cacheKey;
   }
 
   @override
   void updateRenderObject(
       BuildContext context, RenderHomericParagraph renderObject) {
+    final cacheScope = HomericParagraphLayoutCacheScope.maybeOf(context);
     renderObject
       // First in the cascade: it invalidates nothing, and its catch-up
       // dispatch coalesces with any relayout the rest of the cascade
       // triggers in this same frame.
       ..onGeometryChanged = onGeometryChanged
+      .._paragraphLayoutCache = cacheScope?.cache
+      .._paragraphLayoutCacheKey = cacheScope?.cacheKey
       ..source = source
       ..baseStyle = baseStyle
       ..textAlign = textAlign

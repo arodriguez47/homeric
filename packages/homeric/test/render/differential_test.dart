@@ -207,6 +207,148 @@ bool rangesMatch(
   return true;
 }
 
+/// Checks visual movement on [decorated] against the identity-view baseline.
+///
+/// Fold edges can give two canonical document positions one coincident visual
+/// caret. The baseline has only the visual text, so this comparison advances
+/// through coincident stops on both sides before comparing the next physically
+/// distinct caret. It still compares every valid starting document offset and
+/// both affinities, so a mapping perturbation changes a baseline start and
+/// fails the guard.
+bool navigationMatches(
+  RenderHomericParagraph decorated,
+  RenderHomericParagraph baseline,
+  ViewMap viewMap,
+) {
+  final decoratedGeometry = ParagraphGeometry(decorated);
+  final baselineGeometry = ParagraphGeometry(baseline);
+  final docLength = decoratedGeometry.docLength;
+  for (var d = 0; d <= docLength; d++) {
+    for (final affinity in HomericCaretAffinity.values) {
+      final assoc = affinity == HomericCaretAffinity.upstream ? -1 : 1;
+      final view = viewMap.docToView(d, assoc: assoc);
+      try {
+        final decoratedStart =
+            decoratedGeometry.caretRect(DocOffset(d), assoc: assoc).value;
+        final baselineStart =
+            baselineGeometry.caretRect(DocOffset(view), assoc: assoc).value;
+        if (decoratedStart != baselineStart) return false;
+
+        for (final direction in CaretMovementDirection.values) {
+          final preferredX = switch (direction) {
+            CaretMovementDirection.up || CaretMovementDirection.down => 37.0,
+            CaretMovementDirection.left || CaretMovementDirection.right => null,
+          };
+          final decoratedMove = _movePastCoincidentStops(
+            decoratedGeometry,
+            DocOffset(d),
+            affinity,
+            direction,
+            preferredX,
+          );
+          final baselineMove = _movePastCoincidentStops(
+            baselineGeometry,
+            DocOffset(view),
+            affinity,
+            direction,
+            preferredX,
+          );
+          if (decoratedMove.caretRect != baselineMove.caretRect ||
+              decoratedMove.preferredX != baselineMove.preferredX) {
+            return false;
+          }
+        }
+      } on DocOffsetOutOfRangeError {
+        return false;
+      } on Error {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/// Checks logical word movement after translating both starts and results
+/// through the decorated paragraph's document-to-view map.
+bool wordMovementsMatch(
+  RenderHomericParagraph decorated,
+  RenderHomericParagraph baseline,
+  ViewMap viewMap,
+) {
+  final decoratedGeometry = ParagraphGeometry(decorated);
+  final baselineGeometry = ParagraphGeometry(baseline);
+  for (var doc = 0; doc <= decoratedGeometry.docLength; doc++) {
+    for (final affinity in HomericCaretAffinity.values) {
+      final startAssoc = affinity == HomericCaretAffinity.upstream ? -1 : 1;
+      final view = viewMap.docToView(doc, assoc: startAssoc);
+      for (final direction in WordMovementDirection.values) {
+        try {
+          final decoratedTarget = decoratedGeometry
+              .moveByWord(
+                DocOffset(doc),
+                direction: direction,
+                affinity: affinity,
+              )
+              .value;
+          final baselineTarget = baselineGeometry
+              .moveByWord(
+                DocOffset(view),
+                direction: direction,
+                affinity: affinity,
+              )
+              .value;
+          final targetAssoc =
+              decoratedTarget.affinity == HomericCaretAffinity.upstream
+                  ? -1
+                  : 1;
+          if (viewMap.docToView(
+                decoratedTarget.position.value,
+                assoc: targetAssoc,
+              ) !=
+              baselineTarget.position.value) {
+            return false;
+          }
+        } on DocOffsetOutOfRangeError {
+          return false;
+        } on Error {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+CaretMovementResult _movePastCoincidentStops(
+  ParagraphGeometry geometry,
+  DocOffset position,
+  HomericCaretAffinity affinity,
+  CaretMovementDirection direction,
+  double? preferredX,
+) {
+  final startAssoc = affinity == HomericCaretAffinity.upstream ? -1 : 1;
+  final startRect = geometry.caretRect(position, assoc: startAssoc).value;
+  var currentPosition = position;
+  var currentAffinity = affinity;
+  for (var i = 0; i <= geometry.docLength + 2; i++) {
+    final move = geometry
+        .moveCaret(
+          currentPosition,
+          affinity: currentAffinity,
+          direction: direction,
+          preferredX: preferredX,
+        )
+        .value;
+    if (move.caretRect != startRect) return move;
+    if (move.position == currentPosition && move.affinity == currentAffinity) {
+      return move;
+    }
+    currentPosition = move.position;
+    currentAffinity = move.affinity;
+  }
+  throw StateError('visual caret movement did not converge');
+}
+
 /// A deterministic lexicon-based paragraph generator mirroring
 /// `tools/corpus/generate.dart`'s approach (same idea, reimplemented
 /// locally so this test has no file-system dependency on generated
@@ -273,6 +415,8 @@ void main() {
           await pumpPair(tester, decoratedSource: source);
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
+      expect(wordMovementsMatch(decorated, baseline, source.viewMap), isTrue);
     });
 
     testWidgets('#2 aside replacement content (%%An aside%%)', (tester) async {
@@ -288,6 +432,9 @@ void main() {
           await pumpPair(tester, decoratedSource: source);
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+      // A multi-unit replacement is intentionally one atomic document span,
+      // not eight editable canonical caret stops. Its plain-text baseline is
+      // therefore not navigation-isomorphic even though rect geometry is.
     });
 
     testWidgets('#3 multi-char anchor folds to a single slot', (tester) async {
@@ -306,6 +453,8 @@ void main() {
       );
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
+      expect(wordMovementsMatch(decorated, baseline, source.viewMap), isTrue);
     });
 
     testWidgets('#4 trailing footnote-marker-like slot at block end',
@@ -322,10 +471,34 @@ void main() {
       );
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
+      expect(wordMovementsMatch(decorated, baseline, source.viewMap), isTrue);
     });
   });
 
   group('wrapped lines', () {
+    testWidgets('a hidden fold shares the soft-wrap view offset (HOM-16)',
+        (tester) async {
+      final source = ParagraphSource.build(
+        block: para('a', 'aaaa **bold**'),
+        decorations: [
+          Decoration.replace('a', 5, 7, replacementLength: 0),
+          Decoration.replace('a', 11, 13, replacementLength: 0),
+        ],
+        resolveStyle: (_) => style14,
+      );
+      expect(source.viewText, 'aaaa bold');
+      expect(source.viewMap.docToView(6, assoc: -1), 5);
+      expect(source.viewMap.docToView(6, assoc: 1), 5);
+
+      final (decorated, baseline) =
+          await pumpPair(tester, decoratedSource: source, width: 70);
+      expect(decorated.layoutParagraph.numberOfLines, 2);
+      expect(baseline.layoutParagraph.numberOfLines, 2);
+      expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+    });
+
     testWidgets('hidden delimiters across a forced wrap', (tester) async {
       final source = ParagraphSource.build(
         block: para('a', '**aaaa** bbbb cccc'),
@@ -341,6 +514,7 @@ void main() {
       expect(decorated.layoutParagraph.numberOfLines, greaterThan(1));
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
     });
   });
 
@@ -360,6 +534,7 @@ void main() {
       expect(decorated.layoutParagraph.numberOfLines, 2);
       expect(caretsMatch(decorated, baseline, source.viewMap), isTrue);
       expect(rangesMatch(decorated, baseline, source.viewMap), isTrue);
+      expect(navigationMatches(decorated, baseline, source.viewMap), isTrue);
     });
   });
 
@@ -430,6 +605,9 @@ void main() {
       expect(caretsMatch(decorated, baseline, corrupted), isFalse,
           reason: 'a corrupted ViewMap must desync at least one caret — '
               'if this ever passes, the differential guard has gone blind');
+      expect(navigationMatches(decorated, baseline, corrupted), isFalse,
+          reason: 'the navigation differential must use the supplied map, '
+              'not accidentally consult only the render\'s real map');
     });
 
     testWidgets('perturbed triples desync selection rects', (tester) async {

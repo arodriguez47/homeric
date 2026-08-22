@@ -1,0 +1,26 @@
+{
+  "scroll_disabled": {
+    "total_p50_us": 9000,
+    "total_p95_us": 7944
+  },
+  "cold_mount": {
+    "total_p95_us": 8461
+  },
+  "calibration": {
+    "paired_total_p95_delta_basis_points": 100,
+    "layout_total_count": 400,
+    "valid": true
+  },
+  "homeric": {
+    "fixture": "large.md",
+    "scenario": "generated",
+    "fixture_words": 100000,
+    "fixture_fnv1a32": "7a87f8d5",
+    "blocks": 1120,
+    "cold_load_first_frame_us": 100000,
+    "max_mounted_rows": 12,
+    "paragraph_cache_entries": 1000,
+    "paragraph_cache_text_code_units": 900000,
+    "layout_median_sample_us": 150000
+  }
+}

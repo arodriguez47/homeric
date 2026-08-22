@@ -1,6 +1,6 @@
 # Corpus
 
-Deterministic Markdown fixtures used by the benchmark harness.
+Byte-deterministic synthetic Markdown fixtures used by the benchmark harness.
 
 ## Regenerating
 
@@ -8,10 +8,21 @@ Deterministic Markdown fixtures used by the benchmark harness.
 dart run tools/corpus/generate.dart
 ```
 
-Outputs `tools/corpus/out/{tiny,small,medium,large,xl}.md`. The PRNG is seeded per-file so the same Dart version produces byte-identical fixtures.
+Outputs `tools/corpus/out/{tiny,small,medium,large,xl}.md`. The
+repository-owned PRNG is seeded per file, so supported Dart runtimes produce
+byte-identical fixtures.
 
-The `out/` directory is gitignored — fixtures are regenerated on demand.
+The generator does not use Dart's platform `Random` implementation or
+`String.hashCode`. Its versioned 32-bit arithmetic, literal seeds, exact word
+counts, and expected FNV-1a byte hashes are repository contracts. The current
+manifest is committed in [`hashes.json`](hashes.json); generated fixture bodies
+remain ignored.
 
-## TODO
+Use `--output-dir <directory>` for isolated comparison runs. This does not
+rewrite the repository manifest. A widget regression runs the generator in two
+clean Dart processes and independently pins every manifest hash.
 
-Replace the in-file lexicon with a small set of public-domain Project Gutenberg texts so line-break behavior is realistic and reflects natural word-length distributions.
+The corpus is intentionally synthetic. It is not Project Gutenberg prose and
+does not claim to model natural-language word-length distributions. A future
+realistic corpus may complement these fixtures, but must not silently replace
+the stable synthetic performance contract.

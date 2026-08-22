@@ -30,3 +30,7 @@ scripts:
   fuzz-deep:
     description: Opt-in deep property-fuzz run (slow; not part of `melos run test`).
     run: melos exec -c 1 --scope=homeric -- "HOMERIC_DEEP_FUZZ=1 flutter test test/property"
+
+  benchmark:
+    description: Run the local macOS profile benchmark matrix.
+    run: dart run benchmarks/run.dart

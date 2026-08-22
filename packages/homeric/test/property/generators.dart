@@ -963,26 +963,28 @@ void checkDecorationSurvivalInvariant(
   }
 }
 
-/// Invariant 5 — invert round-trip: applying every step's invert in
-/// reverse restores the original document, and the mapping's inverse
-/// restores every non-deleted position.
+/// Invariant 5 — invert round-trip: an inverse transaction restores the
+/// original document, its mapping restores every non-deleted position, and
+/// move-only scenarios preserve decorations forward and back through both
+/// transactions.
 void checkInvertRoundTripInvariant(FuzzScenario scenario) {
-  var doc = scenario.tx.doc;
-  for (var i = scenario.tx.steps.length - 1; i >= 0; i--) {
-    final inverted = scenario.tx.steps[i].invert(scenario.tx.docs[i]);
-    final result = inverted.apply(doc);
-    if (result.failed) {
-      throw StateError('invert of step $i '
-          '(${scenario.tx.steps[i]}) failed to apply: ${result.failure}');
-    }
-    doc = result.doc!;
-  }
-  if (dumpDoc(doc) != dumpDoc(scenario.before)) {
-    throw StateError('applying inverted steps in reverse did not restore '
-        'the original document:\n  restored: <${dumpDoc(doc)}>\n'
+  final inverse = Transaction.inverting(scenario.tx);
+  if (dumpDoc(inverse.doc) != dumpDoc(scenario.before)) {
+    throw StateError('the inverse transaction did not restore '
+        'the original document:\n  restored: <${dumpDoc(inverse.doc)}>\n'
         '  original: <${dumpDoc(scenario.before)}>');
   }
   checkMappingInvertLaw(scenario.tx.mapping, scenario.before.size);
+  if (scenario.hasMoves && scenario.ops.every((op) => op is MoveBlockOp)) {
+    final moved =
+        scenario.decorations.map(scenario.tx.mapping, scenario.tx.changes);
+    final restored = moved.map(inverse.mapping, inverse.changes);
+    _requireSameDecorations(
+      restored,
+      scenario.decorations,
+      Set<Object>.identity(),
+    );
+  }
 }
 
 /// Invariant 6 — anchor survival: when every edit landed strictly outside

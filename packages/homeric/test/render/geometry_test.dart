@@ -164,6 +164,64 @@ void main() {
           reason: 'upstream at the wrap point stays on line 1');
       expect(downstream, DocRange(const DocOffset(5), const DocOffset(9)),
           reason: 'downstream at the wrap point moves to line 2');
+      expect(geometry.lineBoundaryAt(const DocOffset(4), assoc: 1).value,
+          DocRange(const DocOffset(0), const DocOffset(5)),
+          reason: 'the grapheme before the wrap remains on line 1');
+      expect(geometry.lineBoundaryAt(const DocOffset(6), assoc: -1).value,
+          DocRange(const DocOffset(5), const DocOffset(9)),
+          reason: 'the grapheme after the wrap remains on line 2');
+    });
+
+    testWidgets(
+        'a wrap between one-grapheme lines does not skip the selected line',
+        (tester) async {
+      final source = sourceOf('abc');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 14));
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 3);
+      expect(
+        [
+          for (var offset = 0; offset < 3; offset++)
+            render.layoutParagraph.getLineNumberAt(offset)
+        ],
+        [0, 1, 2],
+        reason: 'each code unit belongs to its own visual line',
+      );
+      final geometry = ParagraphGeometry(render);
+
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(1), assoc: -1).value,
+        DocRange(const DocOffset(0), const DocOffset(1)),
+        reason: 'upstream selects the one-grapheme line before the wrap',
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(1), assoc: 1).value,
+        DocRange(const DocOffset(1), const DocOffset(2)),
+        reason: 'MUTATION: querying the next grapheme boundary can skip the '
+            'one-grapheme line and resolve the following shared wrap instead',
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(2), assoc: -1).value,
+        DocRange(const DocOffset(1), const DocOffset(2)),
+        reason: 'the same one-grapheme line is selectable from its trailing '
+            'wrap without querying the adjacent ambiguous boundary',
+      );
+    });
+
+    testWidgets('without a wrap both associations return the whole line',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 200));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      for (final assoc in const [-1, 1]) {
+        expect(
+          geometry.lineBoundaryAt(const DocOffset(5), assoc: assoc).value,
+          DocRange(const DocOffset(0), const DocOffset(9)),
+        );
+      }
     });
 
     testWidgets('line boundary maps back through a hidden run correctly',
@@ -188,6 +246,95 @@ void main() {
       // convention — see `_docRangeOf`).
       expect(result.start, const DocOffset(0));
       expect(result.end, DocOffset(geometry.docLength));
+    });
+
+    testWidgets('a folded offset at the wrap keeps its associated line',
+        (tester) async {
+      final source = sourceOf(
+        'aaaa **bold**',
+        decorations: [
+          Decoration.replace('b', 5, 7, replacementLength: 0),
+          Decoration.replace('b', 11, 13, replacementLength: 0),
+        ],
+      );
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(6), assoc: -1).value,
+        DocRange(const DocOffset(0), const DocOffset(7)),
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(6), assoc: 1).value,
+        DocRange(const DocOffset(5), const DocOffset(13)),
+      );
+    });
+  });
+
+  group('caret rect: hidden fold at a soft-wrap boundary (HOM-16)', () {
+    ParagraphSource<TextStyle> hiddenWrapSource() => sourceOf(
+          'aaaa **bold**',
+          decorations: [
+            Decoration.replace('b', 5, 7, replacementLength: 0),
+            Decoration.replace('b', 11, 13, replacementLength: 0),
+          ],
+        );
+
+    testWidgets('folded offset keeps upstream and downstream visual lines',
+        (tester) async {
+      final source = hiddenWrapSource();
+      expect(source.viewText, 'aaaa bold');
+      expect(source.viewMap.docToView(6, assoc: -1), 5);
+      expect(source.viewMap.docToView(6, assoc: 1), 5);
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 2);
+      final geometry = ParagraphGeometry(render);
+
+      expect(
+        geometry.caretRect(const DocOffset(4), assoc: -1).value,
+        const Rect.fromLTRB(56, 0, 56, 14),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(4), assoc: 1).value,
+        const Rect.fromLTRB(56, 0, 56, 14),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(6), assoc: -1).value,
+        const Rect.fromLTRB(70, 0, 70, 14),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(6), assoc: 1).value,
+        const Rect.fromLTRB(0, 14, 0, 28),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(8), assoc: -1).value,
+        const Rect.fromLTRB(14, 14, 14, 28),
+      );
+      expect(
+        geometry.caretRect(const DocOffset(8), assoc: 1).value,
+        const Rect.fromLTRB(14, 14, 14, 28),
+      );
+    });
+
+    testWidgets('without a wrap both associations share the visible edge',
+        (tester) async {
+      await tester.pumpWidget(
+        harness(HomericParagraph(source: hiddenWrapSource()), width: 200),
+      );
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 1);
+      final geometry = ParagraphGeometry(render);
+
+      for (final assoc in const [-1, 1]) {
+        expect(
+          geometry.caretRect(const DocOffset(6), assoc: assoc).value,
+          const Rect.fromLTRB(70, 0, 70, 14),
+        );
+      }
     });
   });
 
@@ -345,6 +492,236 @@ void main() {
     });
   });
 
+  group('visual caret navigation', () {
+    testWidgets('horizontal movement uses adjacent grapheme stops',
+        (tester) async {
+      final source = sourceOf('a👨‍👩‍👧‍👦b');
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      final afterA = geometry
+          .moveCaret(
+            DocOffset.zero,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect(afterA.position, const DocOffset(1));
+      expect(afterA.caretRect.left, 14);
+      expect(afterA.preferredX, isNull,
+          reason: 'horizontal movement resets preferred x');
+
+      final afterFamily = geometry
+          .moveCaret(
+            afterA.position,
+            affinity: afterA.affinity,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect(afterFamily.position, const DocOffset(12),
+          reason: 'the family emoji is one visual grapheme stop');
+      expect(afterFamily.caretRect.left, 70,
+          reason: 'FlutterTest lays the family cluster out as four em boxes');
+
+      final backBeforeFamily = geometry
+          .moveCaret(
+            afterFamily.position,
+            affinity: afterFamily.affinity,
+            direction: CaretMovementDirection.left,
+          )
+          .value;
+      expect(backBeforeFamily.position, const DocOffset(1));
+      expect(backBeforeFamily.caretRect.left, 14);
+    });
+
+    testWidgets('hidden runs and slots expose edges, never interior stops',
+        (tester) async {
+      final source = sourceOf(
+        'a**b',
+        decorations: [
+          Decoration.replace('b', 1, 3, replacementLength: 0),
+          Decoration.widget('b', 3, spec: 'chip'),
+        ],
+      );
+      await tester.pumpWidget(harness(HomericParagraph(
+        source: source,
+        slotBuilder: (_) => emChip(),
+      )));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      var stop = geometry
+          .moveCaret(
+            DocOffset.zero,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect((stop.position.value, stop.caretRect.left), (1, 14));
+
+      stop = geometry
+          .moveCaret(
+            stop.position,
+            affinity: stop.affinity,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect((stop.position.value, stop.caretRect.left), (3, 14),
+          reason: 'the hidden run is crossed edge-to-edge in one move');
+
+      stop = geometry
+          .moveCaret(
+            stop.position,
+            affinity: stop.affinity,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      expect((stop.position.value, stop.caretRect.left), (3, 28),
+          reason: 'the slot has distinct before/after stops at one doc offset');
+      expect(stop.affinity, HomericCaretAffinity.downstream);
+    });
+
+    testWidgets('mixed bidi movement follows physical visual order',
+        (tester) async {
+      final source = sourceOf('aאבb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 200));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      var stop = geometry
+          .moveCaret(
+            DocOffset.zero,
+            direction: CaretMovementDirection.right,
+          )
+          .value;
+      final visited = <(int, HomericCaretAffinity, double)>[
+        (stop.position.value, stop.affinity, stop.caretRect.left)
+      ];
+      for (var i = 0; i < 10; i++) {
+        final next = geometry
+            .moveCaret(
+              stop.position,
+              affinity: stop.affinity,
+              direction: CaretMovementDirection.right,
+            )
+            .value;
+        if (next.position == stop.position &&
+            next.affinity == stop.affinity &&
+            next.caretRect == stop.caretRect) {
+          break;
+        }
+        stop = next;
+        visited.add((stop.position.value, stop.affinity, stop.caretRect.left));
+      }
+      expect(
+        visited,
+        const [
+          (1, HomericCaretAffinity.upstream, 14.0),
+          (3, HomericCaretAffinity.upstream, 14.0),
+          (2, HomericCaretAffinity.downstream, 28.0),
+          (1, HomericCaretAffinity.downstream, 42.0),
+          (3, HomericCaretAffinity.downstream, 42.0),
+          (4, HomericCaretAffinity.downstream, 56.0),
+        ],
+        reason: 'the two bidi boundaries retain both visual homes while '
+            'Right advances monotonically through physical x order',
+      );
+    });
+
+    testWidgets('vertical movement preserves preferred x and clamps',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb cc');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final geometry = ParagraphGeometry(renderOf(tester));
+      expect(renderOf(tester).layoutParagraph.numberOfLines, 3);
+
+      final down = geometry
+          .moveCaret(
+            const DocOffset(4),
+            affinity: HomericCaretAffinity.upstream,
+            direction: CaretMovementDirection.down,
+          )
+          .value;
+      expect(down.preferredX, 56);
+      expect(down.caretRect.top, 14);
+      expect(down.caretRect.left, 56);
+
+      final downAgain = geometry
+          .moveCaret(
+            down.position,
+            affinity: down.affinity,
+            direction: CaretMovementDirection.down,
+            preferredX: down.preferredX,
+          )
+          .value;
+      expect(downAgain.preferredX, 56);
+      expect(downAgain.caretRect.top, 28);
+      expect(downAgain.caretRect.left, 28,
+          reason: 'the short final line clamps to its closest edge');
+
+      final clamped = geometry
+          .moveCaret(
+            downAgain.position,
+            affinity: downAgain.affinity,
+            direction: CaretMovementDirection.down,
+            preferredX: downAgain.preferredX,
+          )
+          .value;
+      expect(clamped.position, downAgain.position);
+      expect(clamped.caretRect, downAgain.caretRect);
+      expect(clamped.preferredX, 56);
+
+      final up = geometry
+          .moveCaret(
+            downAgain.position,
+            affinity: downAgain.affinity,
+            direction: CaretMovementDirection.up,
+            preferredX: downAgain.preferredX,
+          )
+          .value;
+      expect(up.caretRect.top, 14);
+      expect(up.caretRect.left, 56);
+      expect(up.preferredX, 56);
+    });
+
+    testWidgets('width relayout requires fresh movement geometry',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 140));
+      final render = renderOf(tester);
+      final wide = ParagraphGeometry(render);
+      expect(
+        wide
+            .moveCaret(
+              const DocOffset(4),
+              direction: CaretMovementDirection.down,
+            )
+            .value
+            .position,
+        const DocOffset(4),
+        reason: 'the wide control has one line and clamps',
+      );
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      expect(
+        () => wide.moveCaret(
+          const DocOffset(4),
+          direction: CaretMovementDirection.down,
+        ),
+        throwsAssertionError,
+      );
+
+      final narrow = ParagraphGeometry(render);
+      final moved = narrow
+          .moveCaret(
+            const DocOffset(4),
+            direction: CaretMovementDirection.down,
+          )
+          .value;
+      expect(moved.caretRect.top, 14);
+    });
+  });
+
   group('word boundary: view-space semantics', () {
     testWidgets(
         'a hidden delimiter inside a view word is included in the '
@@ -362,6 +739,236 @@ void main() {
       final geometry = ParagraphGeometry(renderOf(tester));
       final range = geometry.wordBoundaryAt(const DocOffset(4)).value;
       expect(range, DocRange(const DocOffset(0), const DocOffset(8)));
+    });
+  });
+
+  group('directional word movement', () {
+    testWidgets('skips separator runs and always progresses at boundaries',
+        (tester) async {
+      await tester.pumpWidget(
+          harness(HomericParagraph(source: sourceOf('one,   two'))));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(0),
+              direction: WordMovementDirection.forward,
+            )
+            .value
+            .position,
+        const DocOffset(3),
+      );
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(3),
+              direction: WordMovementDirection.forward,
+            )
+            .value
+            .position,
+        const DocOffset(10),
+      );
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(7),
+              direction: WordMovementDirection.backward,
+            )
+            .value
+            .position,
+        const DocOffset(0),
+      );
+      expect(
+        geometry
+            .moveByWord(
+              const DocOffset(10),
+              direction: WordMovementDirection.backward,
+            )
+            .value
+            .position,
+        const DocOffset(7),
+      );
+    });
+
+    testWidgets('clamps empty text and paragraph edges', (tester) async {
+      await tester.pumpWidget(harness(HomericParagraph(source: sourceOf(''))));
+      var geometry = ParagraphGeometry(renderOf(tester));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf('word'))));
+      geometry = ParagraphGeometry(renderOf(tester));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(4),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(4));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+    });
+
+    testWidgets('never splits emoji or combining graphemes', (tester) async {
+      const emoji = '👩‍👩‍👧‍👦';
+      const combined = 'e\u0301';
+      const text = '$emoji $combined next';
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf(text))));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      const emojiEnd = emoji.length;
+      const combinedStart = emojiEnd + 1;
+      const combinedEnd = combinedStart + combined.length;
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(emojiEnd));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(emojiEnd),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(combinedEnd));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(combinedEnd),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(combinedStart));
+    });
+
+    testWidgets('is logical across bidi runs and independent of soft wraps',
+        (tester) async {
+      const text = 'abc אבג def';
+      await tester.pumpWidget(
+          harness(HomericParagraph(source: sourceOf(text)), width: 42));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(3),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(7));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(8),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(4));
+    });
+
+    testWidgets('absorbs hidden delimiters without exposing view offsets',
+        (tester) async {
+      final source = sourceOf(
+        '**bold**',
+        decorations: [
+          Decoration.replace('b', 0, 2, replacementLength: 0),
+          Decoration.replace('b', 6, 8, replacementLength: 0),
+        ],
+      );
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(0),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(8));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(1),
+                direction: WordMovementDirection.forward,
+              )
+              .value
+              .position,
+          const DocOffset(8),
+          reason: 'a start inside the opening fold must still progress');
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(8),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0));
+      expect(
+          geometry
+              .moveByWord(
+                const DocOffset(7),
+                direction: WordMovementDirection.backward,
+              )
+              .value
+              .position,
+          const DocOffset(0),
+          reason: 'a start inside the trailing fold must still progress');
+    });
+
+    testWidgets('carries downstream affinity at a wrapped target',
+        (tester) async {
+      await tester.pumpWidget(
+          harness(HomericParagraph(source: sourceOf('abc def')), width: 42));
+      final result = ParagraphGeometry(renderOf(tester))
+          .moveByWord(
+            const DocOffset(7),
+            direction: WordMovementDirection.backward,
+          )
+          .value;
+
+      expect(result.position, const DocOffset(4));
+      expect(result.affinity, HomericCaretAffinity.downstream,
+          reason: 'the word at the next visual line starts downstream');
     });
   });
 

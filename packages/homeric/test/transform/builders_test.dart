@@ -65,15 +65,37 @@ void main() {
   group('splitBlock', () {
     test(
         'leading half keeps id and bag reference; trailing half gets a '
-        'fresh id, the same type, and shares the bag reference', () {
-      final doc = threeBlocks();
-      final original = doc.blocks[1]; // heading 'b' with {'level': 2}
-      final tr = Transaction(doc);
+        'transaction-allocated id, the same type, and shares opaque metadata',
+        () {
+      final doc = Document([
+        para('a', 'alpha'),
+        para('b', 'bravo', type: 'heading', attributes: {
+          'level': 2,
+          'nexus': {
+            'nodeId': 'node-b',
+            'ancestry': [
+              'root',
+              {'opaque': true},
+            ],
+          },
+        }),
+        para('c', 'charlie'),
+      ]);
+      final original = doc.blocks[1];
+      var supplierCalls = 0;
+      final tr = Transaction(
+        doc,
+        blockIdSupplier: () {
+          supplierCalls++;
+          return 'allocated-tail';
+        },
+      );
       final newId = tr.splitBlock(10); // offset 2 in "bravo"
       final leading = tr.doc.blocks[1];
       final trailing = tr.doc.blocks[2];
       // Pinned: leading keeps the original id and attribute-bag reference.
       expect(leading.id, 'b');
+      expect(leading.type, original.type);
       expect(identical(leading.attributes, original.attributes), isTrue);
       expect(leading.text, 'br');
       // Pinned: trailing gets a fresh id, same type, shared bag reference.
@@ -82,18 +104,119 @@ void main() {
       expect(tr.before.blockById(newId), isNull);
       expect(trailing.type, original.type);
       expect(identical(trailing.attributes, original.attributes), isTrue);
+      expect(
+          identical(trailing.attributes['nexus'], original.attributes['nexus']),
+          isTrue);
       expect(trailing.text, 'avo');
       expect(tr.doc.blockCount, 4);
+      expect(newId, 'allocated-tail');
+      expect(supplierCalls, 1);
       final splits = tr.changes.structural.whereType<BlockSplit>().toList();
       expect(splits.single.sourceId, 'b');
       expect(splits.single.trailingId, newId);
     });
 
-    test('honors an explicit trailing id and rejects boundaries', () {
+    test('default implicit split returns and records a UUID-v4 block id', () {
       final tr = Transaction(threeBlocks());
+      final newId = tr.splitBlock(10);
+
+      expect(
+        newId,
+        matches(
+          RegExp(
+            r'^block-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-'
+            r'[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          ),
+        ),
+      );
+      expect(tr.doc.blocks[2].id, newId);
+      expect(
+        tr.changes.structural.whereType<BlockSplit>().single.trailingId,
+        newId,
+      );
+    });
+
+    test('explicit ids bypass allocation and preserve duplicate failures', () {
+      var supplierCalls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          supplierCalls++;
+          return 'unused';
+        },
+      );
       expect(tr.splitBlock(10, trailingBlockId: 'tail'), 'tail');
       expect(tr.doc.blocks[2].id, 'tail');
+      expect(supplierCalls, 0);
+
+      final duplicate = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          supplierCalls++;
+          return 'unused';
+        },
+      );
+      expect(
+        () => duplicate.splitBlock(10, trailingBlockId: 'a'),
+        throwsA(
+          isA<StepFailedError>().having(
+            (error) => error.message,
+            'message',
+            'block id "a" already exists in the document',
+          ),
+        ),
+      );
+      expect(supplierCalls, 0);
+    });
+
+    test('invalid positions fail before implicit allocation', () {
+      var supplierCalls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          supplierCalls++;
+          return 'unused';
+        },
+      );
+
       expect(() => tr.splitBlock(0), throwsArgumentError);
+      expect(supplierCalls, 0);
+    });
+
+    test('repeated implicit splits cannot reuse an allocated id', () {
+      final candidates = ['tail', 'tail', 'tail-2'];
+      var supplierCalls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () => candidates[supplierCalls++],
+      );
+
+      expect(tr.splitBlock(10), 'tail');
+      expect(tr.splitBlock(13), 'tail-2');
+      expect(supplierCalls, 3);
+      expect(tr.doc.blocks.map((block) => block.id),
+          ['a', 'b', 'tail', 'tail-2', 'c']);
+    });
+
+    test('a later transaction retries a trailing id restored by inversion', () {
+      final tr = Transaction(threeBlocks())
+        ..splitBlock(10, trailingBlockId: 'restored-tail');
+      tr.joinBlocks(tr.doc.positionAfterBlock(1));
+
+      final inverseJoin = tr.steps[1].invert(tr.docs[1]);
+      final restored = inverseJoin.apply(tr.doc);
+      expect(restored.failed, isFalse);
+      expect(restored.doc!.blockById('restored-tail'), isNotNull);
+
+      final candidates = ['restored-tail', 'fresh-after-collision'];
+      var supplierCalls = 0;
+      final later = Transaction(
+        restored.doc!,
+        blockIdSupplier: () => candidates[supplierCalls++],
+      );
+
+      expect(later.splitBlock(9), 'fresh-after-collision');
+      expect(supplierCalls, 2);
     });
   });
 

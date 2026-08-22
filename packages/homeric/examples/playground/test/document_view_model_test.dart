@@ -1,16 +1,25 @@
-// DocumentViewModel (U7): every Phase 1 builder command wrapped as a
-// view-model method, undo via Step.invert, decoration add/remove/toggle,
-// reveal-on-selection (R10), and a widget-level cross-check of the
-// tap-to-place caret display against ParagraphGeometry (U4) directly —
-// the plan's required end-to-end proof.
+// Playground integration: Phase 1 debug commands, public canonical editing,
+// shared undo/decorations, and the lazy HomericEditableDocument viewport.
 
+import 'package:flutter/material.dart'
+    show
+        ColoredBox,
+        Colors,
+        CompositedTransformFollower,
+        OutlinedButton,
+        Size,
+        Slider,
+        SnackBar,
+        Switch;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, kLongPressTimeout;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 import 'package:homeric_playground/decoration_spec.dart';
 import 'package:homeric_playground/fixtures.dart';
 import 'package:homeric_playground/main.dart';
 import 'package:homeric_playground/view_models/document_view_model.dart';
-import 'package:homeric_playground/views/editor_page.dart';
 
 /// Deep, value-level document equality. [Document]/[Block]/[InlineRun] use
 /// identity equality by design (structural sharing relies on it), so undo
@@ -36,7 +45,15 @@ bool _blocksEqual(Block a, Block b) {
   return true;
 }
 
+void _placeCaret(DocumentViewModel vm, int position) {
+  expect(
+    vm.editorController.relocateSelection(HomericSelection.collapsed(position)),
+    isTrue,
+  );
+}
+
 void main() {
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
   group('builder commands mutate and notify exactly once per transaction', () {
     late Document document;
     late DocumentViewModel vm;
@@ -47,7 +64,7 @@ void main() {
     });
 
     test('insertTextAtCaret', () {
-      vm.placeCaretAt(document.positionAt(0, 0)); // first inline position
+      _placeCaret(vm, document.positionAt(0, 0));
       var notifications = 0;
       vm.addListener(() => notifications++);
       final before = vm.document;
@@ -68,7 +85,7 @@ void main() {
     });
 
     test('splitAtCaret', () {
-      vm.placeCaretAt(document.positionAt(0, 3));
+      _placeCaret(vm, document.positionAt(0, 3));
       var notifications = 0;
       vm.addListener(() => notifications++);
       final blocksBefore = vm.document.blockCount;
@@ -113,12 +130,12 @@ void main() {
     });
   });
 
-  group('undo restores the prior document via Step.invert (R3 live)', () {
+  group('controller undo restores exact shared editor state', () {
     test('undoLast restores the document by deep equality', () {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(document: document);
       final before = vm.document;
-      vm.placeCaretAt(document.positionAt(0, 0));
+      _placeCaret(vm, document.positionAt(0, 0));
       expect(vm.insertTextAtCaret('XYZ'), isTrue);
       expect(documentsEqual(vm.document, before), isFalse);
 
@@ -139,7 +156,7 @@ void main() {
       // bold/italic ranges) instead of returning `this` unchanged, the
       // way it would for an edit in an undecorated block.
       final caretBefore = document.positionAt(introIndex, 0);
-      vm.placeCaretAt(caretBefore);
+      _placeCaret(vm, caretBefore);
       expect(vm.insertTextAtCaret('Z'), isTrue);
       expect(vm.decorations, isNot(same(decorationsBefore)));
 
@@ -152,9 +169,21 @@ void main() {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(document: document);
       final before = vm.document;
-      vm.placeCaretAt(document.positionAt(1, 5));
+      _placeCaret(vm, document.positionAt(1, 5));
       expect(vm.splitAtCaret(), isTrue);
       expect(vm.document.blockCount, before.blockCount + 1);
+
+      expect(vm.undoLast(), isTrue);
+      expect(documentsEqual(vm.document, before), isTrue);
+    });
+
+    test('undoing a mirrored block move round-trips', () {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      final before = vm.document;
+
+      expect(vm.moveBlock('intro', 0), isTrue);
+      expect(documentsEqual(vm.document, before), isFalse);
 
       expect(vm.undoLast(), isTrue);
       expect(documentsEqual(vm.document, before), isTrue);
@@ -165,13 +194,31 @@ void main() {
       expect(vm.canUndo, isFalse);
       expect(vm.undoLast(), isFalse);
     });
+
+    test('redoLast restores the exact undone state', () {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      _placeCaret(vm, document.positionAt(0, 0));
+      expect(vm.insertTextAtCaret('XYZ'), isTrue);
+      final edited = vm.document;
+
+      expect(vm.undoLast(), isTrue);
+      expect(vm.canRedo, isTrue);
+      expect(vm.redoLast(), isTrue);
+      expect(vm.document, same(edited));
+      expect(vm.canRedo, isFalse);
+    });
   });
 
   group('degenerate / invalid inputs no-op as values, never throw', () {
     test('a builder validation failure is caught at the view-model boundary',
         () {
       final vm = DocumentViewModel(document: buildFixtureDocument());
-      vm.placeCaretAt(0); // a block-boundary position, not inline
+      expect(
+        vm.editorController
+            .relocateSelection(const HomericSelection.collapsed(0)),
+        isFalse,
+      );
       var notifications = 0;
       vm.addListener(() => notifications++);
       expect(() => vm.insertTextAtCaret('x'), returnsNormally);
@@ -200,7 +247,6 @@ void main() {
     test('every command no-ops instead of throwing on an empty document', () {
       final vm = DocumentViewModel(document: Document());
       expect(() {
-        vm.placeCaretAt(0);
         expect(vm.insertTextAtCaret('x'), isFalse);
         expect(vm.toggleMark(0, 0, 'bold', true), isFalse);
         expect(vm.moveBlockUp('missing'), isFalse);
@@ -209,16 +255,6 @@ void main() {
         expect(vm.joinBlockWithNext('missing'), isFalse);
         expect(vm.splitAtCaret(), isFalse);
       }, returnsNormally);
-    });
-
-    test('out-of-range caret placement no-ops without notifying', () {
-      final vm = DocumentViewModel(document: buildFixtureDocument());
-      var notifications = 0;
-      vm.addListener(() => notifications++);
-      vm.placeCaretAt(-1);
-      vm.placeCaretAt(vm.document.size + 100);
-      expect(vm.caret, isNull);
-      expect(notifications, 0);
     });
   });
 
@@ -248,38 +284,20 @@ void main() {
       // An unrelated document-mutating transaction, so there is something
       // on the undo stack whose pre-transaction decoration snapshot
       // predates the toggle below.
-      vm.placeCaretAt(document.positionAt(2, 0));
+      _placeCaret(vm, document.positionAt(2, 0));
       expect(vm.insertTextAtCaret('X'), isTrue);
 
       vm.toggleHideDelimiters('intro');
       expect(vm.isHidingDelimiters('intro'), isTrue);
 
-      // Undoing the insert restores the decoration snapshot taken before
-      // the toggle ever ran — the toggle itself was never pushed onto the
-      // undo stack (it does not go through a Transaction), so this is the
-      // only decorations mutation `undoLast` reverses here.
+      // Decoration-only changes share the controller's undo pipeline, so the
+      // first undo restores the exact decoration snapshot before the toggle.
       expect(vm.undoLast(), isTrue);
       expect(vm.decorations.forBlock('intro'), isEmpty,
-          reason: 'the decoration set was restored to its pre-toggle, '
-              'pre-transaction snapshot');
+          reason: 'the decoration set was restored to its pre-toggle state');
       expect(vm.isHidingDelimiters('intro'), isFalse,
           reason: 'isHidingDelimiters must reflect the restored decoration '
               'set, not a stale flag left over from the toggle');
-    });
-
-    test('reveal-on-selection: caret inside a hidden marker reveals it (R10)',
-        () {
-      final document = buildFixtureDocument();
-      final vm = DocumentViewModel(document: document);
-      vm.toggleHideDelimiters('intro');
-      final introIndex = document.indexOfBlockId('intro')!;
-      final markerStart = document.blockById('intro')!.text.indexOf('**');
-
-      vm.placeCaretAt(document.positionAt(introIndex, 0));
-      expect(vm.revealStateForBlock('intro').revealsNothing, isTrue);
-
-      vm.placeCaretAt(document.positionAt(introIndex, markerStart + 1));
-      expect(vm.revealStateForBlock('intro').revealsNothing, isFalse);
     });
 
     test('insertWidgetChip is purely additive to the decoration set', () {
@@ -315,9 +333,9 @@ void main() {
     });
   });
 
-  group('widget integration: tap-to-place caret matches U4 geometry', () {
+  group('widget integration: public editable paragraphs', () {
     testWidgets(
-        'tapping a paragraph places the caret exactly where ParagraphGeometry says',
+        'tapping a paragraph places canonical selection through its geometry',
         (tester) async {
       final document = buildFixtureDocument();
       final vm = DocumentViewModel(
@@ -327,7 +345,11 @@ void main() {
       await tester.pumpWidget(PlaygroundApp(viewModel: vm));
       await tester.pumpAndSettle();
 
-      final paragraphFinder = find.byType(HomericParagraph).first;
+      final editableFinder = find.byType(HomericEditableParagraph).first;
+      final paragraphFinder = find.descendant(
+        of: editableFinder,
+        matching: find.byType(HomericParagraph),
+      );
       final renderObject =
           tester.renderObject<RenderHomericParagraph>(paragraphFinder);
       final topLeft = tester.getTopLeft(paragraphFinder);
@@ -343,19 +365,307 @@ void main() {
           ParagraphGeometry(renderObject).positionForPoint(localTap).value;
       final expectedGlobalPosition =
           document.positionAt(0, expectedDocOffset.value);
-      expect(vm.caret, expectedGlobalPosition);
+      expect(vm.editorController.selection,
+          HomericSelection.collapsed(expectedGlobalPosition));
+      expect(vm.inputSession.activeBlockId, document.blocks.first.id);
+    });
+  });
 
-      final expectedLocalRect = ParagraphGeometry(renderObject)
-          .caretRect(DocOffset(expectedDocOffset.value))
-          .value;
-      final expectedGlobalRect =
-          expectedLocalRect.shift(renderObject.localToGlobal(Offset.zero));
+  group('HOM-18 public editing integration', () {
+    testWidgets('mobile touch fixture uses one virtualized adaptive editor',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(900, 700);
+      addTearDown(tester.view.reset);
+      final document = buildTouchFixtureDocument();
+      final vm = DocumentViewModel(
+        document: document,
+        decorations: buildTouchFixtureDecorations(document),
+      );
+      final controller = vm.editorController;
+      final inputSession = vm.inputSession;
 
-      final indicatorRect = tester.getRect(find.byKey(caretIndicatorKey));
-      expect(indicatorRect.left, closeTo(expectedGlobalRect.left, 0.01));
-      expect(indicatorRect.top, closeTo(expectedGlobalRect.top, 0.01));
-      expect(indicatorRect.right, closeTo(expectedGlobalRect.right, 0.01));
-      expect(indicatorRect.bottom, closeTo(expectedGlobalRect.bottom, 0.01));
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomericEditableDocument), findsOneWidget);
+      final documentHost = tester.widget<HomericEditableDocument>(
+        find.byType(HomericEditableDocument),
+      );
+      expect(
+        documentHost.touchSelectionConfiguration,
+        const HomericTouchSelectionConfiguration.adaptive(),
+      );
+      final mounted = tester.widgetList<HomericEditableParagraph>(
+        find.byType(HomericEditableParagraph),
+      );
+      expect(mounted.length, lessThan(document.blockCount));
+      expect(mounted, isNotEmpty);
+      expect(mounted.every((row) => identical(row.controller, controller)),
+          isTrue);
+      expect(mounted.every((row) => identical(row.inputSession, inputSession)),
+          isTrue);
+
+      final paragraph = find.byType(HomericParagraph).first;
+      final gesture = await tester.startGesture(
+        tester.getCenter(paragraph),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(controller.selection!.isCollapsed, isFalse);
+      expect(inputSession.isAttached, isTrue);
+      expect(find.byType(CompositedTransformFollower), findsWidgets);
+      await gesture.up();
+      await tester.pump();
+
+      await tester.tap(find.byType(Switch));
+      tester.view.physicalSize = const Size(700, 900);
+      await tester.pumpAndSettle();
+      expect(vm.editorController, same(controller));
+      expect(vm.inputSession, same(inputSession));
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets(
+        'every paragraph uses the shared controller and one input session',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(
+        document: document,
+        decorations: buildFixtureDecorations(document),
+      );
+
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomericEditableParagraph),
+          findsNWidgets(document.blockCount));
+      final editors = tester.widgetList<HomericEditableParagraph>(
+        find.byType(HomericEditableParagraph),
+      );
+      expect(
+          editors.every((editor) => identical(
+                editor.controller,
+                vm.editorController,
+              )),
+          isTrue);
+      expect(
+          editors.every((editor) => identical(
+                editor.inputSession,
+                vm.inputSession,
+              )),
+          isTrue);
+      expect(vm.editorController.document, same(vm.document));
+      expect(vm.inputSession.controller, same(vm.editorController));
+      expect(
+          editors.every((editor) => editor.spellCheckProvider != null), isTrue);
+      expect(editors.every((editor) => editor.onHostEvent != null), isTrue);
+    });
+
+    testWidgets('playground surfaces typed clipboard feedback safely',
+        (tester) async {
+      final vm = DocumentViewModel(document: buildFixtureDocument());
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      final editor = tester.widget<HomericEditableParagraph>(
+        find.byType(HomericEditableParagraph).first,
+      );
+
+      editor.onHostEvent!(const HomericPasteRejected());
+      await tester.pump();
+      expect(
+          find.text('Paste supports one paragraph at a time.'), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      editor.onHostEvent!(HomericClipboardFailure(
+        HomericClipboardOperation.copy,
+        StateError('private platform detail'),
+      ));
+      await tester.pump();
+      expect(find.text('Copy failed.'), findsOneWidget);
+      expect(find.textContaining('private platform detail'), findsNothing);
+    });
+
+    testWidgets('playground spelling fixture paints its deterministic range',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(HomericEditableParagraph).first);
+      await tester.pump();
+      await tester.pump();
+
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph).first,
+      );
+      final start = document.blocks.first.text.indexOf('Playgrond');
+      expect(start, greaterThanOrEqualTo(0));
+      expect(render.paintLayers, hasLength(1));
+      expect(render.paintLayers.single.range.start.value, start);
+      expect(render.paintLayers.single.range.end.value,
+          start + 'Playgrond'.length);
+      expect(render.paintLayers.single.band, PaintBand.overlay);
+    });
+
+    testWidgets('transaction panel exposes controller-owned undo and redo',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      _placeCaret(vm, document.positionAt(0, 0));
+      expect(vm.insertTextAtCaret('X'), isTrue);
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+
+      final undo = tester.widget<OutlinedButton>(
+        find.byKey(const ValueKey<String>('transaction-undo')),
+      );
+      final redo = tester.widget<OutlinedButton>(
+        find.byKey(const ValueKey<String>('transaction-redo')),
+      );
+      expect(undo.onPressed, isNotNull);
+      expect(redo.onPressed, isNull);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('transaction-undo')),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('transaction-undo')));
+      await tester.pump();
+      expect(vm.canRedo, isTrue);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const ValueKey<String>('transaction-redo')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    test('type, select, replace, delete, compose, and undo use public state',
+        () {
+      final document = Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('abc')]),
+      ]);
+      final vm = DocumentViewModel(document: document);
+      final editor = vm.editorController;
+
+      _placeCaret(vm, document.positionAt(0, 1));
+      expect(editor.replaceSelection('X'), isTrue);
+      expect(editor.document.blocks.single.text, 'aXbc');
+
+      editor.relocateSelection(HomericSelection(
+        anchor: editor.globalPositionForBlockOffset('a', 1),
+        head: editor.globalPositionForBlockOffset('a', 3),
+      ));
+      expect(editor.replaceSelection('Y'), isTrue);
+      expect(editor.document.blocks.single.text, 'aYc');
+      expect(editor.deleteBackward(), isTrue);
+      expect(editor.document.blocks.single.text, 'ac');
+      expect(vm.undoLast(), isTrue);
+      expect(editor.document.blocks.single.text, 'aYc');
+
+      expect(
+        editor.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [CanonicalTextEdit(1, 1, 'é')],
+          selection: const BlockTextSelection.collapsed(2),
+          composing: const BlockTextRange(1, 2),
+        ),
+        isTrue,
+      );
+      expect(editor.composing, isNotNull);
+      expect(
+        editor.applyBlockEditBatch(
+          blockId: 'a',
+          selection: const BlockTextSelection.collapsed(2),
+        ),
+        isTrue,
+      );
+      expect(editor.composing, isNull);
+      expect(editor.document.blocks.single.text, 'aéYc');
+      expect(vm.undoLast(), isTrue);
+      expect(editor.document.blocks.single.text, 'aYc');
+    });
+
+    testWidgets(
+        'theme, font geometry, window width, and hide changes keep selection',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1200, 800);
+      addTearDown(tester.view.reset);
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(
+        document: document,
+        decorations: buildFixtureDecorations(document),
+      );
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(HomericEditableParagraph).first);
+      await tester.pumpAndSettle();
+      final selection = vm.editorController.selection;
+      final activeBlock = vm.inputSession.activeBlockId;
+
+      await tester.tap(find.byType(Switch));
+      await tester.drag(find.byType(Slider), const Offset(80, 0));
+      vm.toggleHideDelimiters('intro');
+      tester.view.physicalSize = const Size(1320, 800);
+      await tester.pumpAndSettle();
+
+      expect(vm.editorController.selection, selection);
+      expect(vm.inputSession.activeBlockId, activeBlock);
+      expect(vm.isHidingDelimiters('intro'), isTrue);
+    });
+
+    testWidgets(
+        'block switch commits composition and leaves one active caret overlay',
+        (tester) async {
+      final document = buildFixtureDocument();
+      final vm = DocumentViewModel(document: document);
+      final editor = vm.editorController;
+      _placeCaret(vm, document.positionAt(0, 1));
+      vm.inputSession.attach(blockId: document.blocks.first.id);
+      expect(
+        editor.applyBlockEditBatch(
+          blockId: document.blocks.first.id,
+          edits: const [CanonicalTextEdit(1, 1, 'x')],
+          selection: const BlockTextSelection.collapsed(2),
+          composing: const BlockTextRange(1, 2),
+        ),
+        isTrue,
+      );
+
+      await tester.pumpWidget(PlaygroundApp(viewModel: vm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(HomericEditableParagraph).at(1));
+      await tester.pumpAndSettle();
+
+      expect(editor.composing, isNull);
+      expect(editor.document.blocks.first.text, startsWith('Hxomeric'));
+      expect(editor.activeBlockId, document.blocks[1].id);
+      expect(vm.inputSession.activeBlockId, document.blocks[1].id);
+      expect(
+        find.byWidgetPredicate((widget) =>
+            widget is ColoredBox && widget.color == Colors.blueAccent),
+        findsOneWidget,
+      );
+    });
+
+    test('debug controls and editor input share one undo pipeline', () {
+      final document = Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('abc')]),
+      ]);
+      final vm = DocumentViewModel(document: document);
+      _placeCaret(vm, document.positionAt(0, 1));
+
+      expect(vm.insertTextAtCaret('D'), isTrue);
+      expect(vm.editorController.replaceSelection('K'), isTrue);
+      expect(vm.document.blocks.single.text, 'aDKbc');
+      expect(vm.undoLast(), isTrue);
+      expect(vm.document.blocks.single.text, 'aDbc');
+      expect(vm.undoLast(), isTrue);
+      expect(vm.document, same(document));
     });
   });
 }

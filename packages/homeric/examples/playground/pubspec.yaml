@@ -1,8 +1,7 @@
 name: homeric_playground
 description: >-
-  Interactive Flutter app exercising Homeric's Phase 1/2 editing primitives:
-  every transaction builder, decoration kind, and reveal-on-selection, driven
-  by hand through HomericParagraph.
+  Interactive macOS-first Flutter app exercising Homeric's public editing
+  controller, input session, editable paragraphs, transactions, and decorations.
 publish_to: none
 version: 0.0.1
 
@@ -11,15 +10,22 @@ environment:
   flutter: ">=3.24.0"
 
 dependencies:
+  cupertino_icons: ^1.0.8
   flutter:
     sdk: flutter
   homeric:
     path: ../../
 
 dev_dependencies:
+  flutter_driver:
+    sdk: flutter
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
   flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
+  assets:
+    - benchmark_assets/

@@ -15,17 +15,6 @@ import 'replace_step.dart';
 import 'run_ops.dart';
 import 'transaction.dart';
 
-int _blockIdCounter = 0;
-
-/// Generates a block id not present in [doc].
-String _freshBlockId(Document doc) {
-  String id;
-  do {
-    id = 'block-${++_blockIdCounter}';
-  } while (doc.indexOfBlockId(id) != null);
-  return id;
-}
-
 /// Edit intents expressed as steps on a [Transaction].
 ///
 /// Builders validate their inputs against the transaction's current
@@ -84,21 +73,21 @@ extension TransactionBuilders on Transaction {
           position, 'position', 'splitBlock requires an inline position');
     }
     final host = resolved.block;
-    final newId = trailingBlockId ?? _freshBlockId(doc);
+    final trailingId = trailingBlockId ?? allocateBlockId();
     step(ReplaceStep(
       position,
       position,
       Slice(
         [
           Block(id: host.id, type: host.type),
-          Block(id: newId, type: host.type, attributes: host.attributes),
+          Block(id: trailingId, type: host.type, attributes: host.attributes),
         ],
         openStart: true,
         openEnd: true,
       ),
       structure: true,
     ));
-    return newId;
+    return trailingId;
   }
 
   /// Joins the two blocks around [boundary] (a position between blocks).

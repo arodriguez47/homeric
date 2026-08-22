@@ -27,6 +27,141 @@ consumer. Preview evidence must also verify its recorded commit and remote bundl
 hash against the final-release bundle actually served. Otherwise ownership
 remains unresolved.
 
+## editor-architect — 2026-08-21 — IME geometry is an attachment capability
+
+**What:** Candidate-window and caret geometry was guarded by document identity
+and layout generation but not by the exact platform-input host. A post-frame
+callback from a recycled prior block, or from a replaced host for the same
+block, could therefore overwrite the current input connection's caret and
+composing rectangles. The input session now issues an opaque geometry lease
+only to an identified attachment owner and rotates or revokes it on block
+retarget, host replacement, structural survivor changes, blur, connection
+loss, and disposal.
+
+**Why it mattered:** The document can remain byte-identical while focus and the
+platform input owner move. Document revision is therefore too weak for IME
+geometry: stale coordinates can misplace autocorrection or candidate UI without
+mutating content, making ordinary controller tests look green. Virtualization
+and post-frame publication make this race routine rather than theoretical.
+
+**Rule going forward:** Treat platform caret, composing, candidate, magnifier,
+and toolbar geometry as revocable attachment capabilities. Capture the opaque
+owner lease with the measured geometry, validate it again at publication, and
+fail closed when no owner exists. Pair that lease with document identity and
+monotonic layout generation; none is a substitute for the others.
+
+## editor-architect — 2026-08-20 — Capture a commit before awaiting its normalization
+
+**What:** A consumer session facade may need two distinct post-mutation
+boundaries: a synchronous lossless capture for durability and one settled event
+after compatibility normalization. Nexus's temporary AppFlowy host stages a
+detached canonical snapshot into its existing save buffer during the engine's
+after-transaction dispatch, then awaits structural repair. The repair stays in
+the triggering undo group and its tagged nested transaction is folded into the
+single settled event.
+
+**Why it mattered:** If the only change event waits on asynchronous
+normalization, the controller mutation can return before any durable owner has
+seen it. Immediate teardown then correctly invalidates the delayed callback but
+silently drops the latest edit. Conversely, publishing repair as a second user
+commit exposes transient structure and creates duplicate autosave semantics.
+
+**Rule going forward:** A host adapter transfers a detached lossless snapshot
+to its durability owner synchronously at the canonical commit boundary, before
+awaiting normalization. It publishes one settled consumer event afterward.
+Session/input generations guard both paths, and disposal may cancel delayed
+observation but never erase content that was already committed by the core.
+
+## editor-architect — 2026-08-19 — Height reuse and glyph-layout reuse are separate caches
+
+**What:** Natural-height virtualization retained scalar row measurements by
+stable block ID, but every recycled `RenderHomericParagraph` still disposed its
+shaped `ui.Paragraph`. A reverse traversal therefore repeated every engine
+layout even though the height index was warm. The document viewport now owns a
+separate bounded LRU of detached shaped paragraphs. A row releases exactly one
+paragraph on disposal and can reclaim it only when block ID, source, resolved
+styles, scaler, alignment, placeholder dimensions, paint styler, and wrap width
+all still match. The cache never supplies a child extent; a miss performs the
+same natural layout as before.
+
+**Why it mattered:** Render-object-local caching cannot survive the lifecycle
+virtualization deliberately creates. Conversely, putting engine objects into
+the height index would couple scroll targeting to presentation ownership and
+turn stale estimates into a correctness risk. Keeping the caches separate made
+the 100k warmed trace perform zero repeated layouts while preserving 11 mounted
+rows and bounding detached state to 2,048 entries and one million UTF-16 code
+units.
+
+**Rule going forward:** Cache compact measurements for indexing and cache shaped
+engine resources for reuse under different owners. Transfer each engine object
+between exactly one render object and one bounded document cache; validate the
+complete layout witness before reuse, clear on system-font changes, dispose on
+eviction/viewport teardown, and measure cold mount separately from warmed
+scroll. Never improve a layout metric by retaining rows or by letting cached
+heights constrain natural content.
+
+## editor-architect — 2026-08-19 — A recycled row cannot own a document drag
+
+**What:** Multi-block pointer selection began inside a paragraph, but the
+selection anchor, autoscroll generation, and platform-input suspension had to
+move to `HomericEditableDocument`. As the pointer autoscrolled, Flutter
+recycled unrelated paragraph gesture detectors and invoked their reset
+callbacks. Allowing any reset callback to cancel the global drag stopped
+selection at the first recycled row. The document now binds each drag to its
+starting host capability, keeps the input row alive through release, and
+accepts end/cancel only from that owner or from a document-level invalidation.
+
+**Why it mattered:** Virtualization turns ordinary widget disposal into a
+high-frequency event. Lifecycle callbacks that are correct for a standalone
+paragraph become stale capabilities once selection spans blocks. Without an
+owner and generation, recycling can cancel current work, retarget the platform
+connection through every intermediate row, or let a disposed row mutate the
+current selection.
+
+**Rule going forward:** Canonical document state and any transient operation
+that can outlive one mounted row belong to the document host. Row callbacks
+carry owner identity and current geometry; document mutation, dependency
+replacement, focus loss, pointer cancellation, boundaries, and disposal stop
+the operation centrally. Keep natural-height virtualization and input
+capability lifetimes separate: a row may recycle freely unless it owns the
+active platform epoch, while no recycled row may resurrect selection state.
+
+## editor-architect — 2026-08-18 — Undo must invert mapping metadata, not only steps
+
+**What:** Reversing `Step.invert(docBefore)` calls restored the document but
+discarded the source transaction's mirror pairs. For a block move, those pairs
+are what route positions through the delete into the matching insertion. The
+new `Transaction.inverting` constructor applies inverse steps in reverse and
+re-registers every pair at reversed indices.
+
+**Why it mattered:** Document equality made the old undo look correct while a
+caret or decoration inside the moved block mapped as `deletedAcross` and could
+silently disappear. Content restoration and anchor restoration are separate
+contracts; testing only the first leaves the editor's durable identity layer
+unprotected.
+
+**Rule going forward:** Build undo mappings through `Transaction.inverting`,
+never by folding inverse steps alone. Any transform metadata that changes map
+routing must define and test its inverse representation. For moves, pin both a
+global caret position and a block-sharded decoration through the forward and
+inverse transactions, in addition to asserting document equality.
+
+## editor-architect — 2026-08-19 — A demo consumer must not become a second editor core
+
+**What:** The playground used to own its own document, decorations, caret, transaction application, and undo stack. Adding the real editable paragraph on top would have left keyboard input in `HomericEditorController` while debug buttons and decoration controls mutated a parallel view-model. The migration instead made the view-model a thin adapter around one public controller and one shared epoch-bound input session. A narrow undoable `replaceDecorations` controller intent closed the only missing public seam, so decoration-only controls did not need to reconstruct the controller or retain shadow state.
+
+**Why it mattered:** Parallel state can look correct while each path is tested alone, then lose selection, composition, decoration mapping, or undo order when a writer alternates between keyboard input and consumer controls. Active-block switching raises the same risk for platform input: every paragraph can be an entry point, but exactly one shared session must own the live epoch, committing the old block's visible composition before attaching the new one.
+
+**Rule going forward:** A consumer adapter may translate UI commands into editor intents, but it does not own canonical document, decoration, selection, composition, or history state. If a legitimate consumer control cannot express its change through the controller, add and pin the smallest atomic controller intent instead of creating a shadow store. Share one input session across all one-active-block hosts, and treat theme, width, and projection changes as presentation rebuilds that preserve controller identity, focus, and logical selection.
+
+## editor-architect — 2026-08-19 — Geometry overlays need a structural layout boundary and a current-input gate
+
+**What:** Packaging the repeated paragraph-overlay dance exposed two separate responsibilities. First, overlay presentation must not participate in the paragraph's layout: the paragraph is the sole non-positioned child, while every consumer widget lives inside a fixed `Positioned.fill` plane. Second, a parent rebuild can happen *before* the child render object receives its new width, source, style, or scaler. Building from the held render object during that gap briefly reuses the old generation even though its `GeometryResult` is not stale yet; the relayout that would mark it stale has not run.
+
+**Why it mattered:** The first implementation passed first-layout placement but called the overlay builder twice during a width change (`generation 1`, then `generation 2`). That is a one-frame wrong caret/footnote position, and generation stamping alone cannot detect it because the render object still truthfully reports generation 1 during the parent's build. The producer must compare the render object's actual constraints and layout inputs with the inputs being built now, suppress the overlay while they differ, then rebuild from the geometry callback after layout advances.
+
+**Rule going forward:** A reusable geometry-overlay host enforces layout neutrality structurally, not by asking every feature author to remember `Positioned`. It also distinguishes “current for the last completed layout” from “current for the widget inputs being built now.” Render only when constraints, layout-affecting inputs, the caller's explicit slot-layout revision, and the observed generation all agree. If a conservative slot revision changes but the child measures identically, accept the still-current generation after that frame rather than waiting forever for a relayout signal that correctly never fires. Keep `GeometryResult.isStale` as the separate guard for asynchronous work that outlives a completed layout.
+
 ## docs — 2026-08-15 — Caret ownership starts at final pixels and preview provenance
 
 **What:** Nexus NEX-143 did not reproduce on its `origin/main` at `3c35986`.
@@ -104,7 +239,6 @@ consumer repository.
 **What:** HOM-11's scope sentence said delete four workarounds when the journal flag flips. Measured: typing `# ` on an anchored paragraph carries both halves of the aside onto a heading, which still renders through AppFlowy. `journalAsideAnchorRunRangesIn` is a pure delta query Homeric's projection depends on. Notes and longform still mount AppFlowy paragraphs via `tightBlockComponentBuilders()`'s default-off flag.
 **Why it mattered:** Deleting the composite would make a writer's note vanish with no error after a heading conversion. Gating the journal overlay/composite to non-paragraph blocks, and leaving the shared decorator intact for other surfaces, is the actual retirement. Deletion waits for Phase 5 (HOM-7), when AppFlowy goes.
 **Rule going forward:** A workaround that is "only needed because of renderer X" is not dead when one surface leaves X. Check every block type and every surface that still mounts X before deleting. The journal flag is journal-scoped; do not thread it into `writing_surface_config.dart`.
-
 ## editor-architect — 2026-08-08 — StepMap semantics that anchor survival depends on
 
 ProseMirror's position mapping is small but exact: `[start, oldSize, newSize]` triples in old-doc coordinates, an `assoc` bias for boundary positions, four deletion flags, and `recover`/mirror machinery. Two traps: (1) `deleted` fires too eagerly for anchor-removal policies — `deletedAcross` (content removed on both sides) is the real "this anchor's content is gone" signal; (2) a block **move** expressed as delete+insert marks everything inside as `deletedAcross` — moves must register their delete/insert StepMaps as a mirror pair so positions recover into the destination, or every anchor and decoration in a moved block dies.
@@ -129,6 +263,38 @@ The Phase 2 render layer's `ParagraphGeometry` (U4) never takes or returns a bar
 
 Homeric's render layer now has two families of caller-supplied opaque payload: `Decoration.spec`/`BlockParagraphSpec` (identity-equality — "same instance means same state, don't over-fire a rebuild") and `PaintLayer.spec` (value-equality — "same visual meaning even if freshly reconstructed this frame, don't over-repaint"). Both are correct for their own caller shape: decorations are typically held and mutated in place, so identity tracks real state changes; paint layers are typically rebuilt fresh every frame from animation state, so identity would make every frame register as "changed" and value equality is what actually detects "nothing visually different happened." The risk is a future opaque-spec type assuming a library-wide default and picking the wrong one silently. Rule: a new opaque-spec type must state which convention it uses in its own doc comment and pick deliberately based on how callers are expected to construct it (held-and-mutated vs. rebuilt-per-frame) — never inherit an assumption from a sibling type.
 
+## orchestrator — 2026-08-18 — A folded delimiter and a soft wrap share one affinity decision
+
+**What was verified:** In `aaaa **bold**`, hiding both delimiter pairs makes
+document offset 6, strictly inside the opening delimiter, map to view offset 5,
+exactly where the visible text wraps.
+`ParagraphGeometry.caretRect` already carries the same `assoc` through both
+the document-to-view fold and the visual-line choice: upstream lands at the
+end of line 1, downstream at the start of line 2.
+
+**Rule going forward:** A caret regression involving hidden text and wrapping
+needs a fixture where the fold edge and wrap offset are literally identical.
+Assert the full rectangle for both associations plus pre-wrap, post-wrap, and
+wide-layout controls. Comparing two paths that share the same caret algorithm
+is useful for mapping drift, but cannot replace independent pixel expectations.
+
+## orchestrator — 2026-08-22 — Resolve a soft-wrap line from an interior grapheme, not engine affinity
+
+Flutter's VM paragraph implementation honors `TextAffinity` when
+`Paragraph.getLineBoundary` receives the exact offset shared by two visual
+lines; Chrome can resolve both affinities to the same line. Homeric already has
+platform-consistent caret geometry at that offset, so it can first prove the
+offset is a real soft-wrap boundary, then query a grapheme strictly inside the
+line selected by `assoc`. Ordinary offsets continue through the direct engine
+query.
+
+**Rule going forward:** when one logical offset has two visual homes, use
+independent geometry to detect the ambiguity and move the engine query inside
+the selected visual side. Never apply an unconditional `offset - 1` / `offset
++ 1` workaround: it changes ordinary line-boundary answers and can split a
+multi-code-unit grapheme. Pin the exact wrap, both neighboring graphemes, a
+wide-layout control, and a hidden-fold-at-wrap case on both VM and Chrome.
+
 ## editor-architect — 2026-08-09 — A seam-adapter contract test proves sufficiency, never agreement
 
 Phase 2's U4 shipped a `SelectableMixin`-shaped adapter test proving every member AppFlowy requires is implementable purely from `ParagraphGeometry`. That claim was true and the test was worth having, and it could not have caught the first three bugs Nexus hit when it actually rendered through us — because *implementable* and *agrees with the renderer next to it* are different properties, and only the second one matters to a consumer running both. Nexus renders paragraphs through Homeric and headings, lists and quotes through AppFlowy in the same document, so a caret that is internally consistent but 4px off its neighbour is still a defect. The reusable rule: an API-sufficiency test belongs in the producing repo, but a *differential* test — both renderers mounted over the same document, answers compared offset by offset — belongs in the consuming one, and no amount of the former substitutes for the latter. Corollary for future phases: when a Phase's exit criterion is "the consumer uses it", the consumer's differential test is the exit criterion, not the producer's contract test.
@@ -140,3 +306,137 @@ Concrete inventory from Nexus's differential run, all found in one sitting, none
 ## editor-architect — 2026-08-09 — Generation-stamped geometry relocates a missed subscription into a thrown error
 
 `ParagraphGeometry` validates every document offset against the projection it was built from, and results carry a layout generation. That is the right design, and it has a consequence worth knowing before it bites: a consumer that forgets to subscribe to its model's change notifications does not degrade into stale pixels, it *throws*. Nexus's block widget listened to selection changes but not to the AppFlowy `Node` it rendered; AppFlowy mutates nodes in place and announces it with `notify()`, so the first keystroke after mount asked geometry for offset 30 of a zero-length projection and raised `DocOffsetOutOfRangeError` inside a selection notifier — 166 test failures whose stack traces pointed at us and whose cause was a missing `addListener` in the consumer. Two rules fall out. For us: this is a feature, keep the validation, but the error message must name both lengths (it does) because that pair is the entire diagnosis. For consumers: clamp incoming offsets against the geometry's own `docLength`, never against the live model's — between a mutation and the rebuild it triggers those two disagree by construction, and hosts like AppFlowy's selection service are not defensive about exceptions crossing back into them.
+## editor-architect — 2026-08-18 — Split block identity is document-scoped, not process-scoped
+
+Process-global counters cannot provide stable editor block identity: unrelated documents perturb their sequence, while undo-restored or consumer-supplied literal namespaces can collide. Implicit production split IDs are canonical lowercase `block-<UUID-v4>`. Transaction allocation guarantees uniqueness only against the current document and reservations in that transaction; history-wide UUID uniqueness remains probabilistic. Deterministic injected suppliers are caller-owned and must retain state across a document's undoable history rather than reset between transactions. An explicit `trailingBlockId` bypasses allocation but still receives structural validation, while seeded property operations continue to provide explicit IDs for reproducible replay. Allocation changes only Homeric `Block.id`; opaque/Nexus metadata is never rewritten.
+
+## editor-architect — 2026-08-20 — Consumer policy belongs before every mutation, and geometry is a revocable capability
+
+**What:** Moving a structured journal onto Homeric required more than exposing the current document. The controller now emits one typed event after each canonical commit, applies one block/range policy to text, structure, external transactions, and history, and runs ordered command interceptors before built-in behavior. Read-only mode closes accepted composition once, detaches platform input, and disables mutation while selection and copy remain available. Editable geometry is exposed only through a document-revision and layout-generation capability; active-caret geometry is flattened into a global rectangle, and a retained capability returns no result as soon as either witness changes.
+
+**Why it mattered:** A consumer-side guard on key events cannot cover platform deltas, clipboard completion, semantics actions, drag reorder, undo/redo, or a custom command that calls back into the controller. Likewise, a retained `ParagraphGeometry` can be internally current for the last layout while already referring to the wrong canonical document. Both gaps create split ownership: one path silently bypasses opaque/read-only policy, while another paints a valid answer for stale input.
+
+**Rule going forward:** Enforce editability and block/range policy at the canonical controller boundary, before callbacks, reveal hooks, history, or state mutation. An interceptor may ignore without mutation, reject without mutation, or handle through at most one observable controller intent. Publish post-commit mappings from the actual transaction—including exact inverse/forward mappings for undo and redo. Expose layout to consumers as a revocable, generation-stamped query capability and publish only flat global geometry outside its synchronous overlay callback.
+
+## editor-architect — 2026-08-20 — A writer capability must carry identity through lifecycle gaps
+
+**What:** The first real Homeric Journal host exposed several gaps that a
+widget-mounted controller can cross before Flutter replaces its element. A
+commit can arrive while the provider already describes the next entry as
+loading; a platform callback can arrive after a delete cascade but before the
+old host unmounts; and a seal can publish `settledAt` while its durable metadata
+ack is still pending. The final integration gives every committed event its
+own entry identity, advances the provider content capability synchronously on
+successful deletion, and revokes input before capturing the seal snapshot.
+
+**Why it mattered:** Session identity alone answers which controller emitted an
+event, not which persisted entry owns it. Provider state alone is temporarily
+ambiguous during loading, deletion, conflict replacement, and sealing.
+Inferring identity from whichever session is currently visible can drop an
+outgoing edit or route a stale callback into a deleted or newly opened entry.
+Freezing after an await is equally late: the save/hash proof may already
+describe an older snapshot. Even a timestamp is not sufficient action
+identity: concurrent seal gestures can share a millisecond, while a later
+unlock must invalidate and serialize behind any already-issued seal write.
+
+**Rule going forward:** A canonical editor commit carries its stable consumer
+identity through the persistence boundary. Lifecycle invalidation advances
+synchronously before the old widget can emit again. Any action that declares a
+snapshot final—seal, export, submit, or share—first settles composition and
+revokes mutation, then captures and persists; if the action fails, restore the
+same retained session's authority only after rechecking its generation and
+current product state. Serialize conflicting per-entry lifecycle actions under
+explicit attempt ownership; never use wall-clock equality as the authority to
+roll back or complete them.
+
+## editor-architect — 2026-08-20 — Touch chrome is a projection of canonical selection, not another editor
+
+**What:** Mobile handles, magnifiers, long-press word selection, and the iOS
+floating cursor all need transient platform state, but none owns document
+selection. The document host resolves generation-stamped endpoint geometry;
+paragraphs publish current geometry into two stable, document-owned physical
+handle links; every drag or floating-cursor callback is bound to the current
+document, layout, focus, and input epoch. Lifecycle and metrics changes
+synchronously revoke that transient state without changing the logical
+selection.
+
+**Why it mattered:** A handle can outlive a recycled row, an overlay can remain
+mounted across rotation, and AppKit/UIKit can finish a floating-cursor sequence
+after focus or the platform connection has moved. Treating any of those objects
+as authoritative creates a second selection owner and lets stale callbacks
+mutate the document. Conversely, canceling the logical selection on background
+or rotation destroys user state that remains perfectly valid. Normalized
+selection start/end also swap when a dragged handle crosses its anchor; if the
+layer-link identity swaps with them, Flutter can dispose the active recognizer
+at the crossing or when the head enters a recycled row.
+
+**Rule going forward:** Keep mobile chrome disposable and reconstructible from
+canonical selection plus current geometry. Bind gesture/floating-cursor work to
+revocable generations, cancel it on mutation, blur, lifecycle, metrics, or row
+recycling, and require fresh focus before accepting more platform input. Keep
+physical start/end handle identity document-owned while mapping normalized
+endpoints onto those links, including the exact collapsed crossing point.
+Widget and integration tests prove the contract; only recorded physical-device
+runs certify platform behavior.
+
+## editor-architect — 2026-08-21 — A valid text-input action is part of platform attachment
+
+**What:** Homeric's delta input session used `TextInputAction.none`, which is
+valid on Android but rejected by Flutter before `TextInput.attach` completes on
+iOS. The input model, composition tests, and even an unsigned iOS release build
+were all green because none mounted a focused input connection inside the iOS
+embedder. A headless iPhone Simulator trace failed at the first focus request.
+The cross-platform default is now `TextInputAction.newline`, which already maps
+to Homeric's epoch-bound structural paragraph-break command.
+
+**Why it mattered:** Input configuration is not inert metadata. Flutter checks
+some values against the active embedder only when a real connection attaches,
+so platform-neutral widget tests and compile-only host builds cannot establish
+that an editor can focus on every supported OS.
+
+**Rule going forward:** Exercise one focused, mounted text-input connection on
+each platform host before calling it supported. Choose configuration values
+from the intersection of the supported embedder sets, then prove the serialized
+`TextInput.setClient` payload in unit tests and the attachment path in simulator
+or device integration tests. Keep synthetic channel traces distinct from
+physical keyboard and IME certification.
+
+## quality — 2026-08-21 — Host-neutral editor tests must remain renderer-backed
+
+**What:** A Journal conflict test stopped importing AppFlowy by reading the
+shared session's canonical content. That was API-neutral but weakened the
+test's defining guarantee: a new facade can hold the adopted body while the
+mounted writer still paints the stale one. The final assertion scopes the
+shared rendered-run adapter to the actual editable paragraph for each host;
+for Homeric this also avoids counting the hover grabber as authored prose.
+
+**Why it mattered:** Removing a renderer-specific type is not progress if the
+replacement moves the observation above the failure boundary. Session state,
+persisted JSON, and rendered glyphs can disagree during same-id adoption,
+conflict replacement, recycling, or a missed rebuild. A broad subtree scan can
+also mistake editor chrome, placeholders, or inline widgets for document text.
+
+**Rule going forward:** When retiring editor-specific tests, preserve the
+original observation layer. Use the shared session for canonical state and
+leases, real platform-input helpers for mutation, and a renderer-neutral but
+tightly scoped render probe for visible output. Assert the requested host is
+actually mounted in every matrix case; never let a compatibility fallback make
+a nominal Homeric test pass.
+
+## orchestrator — 2026-08-22 — Platform evidence starts with an owned host
+
+**What:** HOM-21's web ledger described best-effort behavior, but the Homeric
+playground had no `web/` host and therefore could not launch or build a browser
+acceptance runner. Adding the minimal package-owned host plus its adaptive icon
+font turned Web from an aspirational matrix column into a warning-free release
+artifact that can be exercised when browser policy permits.
+
+**Why it mattered:** Shared widget tests and a portable Dart entrypoint do not
+prove that a platform is runnable. Without an owned host, platform acceptance
+cannot even begin, and documentation can accidentally imply a test surface
+that does not exist.
+
+**Rule going forward:** Before listing platform behavior as supported or
+best-effort, require a checked-in host, a clean release build, and a repeatable
+launch command. Keep host readiness, automated adapter evidence, browser or
+device interaction, and certification as separate claims.

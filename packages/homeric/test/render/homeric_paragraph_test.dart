@@ -11,7 +11,7 @@
 // PaintingBinding routes to systemFonts listeners and, through
 // RelayoutWhenSystemFontsChangeMixin, into the render object.
 
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, File, Platform;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -30,6 +30,30 @@ Future<void> sendFontsChangeMessage(WidgetTester tester) async {
 }
 
 void main() {
+  test('owned production geometry paths have no runtime debug layout gates',
+      () {
+    final packageRoot =
+        File('lib/src/render/homeric_paragraph.dart').existsSync()
+            ? Directory.current.path
+            : '${Directory.current.path}/packages/homeric';
+    const paths = <String>[
+      'lib/src/render/paragraph_geometry.dart',
+      'lib/src/render/homeric_paragraph.dart',
+      'lib/src/render/paragraph_overlay.dart',
+      'lib/src/editing/editable_paragraph.dart',
+    ];
+    for (final path in paths) {
+      final runtimeReads = File('$packageRoot/$path')
+          .readAsLinesSync()
+          .where((line) =>
+              line.contains('debugNeedsLayout') &&
+              !line.trimLeft().startsWith('assert('))
+          .toList();
+      expect(runtimeReads, isEmpty,
+          reason: '$path must use release-safe geometry readiness');
+    }
+  });
+
   group('characterization (FlutterTest font metrics)', () {
     testWidgets('known text at fontSize 14 has exactly computable size',
         (tester) async {
@@ -228,6 +252,20 @@ void main() {
   // onGeometryChanged, and which must not — lives in
   // `geometry_signal_test.dart`.
   group('invalidation matrix', () {
+    testWidgets('release-safe geometry readiness follows layout invalidation',
+        (tester) async {
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf('hello'))));
+      final render = renderOf(tester);
+
+      expect(render.hasCurrentGeometry, isTrue);
+      render.markNeedsLayout();
+      expect(render.hasCurrentGeometry, isFalse,
+          reason: 'runtime readiness cannot depend on a debug-only getter');
+      await tester.pump();
+      expect(render.hasCurrentGeometry, isTrue);
+    });
+
     testWidgets('width-only change relayouts the SAME paragraph',
         (tester) async {
       final source = sourceOf('hello');

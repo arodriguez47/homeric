@@ -34,6 +34,7 @@ pubspec_overrides.yaml
 # Generated
 tools/corpus/out/
 benchmarks/results/
+packages/homeric/examples/playground/benchmark_assets/*.md
 
 # OS
 .DS_Store

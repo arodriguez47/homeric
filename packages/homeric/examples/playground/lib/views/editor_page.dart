@@ -1,8 +1,7 @@
-/// The editor page: a `ListView` of [HomericParagraph] views over the
-/// current document (R8), with per-build style resolution from a small
-/// in-page theme (R7 — no special plumbing, just calling [resolveStyle]
-/// with the current theme each build) and a tap-to-place caret display
-/// driven by [ParagraphGeometry] (U4).
+/// The editor page: one [HomericEditableDocument] over the current document,
+/// with per-build style resolution from a small in-page theme. Every paragraph
+/// remains an editing entry point backed by the same controller and
+/// epoch-bound input session.
 ///
 /// This is the "view" side of the flutter-architecture MVVM split: no
 /// business logic lives here — every widget either reads
@@ -13,24 +12,33 @@
 library;
 
 import 'package:flutter/material.dart' hide Decoration;
+import 'package:flutter/services.dart' show SuggestionSpan, TextRange;
 import 'package:homeric/homeric.dart';
 
 import '../decoration_spec.dart';
 import '../view_models/document_view_model.dart';
 
-/// The key the caret's exact-geometry indicator carries — read by
-/// `test/document_view_model_test.dart` to cross-check
-/// [ParagraphGeometry.caretRect] end to end against what tapping actually
-/// produces on screen.
-const Key caretIndicatorKey = ValueKey('caret-indicator');
-
 /// Renders [viewModel]'s document as a scrolling list of blocks.
 class EditorPage extends StatefulWidget {
   /// Creates the editor page over [viewModel].
-  const EditorPage({super.key, required this.viewModel});
+  const EditorPage({
+    super.key,
+    required this.viewModel,
+    this.cacheExtent = 250,
+    this.scrollController,
+  });
 
   /// The document view-model this page renders and edits.
   final DocumentViewModel viewModel;
+
+  /// Logical pixels retained before and after the visible list extent.
+  ///
+  /// Explicitly pinned so benchmark runs do not inherit a framework-default
+  /// change silently.
+  final double cacheExtent;
+
+  /// Optional controller used by deterministic benchmark traces.
+  final ScrollController? scrollController;
 
   @override
   State<EditorPage> createState() => _EditorPageState();
@@ -61,27 +69,26 @@ class _EditorPageState extends State<EditorPage> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: ListenableBuilder(
-              listenable: widget.viewModel,
-              builder: (context, _) {
-                final document = widget.viewModel.document;
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: document.blockCount,
-                  itemBuilder: (context, index) {
-                    final block = document.blocks[index];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _BlockView(
-                        key: ValueKey(block.id),
-                        viewModel: widget.viewModel,
-                        block: block,
-                        baseStyle: _baseStyle,
-                      ),
-                    );
-                  },
-                );
-              },
+            child: HomericEditableDocument.builder(
+              controller: widget.viewModel.editorController,
+              inputSession: widget.viewModel.inputSession,
+              scrollController: widget.scrollController,
+              padding: const EdgeInsets.all(16),
+              cacheExtent: widget.cacheExtent,
+              estimatedBlockHeight: 54,
+              layoutRevision: (_darkText, _fontSize),
+              touchSelectionConfiguration:
+                  const HomericTouchSelectionConfiguration.adaptive(),
+              blockBuilder: (context, block, focusNode) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _BlockView(
+                  key: ValueKey(block.id),
+                  viewModel: widget.viewModel,
+                  block: block,
+                  focusNode: focusNode,
+                  baseStyle: _baseStyle,
+                ),
+              ),
             ),
           ),
         ],
@@ -130,96 +137,73 @@ class _ThemeBar extends StatelessWidget {
   }
 }
 
-/// One block's paragraph, with tap-to-place caret and per-block decoration
-/// derivation.
-class _BlockView extends StatefulWidget {
+/// One block's public editable host with per-block paint derivation.
+class _BlockView extends StatelessWidget {
   const _BlockView({
     super.key,
     required this.viewModel,
     required this.block,
+    required this.focusNode,
     required this.baseStyle,
   });
 
   final DocumentViewModel viewModel;
   final Block block;
+  final FocusNode focusNode;
   final TextStyle baseStyle;
 
   @override
-  State<_BlockView> createState() => _BlockViewState();
+  Widget build(BuildContext context) {
+    final decorations = viewModel.decorations.forBlock(block.id);
+    final layers = _paintLayersForBlock(decorations);
+    return HomericEditableParagraph(
+      controller: viewModel.editorController,
+      inputSession: viewModel.inputSession,
+      blockId: block.id,
+      focusNode: focusNode,
+      baseStyle: baseStyle,
+      resolveStyle: (run) => _resolveRunStyle(run, baseStyle),
+      paintLayers: layers,
+      slotBuilder: (slot) => _ChipWidget(slot: slot),
+      caretColor: Colors.blueAccent,
+      selectionColor: const Color(0x554F64C8),
+      inactiveSelectionColor: const Color(0x224F64C8),
+      composingColor: const Color(0xFF7E57C2),
+      spellCheckProvider: const _PlaygroundSpellCheckProvider(),
+      onHostEvent: (event) => _showHostEvent(context, event),
+    );
+  }
 }
 
-class _BlockViewState extends State<_BlockView> {
-  // Delivered by onGeometryChanged after every layout — which is why this
-  // widget needs no GlobalKey. The callback arrives before anything can
-  // ask for geometry, and again whenever geometry changes, so a held
-  // reference is always one a fresh ParagraphGeometry can be built from.
-  RenderHomericParagraph? _paragraph;
+void _showHostEvent(BuildContext context, HomericHostEvent event) {
+  final message = switch (event) {
+    HomericPasteRejected() => 'Paste supports one paragraph at a time.',
+    HomericClipboardFailure(operation: final operation) =>
+      '${switch (operation) {
+        HomericClipboardOperation.copy => 'Copy',
+        HomericClipboardOperation.cut => 'Cut',
+        HomericClipboardOperation.paste => 'Paste',
+      }} failed.',
+  };
+  ScaffoldMessenger.of(context)
+    ..removeCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
+}
+
+final class _PlaygroundSpellCheckProvider implements HomericSpellCheckProvider {
+  const _PlaygroundSpellCheckProvider();
 
   @override
-  Widget build(BuildContext context) {
-    final decorations = widget.viewModel.decorations.forBlock(widget.block.id);
-    final reveal = widget.viewModel.revealStateForBlock(widget.block.id);
-    final source = ParagraphSource.build(
-      block: widget.block,
-      decorations: decorations,
-      reveal: reveal,
-      resolveStyle: (run) => _resolveRunStyle(run, widget.baseStyle),
-    );
-    final layers = _paintLayersForBlock(decorations);
-    final localCaret = _caretLocalOffset();
-    final paragraph = _paragraph;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapUp: _handleTap,
-      child: Stack(
-        children: [
-          HomericParagraph(
-            source: source,
-            baseStyle: widget.baseStyle,
-            paintLayers: layers,
-            slotBuilder: (slot) => _ChipWidget(slot: slot),
-            onGeometryChanged: _handleGeometryChanged,
-          ),
-          if (localCaret != null && paragraph != null)
-            ..._buildCaretOverlay(
-                paragraph: paragraph, localOffset: localCaret),
-        ],
+  Future<List<SuggestionSpan>> check(HomericSpellCheckRequest request) async {
+    const misspelling = 'Playgrond';
+    final start = request.text.indexOf(misspelling);
+    if (start < 0) return const [];
+    return [
+      SuggestionSpan(
+        TextRange(start: start, end: start + misspelling.length),
+        const ['Playground'],
       ),
-    );
-  }
-
-  /// Re-places the caret overlay whenever the paragraph relayouts — a
-  /// window resize, a base-style change, an edit. The first call is what
-  /// mounts the overlay at all: on the first build there is no geometry to
-  /// position against yet.
-  void _handleGeometryChanged(RenderHomericParagraph paragraph, int _) {
-    if (!mounted) {
-      return;
-    }
-    setState(() => _paragraph = paragraph);
-  }
-
-  int? _caretLocalOffset() {
-    final caret = widget.viewModel.caret;
-    if (caret == null) return null;
-    final resolved = widget.viewModel.document.resolve(caret);
-    if (resolved is! InlinePosition || resolved.block.id != widget.block.id) {
-      return null;
-    }
-    return resolved.offset;
-  }
-
-  void _handleTap(TapUpDetails details) {
-    final renderObject = _paragraph;
-    if (renderObject == null) return;
-    final local = renderObject.globalToLocal(details.globalPosition);
-    final docOffset =
-        ParagraphGeometry(renderObject).positionForPoint(local).value;
-    final document = widget.viewModel.document;
-    final index = document.indexOfBlockId(widget.block.id);
-    if (index == null) return;
-    widget.viewModel.placeCaretAt(document.positionAt(index, docOffset.value));
+    ];
   }
 }
 
@@ -277,46 +261,6 @@ List<PaintLayer> _paintLayersForBlock(List<Decoration> decorations) {
     }
   }
   return layers;
-}
-
-/// Computes the caret's local rect via [ParagraphGeometry] against
-/// [paragraph] and returns the [Positioned] overlays for it: an
-/// exact-geometry probe (tagged [caretIndicatorKey], zero-width, matched
-/// bit-for-bit by the widget test) plus a 2px visual stroke for the
-/// running app.
-///
-/// [paragraph] comes from [HomericParagraph.onGeometryChanged], so it is
-/// laid out and current by construction — no `debugNeedsLayout` guard, and
-/// no argument about frame ordering. The [ParagraphGeometry] is built
-/// fresh here rather than held: that is the supported pattern, and the
-/// reason the callback hands back the render object.
-List<Widget> _buildCaretOverlay({
-  required RenderHomericParagraph paragraph,
-  required int localOffset,
-}) {
-  final Rect rect;
-  try {
-    rect = ParagraphGeometry(paragraph).caretRect(DocOffset(localOffset)).value;
-  } on DocOffsetOutOfRangeError {
-    // A caret offset past the end of this block — a different failure
-    // from stale geometry, and still possible.
-    return const <Widget>[];
-  }
-  return <Widget>[
-    Positioned.fromRect(
-      rect: rect,
-      child: const IgnorePointer(
-        child: ColoredBox(key: caretIndicatorKey, color: Colors.transparent),
-      ),
-    ),
-    Positioned(
-      left: rect.left - 1,
-      top: rect.top,
-      width: 2,
-      height: rect.height == 0 ? 16 : rect.height,
-      child: const IgnorePointer(child: ColoredBox(color: Colors.blueAccent)),
-    ),
-  ];
 }
 
 /// The widget rendered for a widget-chip decoration's placeholder slot.

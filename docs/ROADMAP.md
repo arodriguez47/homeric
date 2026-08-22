@@ -16,6 +16,56 @@ Canonical tracking lives in Linear (team **Homeric**, epic [HOM-1](https://linea
 
 Phase 1's implementation plan: [`docs/plans/2026-08-08-001-feat-phase1-editor-core-plan.md`](plans/2026-08-08-001-feat-phase1-editor-core-plan.md). The benchmark harness and `.github/workflows/benchmark.yaml` return in Phase 4, wired against [`PERF_BUDGET.md`](PERF_BUDGET.md)'s fixtures and 5% regression gate.
 
+### Phase 3 status — macOS-first foundation
+
+[HOM-18](https://linear.app/xana-studios/issue/HOM-18) now has a local,
+automated playground integration for one active editable block at a time:
+canonical directional selection, grapheme deletion, visual navigation,
+epoch-bound delta input, composition grouping, pointer/keyboard interactions,
+editable paint/semantics, and a shared undo pipeline. Every playground
+paragraph can become active, while cross-block selection and structural input
+remain outside this slice. An August 20 interactive macOS pass was reported,
+but no complete run record or artifact was retained. It is not certification
+evidence; macOS, Windows/Linux, and broader IME certification remain explicitly
+unverified.
+
+[HOM-19](https://linear.app/xana-studios/issue/HOM-19) adds desktop clipboard,
+redo, word gestures, adaptive menus, and injectable spelling affordances. The
+reported August 20 interaction covered the adaptive Cut/Copy/Paste menu,
+multi-click selection, modifier-word commands, undo/redo, and caret behavior,
+but has no retained certification record. The current automated, release-build,
+and manual boundary is recorded in
+[`desktop-editing-acceptance.md`](testing/desktop-editing-acceptance.md).
+[HOM-20](https://linear.app/xana-studios/issue/HOM-20)
+now supplies adaptive iOS/Android selection handles, long-press and word drag,
+magnifier, iOS floating cursor routing, and lifecycle-safe cancellation over
+the same controller/session. Automated coverage is green; the two physical
+device gates in [`mobile-touch-acceptance.md`](testing/mobile-touch-acceptance.md)
+remain unrun. [HOM-21](https://linear.app/xana-studios/issue/HOM-21) owns
+cross-platform IME certification. The automated input boundary now also routes
+and clears iOS autocorrection prompt ranges through the current host epoch and
+binds caret/composing geometry to an opaque block-owner lease;
+the remaining real-platform work is tracked in
+[`ime-acceptance.md`](testing/ime-acceptance.md). The playground has a buildable
+release web acceptance host, but browser input and CJK remain separately
+unverified. Phase 4 status is below, and Nexus parity/default switching remains
+[HOM-7](https://linear.app/xana-studios/issue/HOM-7).
+
+### Phase 4 status — multi-block viewport
+
+[HOM-6](https://linear.app/xana-studios/issue/HOM-6) now supplies the package's
+document-owned lazy viewport. Natural-height rows remain bounded to the
+viewport/cache plus the active input row; global directional selection,
+structural split/join/paste, selection autoscroll, measured far jumps, and
+undoable block reorder all stay in the single controller/session pipeline.
+Each row exposes an opaque accessible `⋮` grabber, and macOS
+`Cmd+Shift+Up/Down` invokes the same stable-ID move command. The playground is
+the first real consumer. Local automated and profile evidence is recorded.
+The reported August 20 interactive pass included structural and reorder flows,
+but has no retained certification record. VoiceOver reorder, prolonged stress,
+platform interaction, and the Nexus default switch remain separate acceptance
+work.
+
 > **Phase 2's deliverable used to read "All four workarounds die."** It was measured and it is wrong. Three of the four are reached through AppFlowy's editor-wide `textSpanDecorator`, which is not gated on block type, and an aside anchor survives a `# ` conversion onto a heading — so the machinery stays reachable for the block types that remain on AppFlowy. A fourth, `journalAsideAnchorRunRangesIn`, turned out to be a pure delta query the Homeric projection itself depends on. What Phase 2 actually delivers is that the **paragraph path** stops using them; the deletion waits for Phase 5 (HOM-7), when AppFlowy goes. Pinned by `nexus/test/widgets/journal_aside_block_type_test.dart`.
 
 ## Checkpoints
@@ -29,7 +79,7 @@ Not reasons to stop — reasons to re-scope, checked at each phase boundary:
 
 ## Non-goals (v1)
 
-- iOS (deferred — Apple Pencil and iPad polish are a project of their own)
+- Apple Pencil- and iPad-specific polish (core iOS touch editing is in HOM-20)
 - Real-time collaboration
 - Native (non-Flutter) bindings
 - A theme/design system — Homeric ships unstyled primitives
@@ -39,7 +89,7 @@ Not reasons to stop — reasons to re-scope, checked at each phase boundary:
 
 After v1 stable, the natural next investments:
 
-- iOS
+- Physical-device iOS and Android certification, followed by platform polish
 - An Operational Transform or CRDT layer for collaboration (likely Yjs-equivalent in Dart)
 - Paginated layout mode (PDF/book-style)
 - LSP-style language services for writers (grammar, style)

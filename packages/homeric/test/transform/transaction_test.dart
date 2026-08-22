@@ -8,6 +8,89 @@ import 'package:homeric/homeric.dart';
 import 'transform_test_utils.dart';
 
 void main() {
+  group('Transaction block ID allocation', () {
+    test('retries empty, current-document, and reserved candidates', () {
+      final candidates = <String>['', 'b', 'fresh', 'fresh', 'next'].iterator;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          candidates.moveNext();
+          return candidates.current;
+        },
+      );
+
+      expect(tr.allocateBlockId(), 'fresh');
+      expect(tr.allocateBlockId(), 'next');
+    });
+
+    test('reserves allocations before either ID is inserted', () {
+      var calls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () => calls++ < 2 ? 'reserved' : 'available',
+      );
+
+      expect(tr.allocateBlockId(), 'reserved');
+      expect(tr.allocateBlockId(), 'available');
+      expect(calls, 3);
+    });
+
+    test('fails after exactly 32 rejected candidates', () {
+      var calls = 0;
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () {
+          calls++;
+          return '';
+        },
+      );
+
+      expect(
+        tr.allocateBlockId,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'Unable to allocate a unique block ID after 32 attempts.',
+          ),
+        ),
+      );
+      expect(calls, 32);
+    });
+
+    test('propagates supplier exceptions unchanged', () {
+      final failure = StateError('supplier failed');
+      final tr = Transaction(
+        threeBlocks(),
+        blockIdSupplier: () => throw failure,
+      );
+
+      expect(tr.allocateBlockId, throwsA(same(failure)));
+    });
+
+    test('reservations are isolated between transactions', () {
+      Transaction transaction() =>
+          Transaction(threeBlocks(), blockIdSupplier: () => 'shared');
+
+      expect(transaction().allocateBlockId(), 'shared');
+      expect(transaction().allocateBlockId(), 'shared');
+    });
+
+    test('default supplier produces a canonical lowercase UUID-v4 ID', () {
+      final id = Transaction(threeBlocks()).allocateBlockId();
+
+      expect(
+        id,
+        matches(
+          RegExp(
+            r'^block-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-'
+            r'[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          ),
+        ),
+      );
+    });
+  });
+
   group('Transaction accumulation', () {
     test('collects steps, pre-step docs, and maps in order', () {
       final doc = threeBlocks();
@@ -125,6 +208,58 @@ void main() {
       expect(result.doc, same(tr.doc));
       expect(result.mapping, same(tr.mapping));
       expect(result.changes.changeFor('a'), isNotNull);
+    });
+  });
+
+  group('Transaction.inverting', () {
+    test('restores moved-block anchors through reversed mirror pairs', () {
+      final before = threeBlocks();
+      final decoration = Decoration.inline(
+        'b',
+        1,
+        4,
+        spec: Object(),
+      );
+      final decorations = DecorationSet.of([decoration]);
+      final source = Transaction(before)
+        ..step(ReplaceStep(2, 2, inlineSlice('!')))
+        ..moveBlock('b', 0)
+        ..setBlockType('c', 'quote');
+
+      final movedCaret = source.mapping.map(before.positionAt(1, 2));
+      final movedDecorations = decorations.map(source.mapping, source.changes);
+      final inverse = Transaction.inverting(source);
+
+      expectSameDoc(inverse.doc, before);
+      expect(inverse.steps, hasLength(source.steps.length));
+      expect(inverse.mapping.map(movedCaret), before.positionAt(1, 2));
+      expect(
+        movedDecorations
+            .map(inverse.mapping, inverse.changes)
+            .decorations
+            .toList(),
+        [decoration],
+      );
+      expect(inverse.mapping.getMirror(1), 2);
+      expect(inverse.mapping.getMirror(2), 1);
+    });
+
+    test('ordinary transactions invert without registering mirror pairs', () {
+      final before = threeBlocks();
+      final source = Transaction(before)
+        ..step(ReplaceStep(3, 3, inlineSlice('XY')))
+        ..setBlockType('c', 'quote');
+
+      final inverse = Transaction.inverting(source);
+
+      expectSameDoc(inverse.doc, before);
+      expect(
+        [
+          for (var i = 0; i < inverse.steps.length; i++)
+            inverse.mapping.getMirror(i)
+        ],
+        everyElement(isNull),
+      );
     });
   });
 

@@ -7,13 +7,31 @@ library homeric;
 
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';
+export 'src/editing/editor_controller.dart';
+export 'src/editing/editable_document.dart'
+    hide homericPhysicalSelectionEndpoint;
+export 'src/editing/spell_check.dart'
+    show HomericSpellCheckProvider, HomericSpellCheckRequest;
+export 'src/editing/editor_clipboard.dart'
+    show
+        HomericClipboardAdapter,
+        HomericClipboardFailure,
+        HomericClipboardOperation,
+        HomericHostEvent,
+        HomericPasteRejected,
+        SystemHomericClipboard;
+export 'src/editing/editable_paragraph.dart';
+export 'src/input/text_input_session.dart';
 export 'src/model/attributes.dart';
 export 'src/model/block.dart';
 export 'src/model/document.dart';
 export 'src/model/inline_run.dart';
 export 'src/model/position.dart';
-export 'src/render/homeric_paragraph.dart';
+export 'src/model/selection.dart';
+export 'src/render/homeric_paragraph.dart'
+    hide HomericParagraphLayoutCache, HomericParagraphLayoutCacheScope;
 export 'src/render/paint_layers.dart';
+export 'src/render/paragraph_layout_instrumentation.dart';
 export 'src/render/paragraph_geometry.dart';
 export 'src/render/paragraph_source.dart';
 export 'src/transform/attr_step.dart';

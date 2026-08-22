@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "name": "pre-hom-6-listview-builder-control",
+  "recorded_at_utc": "2026-08-20T00:56:35Z",
+  "fixture": {
+    "file": "large.md",
+    "words": 100000,
+    "blocks": 1120,
+    "fnv1a32": "7a87f8d5"
+  },
+  "environment": {
+    "machine": "Apple Silicon MacBook Pro",
+    "os": "macOS 26.5.2",
+    "flutter": "3.44.4 stable ad70ec4617166f1c38e5d2bfd388af71fda14f06",
+    "dart": "3.12.2",
+    "mode": "profile",
+    "viewport": "1440x900 logical, DPR 1, text scale 1, cache extent 250"
+  },
+  "method": {
+    "warmup_round_trips": 1,
+    "samples_per_mode": 3,
+    "trace_steps": 100,
+    "trace_duration_ms": 5000,
+    "order": "disabled, instrumented, repeated",
+    "aggregation": "median of sample summaries",
+    "paired_instrumentation_total_p95_delta_basis_points": 87
+  },
+  "observed": {
+    "cold_load_first_frame_us": 59200,
+    "cold_mount_total_p95_us": 5018,
+    "scroll_disabled_total_p50_us": 9266,
+    "scroll_disabled_total_p95_us": 12854,
+    "active_rows_initial": 9,
+    "active_rows_max": 11,
+    "instrumented_layout_count_three_samples": 5589,
+    "instrumented_layout_median_sample_us": 703298
+  },
+  "budget_status": {
+    "time_to_first_frame_under_500ms": true,
+    "cold_load_p95_frame_under_50ms": true,
+    "scroll_p50_under_16ms": true,
+    "scroll_p95_under_33ms": true,
+    "active_widgets_under_500": true,
+    "cumulative_layout_under_200ms": false
+  },
+  "notes": [
+    "This is the immutable pre-viewport control, not the final HOM-6 acceptance result.",
+    "The current lazy list meets frame and mounted-row budgets but exceeds the cumulative paragraph-layout budget on the fixed long-distance trace.",
+    "The final viewport must preserve or improve structural laziness and remediate the layout-time failure rather than retrofitting this baseline."
+  ]
+}

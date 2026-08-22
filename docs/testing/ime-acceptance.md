@@ -9,8 +9,9 @@ recorded runs on the named platform certify the platform integration.
 | Gate | Status | Evidence |
 |---|---|---|
 | Flutter widget tests | Pass | Delta input, composing-range grouping, stale epochs, focus transfer, connection loss, selector ordering, floating cursor, iOS autocorrection prompt painting, and attachment-bound caret/composing geometry |
-| Mounted Dart/framework adapter trace | Pass in macOS, iPhone 17 Pro Simulator (iOS 26.5), and Android API 36 emulator test processes, 2026-08-21 | The playground mounted a focused platform input client and injected framework callbacks through Flutter's test messenger using debug client id `-1`. Homeric committed a composed Unicode replacement as one undo unit, committed visible composition once on connection loss, reattached with a different focused epoch capability, rejected the retired callback without changing canonical state, and routed `TextInputAction.newline` through one split/retarget/undo unit that accepted the next delta. This does not exercise native host delivery or client-id routing. |
+| Mounted Dart/framework adapter trace | Pass in the current macOS tree on 2026-08-22; pass in iPhone 17 Pro Simulator (iOS 26.5) and Android API 36 emulator test processes on 2026-08-21 | The playground mounted a focused platform input client and injected framework callbacks through Flutter's test messenger using debug client id `-1`. Homeric committed a composed Unicode replacement as one undo unit, committed visible composition once on connection loss, reattached with a different focused epoch capability, rejected the retired callback without changing canonical state, and routed `TextInputAction.newline` through one split/retarget/undo unit that accepted the next delta. This does not exercise native host delivery or client-id routing. |
 | Flutter 3.24 compatibility | Pass | The affected input and editable-paragraph suites pass on isolated Flutter 3.24.5; scoped analysis is clean |
+| Web release acceptance host | Build pass / interaction not run, 2026-08-22 | The playground now owns a standard web host and `flutter build web --release --no-pub -t lib/native_ime_acceptance.dart` succeeds with both adaptive icon fonts bundled. The managed browser refused localhost because its admin policy could not be verified, so no browser-input result is claimed. |
 | macOS direct playground | Unverified historical note, 2026-08-20 | A prior interactive pass reported platform typing, dead-key composition, grapheme deletion, selection, and caret presentation, but no complete run record or artifact was retained. It is not certification evidence. |
 | Windows desktop | Not run | Required before Windows certification |
 | Linux desktop | Not run | Required before Linux certification |
@@ -86,6 +87,23 @@ perform the candidate-geometry and VoiceOver checks separately. Automated Mac
 UI capture in the current environment sees the Flutter surface as black and
 exposes only the window container, so it cannot supply those visual or
 accessibility results.
+
+On 2026-08-22 the profile runner built, attached one focused native input
+connection, and emitted `HOMERIC_NATIVE_IME_READY` plus its initial state. The
+Mac was locked before the physical sequence could begin, so this is a runner
+readiness check only and does not change any manual matrix row.
+
+## Web best-effort runner
+
+The same retained-state runner now has a package-owned web host:
+
+```bash
+flutter run -d chrome --profile -t lib/native_ime_acceptance.dart
+```
+
+Use it only for best-effort Latin, selection, history, and connection behavior.
+Flutter web CJK remains blocked by the linked engine issue, and a successful
+release build alone is not browser-input evidence.
 
 ## Manual platform record
 

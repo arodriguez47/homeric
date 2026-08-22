@@ -46,8 +46,10 @@ cross-platform IME certification. The automated input boundary now also routes
 and clears iOS autocorrection prompt ranges through the current host epoch and
 binds caret/composing geometry to an opaque block-owner lease;
 the remaining real-platform work is tracked in
-[`ime-acceptance.md`](testing/ime-acceptance.md). Phase 4 status is below, and Nexus
-parity/default switching remains [HOM-7](https://linear.app/xana-studios/issue/HOM-7).
+[`ime-acceptance.md`](testing/ime-acceptance.md). The playground has a buildable
+release web acceptance host, but browser input and CJK remain separately
+unverified. Phase 4 status is below, and Nexus parity/default switching remains
+[HOM-7](https://linear.app/xana-studios/issue/HOM-7).
 
 ### Phase 4 status — multi-block viewport
 

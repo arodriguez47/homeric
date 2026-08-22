@@ -332,3 +332,21 @@ leases, real platform-input helpers for mutation, and a renderer-neutral but
 tightly scoped render probe for visible output. Assert the requested host is
 actually mounted in every matrix case; never let a compatibility fallback make
 a nominal Homeric test pass.
+
+## orchestrator — 2026-08-22 — Platform evidence starts with an owned host
+
+**What:** HOM-21's web ledger described best-effort behavior, but the Homeric
+playground had no `web/` host and therefore could not launch or build a browser
+acceptance runner. Adding the minimal package-owned host plus its adaptive icon
+font turned Web from an aspirational matrix column into a warning-free release
+artifact that can be exercised when browser policy permits.
+
+**Why it mattered:** Shared widget tests and a portable Dart entrypoint do not
+prove that a platform is runnable. Without an owned host, platform acceptance
+cannot even begin, and documentation can accidentally imply a test surface
+that does not exist.
+
+**Rule going forward:** Before listing platform behavior as supported or
+best-effort, require a checked-in host, a clean release build, and a repeatable
+launch command. Keep host readiness, automated adapter evidence, browser or
+device interaction, and certification as separate claims.

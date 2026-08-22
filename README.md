@@ -91,7 +91,8 @@ remains unrun. Cross-platform IME certification remains
 the automated epoch/composition/autocorrection and geometry-capability coverage
 separately from the still-open physical platform matrix, and provides a focused
 native macOS runner that emits a retained state trace for the manual dead-key
-and history sequence.
+and history sequence. The playground now also owns a warning-free release web
+host for that runner; browser input remains best-effort and unverified.
 HOM-19's automated, release-build, and manual evidence is tracked separately in
 the [desktop editing acceptance ledger](docs/testing/desktop-editing-acceptance.md).
 

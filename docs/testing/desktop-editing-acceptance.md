@@ -19,8 +19,8 @@ platform-certified.
 |---|---|---|
 | Controller, clipboard, input-session, paragraph, geometry, and overlay tests | PASS | 197 tests passed locally. Covers canonical undo/redo, stale-safe clipboard work, selectors, word commands, multi-click and drag selection, adaptive menu behavior, injected spelling results, caret timing, inactive selection, and release-safe geometry readiness. |
 | Playground integration | PASS | 32 tests passed locally. Covers public controller history, clipboard feedback, injected spelling, input, block switching, presentation rebuilds, and one undo pipeline. |
-| Complete Homeric package suite | PASS (current tree, 2026-08-21) | 731 tests passed with one intentional skip after the latest HOM-20 touch-lifecycle and HOM-21 input-action/adapter-trace changes. The mounted framework adapter trace remains a separate host-process gate. |
-| Complete playground unit/widget suite | PASS | 37 tests passed on the same tree. |
+| Complete Homeric package suite | PASS (current tree, 2026-08-22) | 745 tests passed with one intentional skip after the latest HOM-20 touch-lifecycle and HOM-21 input-action/adapter-trace changes. The mounted framework adapter trace remains a separate host-process gate. |
+| Complete playground unit/widget suite | PASS | 38 tests passed on the same tree, including the package-owned web-host guard. |
 | Homeric package analysis | PASS | Full package `flutter analyze` reported no issues after the HOM-21 geometry-capability change. |
 | Playground analysis | PASS | Full playground `flutter analyze` reported no issues after the HOM-21 geometry-capability change. |
 | macOS release build | PASS | `flutter build macos --release` produced `build/macos/Build/Products/Release/homeric_playground.app` (43.3 MB). Compilation proves release-safe code paths; it does not prove AppKit delivery or interaction. |

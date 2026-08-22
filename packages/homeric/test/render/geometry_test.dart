@@ -164,6 +164,64 @@ void main() {
           reason: 'upstream at the wrap point stays on line 1');
       expect(downstream, DocRange(const DocOffset(5), const DocOffset(9)),
           reason: 'downstream at the wrap point moves to line 2');
+      expect(geometry.lineBoundaryAt(const DocOffset(4), assoc: 1).value,
+          DocRange(const DocOffset(0), const DocOffset(5)),
+          reason: 'the grapheme before the wrap remains on line 1');
+      expect(geometry.lineBoundaryAt(const DocOffset(6), assoc: -1).value,
+          DocRange(const DocOffset(5), const DocOffset(9)),
+          reason: 'the grapheme after the wrap remains on line 2');
+    });
+
+    testWidgets(
+        'a wrap between one-grapheme lines does not skip the selected line',
+        (tester) async {
+      final source = sourceOf('abc');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 14));
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 3);
+      expect(
+        [
+          for (var offset = 0; offset < 3; offset++)
+            render.layoutParagraph.getLineNumberAt(offset)
+        ],
+        [0, 1, 2],
+        reason: 'each code unit belongs to its own visual line',
+      );
+      final geometry = ParagraphGeometry(render);
+
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(1), assoc: -1).value,
+        DocRange(const DocOffset(0), const DocOffset(1)),
+        reason: 'upstream selects the one-grapheme line before the wrap',
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(1), assoc: 1).value,
+        DocRange(const DocOffset(1), const DocOffset(2)),
+        reason: 'MUTATION: querying the next grapheme boundary can skip the '
+            'one-grapheme line and resolve the following shared wrap instead',
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(2), assoc: -1).value,
+        DocRange(const DocOffset(1), const DocOffset(2)),
+        reason: 'the same one-grapheme line is selectable from its trailing '
+            'wrap without querying the adjacent ambiguous boundary',
+      );
+    });
+
+    testWidgets('without a wrap both associations return the whole line',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 200));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      for (final assoc in const [-1, 1]) {
+        expect(
+          geometry.lineBoundaryAt(const DocOffset(5), assoc: assoc).value,
+          DocRange(const DocOffset(0), const DocOffset(9)),
+        );
+      }
     });
 
     testWidgets('line boundary maps back through a hidden run correctly',
@@ -188,6 +246,29 @@ void main() {
       // convention — see `_docRangeOf`).
       expect(result.start, const DocOffset(0));
       expect(result.end, DocOffset(geometry.docLength));
+    });
+
+    testWidgets('a folded offset at the wrap keeps its associated line',
+        (tester) async {
+      final source = sourceOf(
+        'aaaa **bold**',
+        decorations: [
+          Decoration.replace('b', 5, 7, replacementLength: 0),
+          Decoration.replace('b', 11, 13, replacementLength: 0),
+        ],
+      );
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(6), assoc: -1).value,
+        DocRange(const DocOffset(0), const DocOffset(7)),
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(6), assoc: 1).value,
+        DocRange(const DocOffset(5), const DocOffset(13)),
+      );
     });
   });
 

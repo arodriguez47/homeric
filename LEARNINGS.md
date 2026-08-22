@@ -205,6 +205,23 @@ Assert the full rectangle for both associations plus pre-wrap, post-wrap, and
 wide-layout controls. Comparing two paths that share the same caret algorithm
 is useful for mapping drift, but cannot replace independent pixel expectations.
 
+## orchestrator — 2026-08-22 — Resolve a soft-wrap line from an interior grapheme, not engine affinity
+
+Flutter's VM paragraph implementation honors `TextAffinity` when
+`Paragraph.getLineBoundary` receives the exact offset shared by two visual
+lines; Chrome can resolve both affinities to the same line. Homeric already has
+platform-consistent caret geometry at that offset, so it can first prove the
+offset is a real soft-wrap boundary, then query a grapheme strictly inside the
+line selected by `assoc`. Ordinary offsets continue through the direct engine
+query.
+
+**Rule going forward:** when one logical offset has two visual homes, use
+independent geometry to detect the ambiguity and move the engine query inside
+the selected visual side. Never apply an unconditional `offset - 1` / `offset
++ 1` workaround: it changes ordinary line-boundary answers and can split a
+multi-code-unit grapheme. Pin the exact wrap, both neighboring graphemes, a
+wide-layout control, and a hidden-fold-at-wrap case on both VM and Chrome.
+
 ## editor-architect — 2026-08-09 — A seam-adapter contract test proves sufficiency, never agreement
 
 Phase 2's U4 shipped a `SelectableMixin`-shaped adapter test proving every member AppFlowy requires is implementable purely from `ParagraphGeometry`. That claim was true and the test was worth having, and it could not have caught the first three bugs Nexus hit when it actually rendered through us — because *implementable* and *agrees with the renderer next to it* are different properties, and only the second one matters to a consumer running both. Nexus renders paragraphs through Homeric and headings, lists and quotes through AppFlowy in the same document, so a caret that is internally consistent but 4px off its neighbour is still a defect. The reusable rule: an API-sufficiency test belongs in the producing repo, but a *differential* test — both renderers mounted over the same document, answers compared offset by offset — belongs in the consuming one, and no amount of the former substitutes for the latter. Corollary for future phases: when a Phase's exit criterion is "the consumer uses it", the consumer's differential test is the exit criterion, not the producer's contract test.

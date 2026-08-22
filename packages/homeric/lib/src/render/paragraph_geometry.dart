@@ -1015,6 +1015,20 @@ class ParagraphGeometry {
     return previous < offset ? previous : offset - 1;
   }
 
+  ui.TextRange _lineContainingCodeUnit(int offset) {
+    final lineNumber = _paragraph.getLineNumberAt(offset)!;
+    var start = offset;
+    while (start > 0 && _paragraph.getLineNumberAt(start - 1) == lineNumber) {
+      start--;
+    }
+    var end = offset + 1;
+    while (end < _viewText.length &&
+        _paragraph.getLineNumberAt(end) == lineNumber) {
+      end++;
+    }
+    return ui.TextRange(start: start, end: end);
+  }
+
   static final RegExp _separatorOrPunctuation = RegExp(
     r'[\p{Space_Separator}\p{Punctuation}]',
     unicode: true,
@@ -1050,22 +1064,29 @@ class ParagraphGeometry {
   /// `ViewMap` fold association — deliberately the same value for both
   /// (see the library doc comment): a document offset that maps to a view
   /// offset sitting exactly at a wrap point needs exactly one more bit to
-  /// disambiate "end of this line" from "start of the next", and the
+  /// disambiguate "end of this line" from "start of the next", and the
   /// caller's `assoc` (upstream = stay on the content before the position,
   /// downstream = move to the content after) is precisely that bit. This
-  /// is `dart:ui`'s own `Paragraph.getLineBoundary`, which already
-  /// resolves the affinity correctly for a given view `TextPosition` — no
-  /// extra patching was needed after threading `assoc` through as
-  /// `TextAffinity` (see `geometry_test.dart`'s wrap-boundary-affinity
-  /// test, written first per the plan's risk note).
+  /// method resolves that bit to a code unit belonging to the chosen line
+  /// and derives the line range from code-unit membership. That avoids
+  /// relying on
+  /// `Paragraph.getLineBoundary`'s platform-dependent treatment of
+  /// `TextAffinity` at the ambiguous offset itself (Chrome currently
+  /// resolves both affinities to the same line).
   GeometryResult<DocRange> lineBoundaryAt(DocOffset doc, {int assoc = 1}) {
     _checkOffset(doc);
     final view = _viewMap.docToView(doc.value, assoc: assoc);
-    final position = ui.TextPosition(
-        offset: view,
-        affinity:
-            assoc < 0 ? ui.TextAffinity.upstream : ui.TextAffinity.downstream);
-    final range = _paragraph.getLineBoundary(position);
+    final atSoftWrap = view > 0 &&
+        view < _viewText.length &&
+        _caretMetrics(view, -1).top != _caretMetrics(view, 1).top;
+    final range = atSoftWrap
+        ? _lineContainingCodeUnit(assoc < 0 ? view - 1 : view)
+        : _paragraph.getLineBoundary(ui.TextPosition(
+            offset: view,
+            affinity: assoc < 0
+                ? ui.TextAffinity.upstream
+                : ui.TextAffinity.downstream,
+          ));
     return _stamp(_docRangeOf(range.start, range.end));
   }
 }

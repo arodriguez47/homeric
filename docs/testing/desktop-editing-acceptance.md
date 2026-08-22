@@ -7,13 +7,13 @@ with the real macOS text system.
 
 ## Current status
 
-As of 2026-08-21, the automated desktop-editing matrix is green and the macOS
+As of 2026-08-22, the automated desktop-editing matrix is green and the macOS
 playground compiles in release mode. The HOM-19 source and focused playground
-matrix also pass under an isolated Flutter 3.24.5 SDK. Manual AppKit acceptance
-remains open, and the repository's protected compatibility runner needs repair
-before it can serve as the canonical one-command gate. HOM-19 therefore has
-strong implementation and SDK-compatibility evidence, but is not yet
-platform-certified.
+matrix also pass under an isolated Flutter 3.24.5 SDK. The checked-in local
+compatibility gate now validates its targets and passes the complete package
+and playground analysis/test matrix on that SDK. Manual AppKit acceptance
+remains open, so HOM-19 has strong implementation and SDK-compatibility
+evidence but is not yet platform-certified.
 
 | Gate | Result | Evidence boundary |
 |---|---|---|
@@ -24,7 +24,7 @@ platform-certified.
 | Homeric package analysis | PASS | Full package `flutter analyze` reported no issues after the HOM-21 geometry-capability change. |
 | Playground analysis | PASS | Full playground `flutter analyze` reported no issues after the HOM-21 geometry-capability change. |
 | macOS release build | PASS | `flutter build macos --release` produced `build/macos/Build/Products/Release/homeric_playground.app` (43.3 MB). Compilation proves release-safe code paths; it does not prove AppKit delivery or interaction. |
-| Flutter 3.24 compatibility | PASS (corrected isolated matrix) / RUNNER BROKEN | Flutter 3.24.5 package analysis passed, 158 focused package tests passed, playground analysis passed, and 32 playground tests passed from an isolated copy. One test-only `DragUpdateDetails(kind:)` call was removed because that named parameter postdates Flutter 3.24; the originating touch kind remains supplied by `DragStartDetails`. The protected `tool/verify_flutter_3_24.sh` is currently stale because it references removed `test/render/paragraph_geometry_test.dart` instead of `test/render/geometry_test.dart`; its remaining selected tests reached 121 passes before that load error. No protected runner file was changed. |
+| Flutter 3.24 compatibility | PASS (tracked local gate) | On 2026-08-22, `scripts/verify_flutter_3_24.sh /private/tmp/flutter-3.24.5/bin/flutter` validated its package/playground targets, analyzed both projects, and passed their complete unit/widget suites under Flutter 3.24.5 (`dec2ee5c1f`). The protected untracked `tool/verify_flutter_3_24.sh` was not changed or used as evidence. |
 | Manual macOS acceptance | NOT RUN / HISTORICAL NOTE ONLY | An August 20 interactive pass was reported, but no complete record with hardware, OS, Flutter revision, build mode, input method, and evidence path was retained. It is not certification evidence. The full checklist below remains open. |
 
 ## Manual macOS checklist

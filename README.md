@@ -47,6 +47,7 @@ homeric/
 ├── tools/
 │   └── corpus/                     # generated long-form text fixtures for benchmarks
 ├── benchmarks/                     # benchmark baselines and results
+├── scripts/                        # checked-in local verification gates
 └── docs/
     ├── ROADMAP.md
     ├── PERF_BUDGET.md
@@ -62,6 +63,16 @@ melos bootstrap
 melos run analyze
 melos run test
 ```
+
+To verify the declared minimum SDK with an installed Flutter 3.24.x binary:
+
+```bash
+scripts/verify_flutter_3_24.sh /path/to/flutter-3.24/bin/flutter
+```
+
+The gate validates its tracked package/playground test targets before running
+analysis and the complete unit/widget suites. It is local-only and does not
+add a GitHub Actions workflow.
 
 ### Run the playground
 

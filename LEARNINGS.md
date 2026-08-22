@@ -310,3 +310,25 @@ from the intersection of the supported embedder sets, then prove the serialized
 `TextInput.setClient` payload in unit tests and the attachment path in simulator
 or device integration tests. Keep synthetic channel traces distinct from
 physical keyboard and IME certification.
+
+## quality — 2026-08-21 — Host-neutral editor tests must remain renderer-backed
+
+**What:** A Journal conflict test stopped importing AppFlowy by reading the
+shared session's canonical content. That was API-neutral but weakened the
+test's defining guarantee: a new facade can hold the adopted body while the
+mounted writer still paints the stale one. The final assertion scopes the
+shared rendered-run adapter to the actual editable paragraph for each host;
+for Homeric this also avoids counting the hover grabber as authored prose.
+
+**Why it mattered:** Removing a renderer-specific type is not progress if the
+replacement moves the observation above the failure boundary. Session state,
+persisted JSON, and rendered glyphs can disagree during same-id adoption,
+conflict replacement, recycling, or a missed rebuild. A broad subtree scan can
+also mistake editor chrome, placeholders, or inline widgets for document text.
+
+**Rule going forward:** When retiring editor-specific tests, preserve the
+original observation layer. Use the shared session for canonical state and
+leases, real platform-input helpers for mutation, and a renderer-neutral but
+tightly scoped render probe for visible output. Assert the requested host is
+actually mounted in every matrix case; never let a compatibility fallback make
+a nominal Homeric test pass.

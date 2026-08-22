@@ -164,6 +164,27 @@ void main() {
           reason: 'upstream at the wrap point stays on line 1');
       expect(downstream, DocRange(const DocOffset(5), const DocOffset(9)),
           reason: 'downstream at the wrap point moves to line 2');
+      expect(geometry.lineBoundaryAt(const DocOffset(4), assoc: 1).value,
+          DocRange(const DocOffset(0), const DocOffset(5)),
+          reason: 'the grapheme before the wrap remains on line 1');
+      expect(geometry.lineBoundaryAt(const DocOffset(6), assoc: -1).value,
+          DocRange(const DocOffset(5), const DocOffset(9)),
+          reason: 'the grapheme after the wrap remains on line 2');
+    });
+
+    testWidgets('without a wrap both associations return the whole line',
+        (tester) async {
+      final source = sourceOf('aaaa bbbb');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 200));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      for (final assoc in const [-1, 1]) {
+        expect(
+          geometry.lineBoundaryAt(const DocOffset(5), assoc: assoc).value,
+          DocRange(const DocOffset(0), const DocOffset(9)),
+        );
+      }
     });
 
     testWidgets('line boundary maps back through a hidden run correctly',
@@ -188,6 +209,29 @@ void main() {
       // convention — see `_docRangeOf`).
       expect(result.start, const DocOffset(0));
       expect(result.end, DocOffset(geometry.docLength));
+    });
+
+    testWidgets('a folded offset at the wrap keeps its associated line',
+        (tester) async {
+      final source = sourceOf(
+        'aaaa **bold**',
+        decorations: [
+          Decoration.replace('b', 5, 7, replacementLength: 0),
+          Decoration.replace('b', 11, 13, replacementLength: 0),
+        ],
+      );
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 70));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(6), assoc: -1).value,
+        DocRange(const DocOffset(0), const DocOffset(7)),
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(6), assoc: 1).value,
+        DocRange(const DocOffset(5), const DocOffset(13)),
+      );
     });
   });
 

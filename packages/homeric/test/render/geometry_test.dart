@@ -172,6 +172,43 @@ void main() {
           reason: 'the grapheme after the wrap remains on line 2');
     });
 
+    testWidgets(
+        'a wrap between one-grapheme lines does not skip the selected line',
+        (tester) async {
+      final source = sourceOf('abc');
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: source), width: 14));
+      final render = renderOf(tester);
+      expect(render.layoutParagraph.numberOfLines, 3);
+      expect(
+        [
+          for (var offset = 0; offset < 3; offset++)
+            render.layoutParagraph.getLineNumberAt(offset)
+        ],
+        [0, 1, 2],
+        reason: 'each code unit belongs to its own visual line',
+      );
+      final geometry = ParagraphGeometry(render);
+
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(1), assoc: -1).value,
+        DocRange(const DocOffset(0), const DocOffset(1)),
+        reason: 'upstream selects the one-grapheme line before the wrap',
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(1), assoc: 1).value,
+        DocRange(const DocOffset(1), const DocOffset(2)),
+        reason: 'MUTATION: querying the next grapheme boundary can skip the '
+            'one-grapheme line and resolve the following shared wrap instead',
+      );
+      expect(
+        geometry.lineBoundaryAt(const DocOffset(2), assoc: -1).value,
+        DocRange(const DocOffset(1), const DocOffset(2)),
+        reason: 'the same one-grapheme line is selectable from its trailing '
+            'wrap without querying the adjacent ambiguous boundary',
+      );
+    });
+
     testWidgets('without a wrap both associations return the whole line',
         (tester) async {
       final source = sourceOf('aaaa bbbb');

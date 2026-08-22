@@ -20,13 +20,18 @@ valid in both final-pixel and stock-renderer controls.
 
 **Rule going forward:** Before assigning a caret defect to Homeric, record the
 exact preview URL/build SHA and the platform, editability, focus, selection,
-offset, palette, mode, and overlays. Compare final pixels at the consumer's
-transformed delegate rectangle with a stock-renderer control. Invalid geometry
-at a valid document offset belongs here; valid geometry plus absent pixels
-belongs to the consumer integration; a green source SHA with a failing preview
-starts with artifact, cache, environment, or focus provenance. Never assign
-ownership from geometry alone or manufacture a red test when the reported
-artifact is unavailable.
+offset, palette, mode, and overlays. At the point of each query, construct fresh
+`ParagraphGeometry`, use a valid document-coordinate `DocOffset`, and verify its
+source and layout generations against the current render witness; an intentionally
+stale generation must fail closed before ownership is classified. Compare final
+pixels at the consumer's transformed delegate rectangle with a stock-renderer
+control under identical constraints, text scale, style, clipping, focus, and
+blink conditions. Fresh invalid geometry at a valid document offset belongs to
+Homeric. Fresh valid geometry plus absent transformed pixels belongs to the
+consumer only after the executed artifact and stock control are confirmed under
+those same conditions. Until artifact, cache, environment, focus, coordinate,
+and generation provenance are all known, keep ownership unresolved. Never
+manufacture a red test when the reported artifact is unavailable.
 
 ## docs — 2026-08-15 — Consumers need a release-safe geometry freshness contract
 
@@ -45,10 +50,11 @@ no insertion point.
 
 **Rule going forward:** Geometry consumers must use public lifecycle APIs, never
 a framework `debug*` member, to decide whether a render object is ready.
-Consumer integration tests should include the final release compiler and inspect
-runtime errors as well as geometry and document mutations. Invalid Homeric
-geometry belongs here; a release-unsafe consumer gate remains owned by the
-consumer repository.
+Consumer integration tests must build and execute the final release artifact on
+the target browser or platform, capture runtime errors, reconstruct geometry
+after each relevant layout generation, and then assert both geometry and document
+mutations from that running artifact. Invalid Homeric geometry belongs here; a
+release-unsafe consumer gate remains owned by the consumer repository.
 
 ## editor-architect — 2026-08-13 — A generation stamp is not a subscription
 

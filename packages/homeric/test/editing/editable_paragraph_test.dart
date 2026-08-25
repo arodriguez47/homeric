@@ -706,6 +706,148 @@ void main() {
     expect(controller.document.blocks.single.text, 'ac');
   });
 
+  testWidgets('macOS native undo:/redo: selectors mutate Homeric history once',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(document: _document('ab'));
+    final end = controller.globalPositionForBlockOffset('b', 2);
+    controller.setSelection(HomericSelection.collapsed(end));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    controller.setSelection(HomericSelection.collapsed(end));
+    await tester.pump();
+    expect(controller.replaceSelection('x'), isTrue);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'abx');
+    expect(controller.canUndo, isTrue);
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    await _sendSelectors(binding, 1, const <String>['undo:']);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+    expect(controller.canRedo, isTrue);
+    expect(notifications, 1);
+
+    await _sendSelectors(binding, 1, const <String>['redo:']);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'abx');
+    expect(notifications, 2);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+      'macOS Cmd+Z and follow-up undo: selector produce one history mutation',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(document: _document('ab'));
+    final end = controller.globalPositionForBlockOffset('b', 2);
+    controller.setSelection(HomericSelection.collapsed(end));
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    controller.setSelection(HomericSelection.collapsed(end));
+    await tester.pump();
+    expect(controller.replaceSelection('x'), isTrue);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'abx');
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+    expect(notifications, 1);
+
+    // Physical Cmd+Z also arrives as AppKit `undo:` after the shortcut path.
+    await _sendSelectors(binding, 1, const <String>['undo:']);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab',
+        reason: 'suppressed follow-up selector must not undo again');
+    expect(notifications, 1);
+    expect(controller.canRedo, isTrue);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+      'superseded macOS host ignores native undo: after input-epoch renewal',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = HomericEditorController(document: _document('ab'));
+    final end = controller.globalPositionForBlockOffset('b', 2);
+    controller.setSelection(HomericSelection.collapsed(end));
+    final session = HomericTextInputSession(controller: controller);
+    final firstFocus = FocusNode();
+    final secondFocus = FocusNode();
+    addTearDown(firstFocus.dispose);
+    addTearDown(secondFocus.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      key: const ValueKey<String>('first-host'),
+      controller: controller,
+      inputSession: session,
+      focusNode: firstFocus,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    firstFocus.requestFocus();
+    await tester.pump();
+    controller.setSelection(HomericSelection.collapsed(end));
+    await tester.pump();
+    expect(controller.replaceSelection('x'), isTrue);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'abx');
+    final staleSelector = session.debugSelectorCallback!;
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      key: const ValueKey<String>('replacement-host'),
+      controller: controller,
+      inputSession: session,
+      focusNode: secondFocus,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    secondFocus.requestFocus();
+    await tester.pump();
+
+    staleSelector('undo:');
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'abx',
+        reason: 'a superseded host selector callback must stay inert');
+
+    await _sendSelectors(binding, 2, const <String>['undo:']);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('shortcut and selector each dispatch one standard action',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;

@@ -26,7 +26,14 @@ class DocumentViewModel extends ChangeNotifier {
       decorations: decorations,
     );
     inputSession = HomericTextInputSession(controller: editorController);
+    macosHistoryBridge = HomericMacOSHistoryBridge(
+      controller: editorController,
+      session: inputSession,
+    );
     editorController.addListener(_editorChanged);
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+      macosHistoryBridge.attach();
+    }
   }
 
   /// The sole owner of document, decorations, selection, composition, and
@@ -35,6 +42,9 @@ class DocumentViewModel extends ChangeNotifier {
 
   /// The one epoch-bound platform input session shared by every paragraph.
   late final HomericTextInputSession inputSession;
+
+  /// Publishes history enablement to the macOS Edit menu when hosted there.
+  late final HomericMacOSHistoryBridge macosHistoryBridge;
 
   /// The current document.
   Document get document => editorController.document;
@@ -269,6 +279,7 @@ class DocumentViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
+    macosHistoryBridge.detach();
     editorController.removeListener(_editorChanged);
     inputSession.dispose();
     editorController.dispose();

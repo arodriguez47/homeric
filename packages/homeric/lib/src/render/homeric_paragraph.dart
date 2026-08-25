@@ -340,6 +340,15 @@ class RenderHomericParagraph extends RenderBox
   set source(ParagraphSource<TextStyle> value) {
     if (_paragraphSourceEquals(_source, value)) {
       _source = value;
+      // Journal hosts clear and refill a resolve map every build while
+      // layout-only segment styles stay identical. A layout-equal source
+      // update must still reshape so paintStyler reads the fresh map.
+      if (_paintStyler != null && _paragraph != null) {
+        _paragraph!.dispose();
+        _paragraph = null;
+        _lastLayoutMaxWidth = null;
+        markNeedsLayout();
+      }
       return;
     }
     _source = value;

@@ -1040,6 +1040,17 @@ class RenderHomericParagraph extends RenderBox
         _paragraph = paragraph = _buildParagraph(dimensions);
         // A fresh build already reflects the current paintStyler.
         _rebuildForPaint = false;
+      } else if (_paintStyler != null) {
+        // HOM-26: a consumer may clear and refill a resolve map between
+        // the frame that baked this shape and the frame that takes it
+        // back (resolveStyle side channel + paintStyler). The cache key
+        // only sees layout-only segment styles, so reuse would paint the
+        // stale glyphs. Reshape here so paintStyler runs against the
+        // current map; layout-only cache hits stay free below.
+        cached.paragraph.dispose();
+        _paragraph = paragraph = _buildParagraph(dimensions);
+        _lastLayoutMaxWidth = null;
+        _rebuildForPaint = false;
       } else {
         _paragraph = paragraph = cached.paragraph;
         _lastLayoutMaxWidth = cached.maxWidth;

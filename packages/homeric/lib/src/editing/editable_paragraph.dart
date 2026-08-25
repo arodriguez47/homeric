@@ -1326,11 +1326,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       ),
       UndoTextIntent: _HostAction<UndoTextIntent>(
         enabled: (_) => _canMutateActions && _controller.canUndo,
-        invoke: (_) => _controller.undo(),
+        invoke: (_) {
+          // Cmd+Z may also arrive as AppKit `undo:` after the shortcut path.
+          // Suppress the follow-up selector so one physical command cannot
+          // mutate history twice.
+          widget.inputSession.suppressNextSelector('undo:');
+          return _controller.undo();
+        },
       ),
       RedoTextIntent: _HostAction<RedoTextIntent>(
         enabled: (_) => _canMutateActions && _controller.canRedo,
-        invoke: (_) => _controller.redo(),
+        invoke: (_) {
+          widget.inputSession.suppressNextSelector('redo:');
+          return _controller.redo();
+        },
       ),
       _DocumentCommandIntent: _DocumentCommandAction(this, _hostEpoch),
     };

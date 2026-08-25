@@ -118,6 +118,16 @@ final class HomericTextInputSession extends ChangeNotifier {
   @visibleForTesting
   ValueChanged<String>? get debugSelectorCallback => _client?.performSelector;
 
+  /// Dispatches one editing [intent] through the live host command delegate.
+  ///
+  /// Returns null when this session is disposed or no host currently owns the
+  /// platform epoch. Menu, selector, and host-bridge callers share this path so
+  /// stale/superseded hosts stay inert.
+  Object? invokeCommand(Intent intent) {
+    if (_disposed) return null;
+    return _commandDelegate?.invoke(intent);
+  }
+
   /// Captures the current adapter's epoch-bound toolbar callback for tests.
   @visibleForTesting
   VoidCallback? get debugToolbarCallback => _client?.showToolbar;
@@ -788,7 +798,24 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   void performSelector(String selectorName) {
     if (epoch != session._currentEpoch || session._disposed) return;
     if (session._consumeSuppressedSelector(selectorName)) return;
-    final intent = intentForMacOSSelector(selectorName);
+    final intent = homericIntentForMacOSSelector(selectorName);
     if (intent != null) session._commandDelegate?.invoke(intent);
+  }
+}
+
+/// Maps an AppKit selector onto Homeric's standard editing intents.
+///
+/// Flutter's [intentForMacOSSelector] omits `undo:` / `redo:`. On macOS those
+/// selectors are the native command path for Cmd+Z / Cmd+Shift+Z once
+/// `NSTextInputContext` consumes the key equivalent, so Homeric must recognize
+/// them or physical undo/redo never reaches controller history.
+Intent? homericIntentForMacOSSelector(String selectorName) {
+  switch (selectorName) {
+    case 'undo:':
+      return const UndoTextIntent(SelectionChangedCause.keyboard);
+    case 'redo:':
+      return const RedoTextIntent(SelectionChangedCause.keyboard);
+    default:
+      return intentForMacOSSelector(selectorName);
   }
 }

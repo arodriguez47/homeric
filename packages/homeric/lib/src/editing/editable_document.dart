@@ -2309,6 +2309,11 @@ final class _PendingRowCommandDelegate
     if (intent is HomericInsertParagraphBreakIntent) {
       return controller.insertParagraphBreak();
     }
+    if (intent is DeleteCharacterIntent) {
+      return intent.forward
+          ? controller.deleteForward()
+          : controller.deleteBackward();
+    }
     return null;
   }
 

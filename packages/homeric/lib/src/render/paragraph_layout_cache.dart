@@ -6,6 +6,11 @@ part of 'homeric_paragraph.dart';
 /// never sizes a row, and a miss always falls back to the paragraph's natural
 /// engine layout. Entries are keyed by stable block ID and accepted only when
 /// every paragraph input and the exact wrap width still match.
+///
+/// When a [PaintOnlyStyler] is present, a successful take still reshapes in
+/// layout (see [RenderHomericParagraph.performLayout]): stylers may read a
+/// consumer resolve map cleared and refilled after the cached glyphs were
+/// baked, and the cache key cannot observe that side channel.
 @internal
 final class HomericParagraphLayoutCache {
   /// Creates a bounded cache suitable for one editable document viewport.

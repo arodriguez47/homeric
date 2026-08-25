@@ -173,6 +173,57 @@ void main() {
   });
 
   testWidgets(
+      'after hide-on-leave, hidden ** still paints bold weight via paintStyler',
+      (tester) async {
+    final document = _document('**bold** ');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 9)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final paintMap = _JournalPaintMap();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    paintMap.beginBuild();
+    await tester.pumpWidget(_documentHarness(
+      controller: controller,
+      session: session,
+      paintMap: paintMap,
+    ));
+    await tester.pump();
+
+    final render = _paragraphRender(tester);
+    expect(render.source.viewText, 'bold ');
+    expect(paintMap.weightAtViewOffset(0), FontWeight.w700);
+
+    // Caret enters the mark: reveal-on-touch shows the touched delimiter.
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    paintMap.beginBuild();
+    await tester.pump();
+    expect(_paragraphRender(tester).source.viewText, isNot('bold '),
+        reason: 'caret on a hidden delimiter must reveal it');
+
+    // Caret leaves the mark: hide-on-leave folds delimiters again.
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(0, 9)),
+    );
+    paintMap.beginBuild();
+    paintMap.paintCalls = 0;
+    paintMap.paintedWeights.clear();
+    await tester.pump();
+
+    expect(_paragraphRender(tester).source.viewText, 'bold ',
+        reason: 'hide-on-leave must fold delimiters back out of view text');
+    expect(paintMap.paintCalls, greaterThan(0),
+        reason: 'paintStyler must run when the resolve map is refilled');
+    expect(paintMap.weightAtViewOffset(0), FontWeight.w700,
+        reason: 'bold weight must survive hide-on-leave');
+  });
+
+  testWidgets(
       'layout-equal source update reshapes paintStyler glyphs for hidden bold',
       (tester) async {
     final paintMap = _JournalPaintMap();

@@ -2,6 +2,25 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
+## editor-architect — 2026-08-25 — Pending-row hosts must keep boundary Backspace live
+
+**What:** After Enter, Homeric retargets the platform connection to a pending-row
+delegate and advances `activeBlockId` before the trailing row mounts. Enter stays
+live through `acceptsPendingRowStructuralKey`, but `DeleteCharacterIntent` was
+gated only on the mounted active block. Hardware Backspace on the still-focused
+leading row therefore became a no-op at the start of the new block (HOM-27).
+
+**Why it mattered:** The common "Enter then immediately Backspace" undo gesture
+failed during the settlement window. Controller `deleteBackward()` already joined
+correctly; the miss was command enablement and the pending-row delegate, not the
+join transaction.
+
+**Rule going forward:** Any structural key that remains valid while a trailing
+row is not yet mounted must share Enter's pending-row enablement path: keep the
+still-focused leading row's Actions live via `acceptsPendingRowStructuralKey`,
+and teach `_PendingRowCommandDelegate` the same intents for selector/IME routing.
+Do not wait for the new row host before boundary Backspace/Delete can join.
+
 ## docs — 2026-08-22 — Caret ownership needs one release-evidence gate
 
 **What:** Review of the mirrored NEX-143 guidance exposed a gap between fresh

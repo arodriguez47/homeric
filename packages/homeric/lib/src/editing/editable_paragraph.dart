@@ -1220,7 +1220,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         invoke: (_) => _dismissContextMenu(),
       ),
       DeleteCharacterIntent: _HostAction<DeleteCharacterIntent>(
-        enabled: (_) => _canMutateActions,
+        // Match Enter: after a split the active block can advance before the
+        // trailing row mounts, so the still-focused leading row must keep
+        // boundary Backspace/Delete live through pending-row settlement.
+        enabled: (_) =>
+            _canMutateActions ||
+            (_ownsEditingFocus &&
+                !_controller.isReadOnly &&
+                _controller.composing == null &&
+                (_documentHost?.acceptsPendingRowStructuralKey ?? false)),
         invoke: (intent) => intent.forward
             ? _controller.deleteForward()
             : _controller.deleteBackward(),

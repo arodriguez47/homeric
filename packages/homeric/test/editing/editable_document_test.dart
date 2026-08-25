@@ -1292,6 +1292,55 @@ void main() {
     expect(controller.undo(), isFalse);
   });
 
+  testWidgets(
+      'Backspace at a new-block start joins before the trailing row mounts',
+      (tester) async {
+    // HOM-27: after Enter, caret sits at the start of the trailing block while
+    // the platform connection is still on the pending-row delegate. Backspace
+    // must join into the previous block and land the caret at its final step.
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      <String>['al', 'pha'],
+    );
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(1, 0)),
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      <String>['alpha'],
+      reason: 'start-of-block Backspace during pending-row settlement must '
+          'join into the previous block',
+    );
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+      reason: 'caret must land at the final step of the surviving block',
+    );
+  });
+
   testWidgets('pending-row newline stays inert during document drag',
       (tester) async {
     TextInputConnection.debugResetId();

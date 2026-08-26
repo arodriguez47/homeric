@@ -17,6 +17,7 @@
 library;
 
 import '../decoration/decoration.dart';
+import '../decoration/markdown_mark_visibility.dart';
 import '../model/block.dart';
 import '../view/view_map.dart';
 import '../view/view_text.dart';
@@ -51,6 +52,29 @@ final class RevealState {
   /// Whether [decoration] is suppressed this derivation.
   bool isRevealed(Decoration decoration) =>
       _revealed?.contains(decoration) ?? false;
+
+  /// Combines [selectionReveal] with [MarkdownMarkVisibility].
+  ///
+  /// In [MarkdownMarkVisibility.livePreview], returns [selectionReveal]
+  /// unchanged (reveal-on-selection only). In
+  /// [MarkdownMarkVisibility.sourceVisible], every
+  /// [isMarkdownMarkHideDecoration] in [decorations] is permanently
+  /// revealed so marks stay on screen.
+  static RevealState forMarkdownMarkVisibility({
+    required MarkdownMarkVisibility visibility,
+    required Iterable<Decoration> decorations,
+    RevealState selectionReveal = RevealState.none,
+  }) {
+    if (visibility == MarkdownMarkVisibility.livePreview) {
+      return selectionReveal;
+    }
+    final revealed = <Decoration>[
+      for (final decoration in decorations)
+        if (isMarkdownMarkHideDecoration(decoration)) decoration,
+    ];
+    if (revealed.isEmpty) return RevealState.none;
+    return RevealState.of(revealed);
+  }
 
   @override
   String toString() => revealsNothing

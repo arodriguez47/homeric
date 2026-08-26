@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 
 import '../decoration/decoration.dart';
+import '../decoration/markdown_mark_visibility.dart';
 import '../input/text_input_session.dart';
 import '../model/block.dart';
 import '../model/position.dart';
@@ -192,6 +193,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.placeholderStyle,
     this.semanticsHeader = false,
     this.deriveDecorations,
+    this.markdownMarkVisibility = MarkdownMarkVisibility.livePreview,
     this.slotBuilder,
     this.slotLayoutRevision,
     this.slotAlignment = ui.PlaceholderAlignment.middle,
@@ -267,6 +269,11 @@ class HomericEditableParagraph extends StatefulWidget {
   /// identities to avoid unnecessary slot replacement or paragraph shaping.
   /// Range painting remains the separate [paintLayers] contract.
   final HomericBlockDecorationDeriver? deriveDecorations;
+
+  /// Whether markdown delimiter hide replacements fold marks out of view
+  /// text. Defaults to [MarkdownMarkVisibility.livePreview]; set to
+  /// [MarkdownMarkVisibility.sourceVisible] for iA Writer-style editing.
+  final MarkdownMarkVisibility markdownMarkVisibility;
 
   /// Builds inline slot children.
   final SlotWidgetBuilder? slotBuilder;
@@ -749,7 +756,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       ..._controller.decorations.forBlock(widget.blockId),
       if (derivedDecorations != null) ...derivedDecorations,
     ]);
-    final reveal = _revealState(decorations, localSelection, localComposing);
+    final reveal = RevealState.forMarkdownMarkVisibility(
+      visibility: widget.markdownMarkVisibility,
+      decorations: decorations,
+      selectionReveal:
+          _revealState(decorations, localSelection, localComposing),
+    );
     final source = ParagraphSource<TextStyle>.build(
       block: block,
       decorations: decorations,
@@ -757,9 +769,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       resolveStyle: widget.resolveStyle,
       spec: widget.paragraphSpec,
     );
+    final semanticsReveal =
+        widget.markdownMarkVisibility == MarkdownMarkVisibility.sourceVisible
+            ? reveal
+            : RevealState.none;
     final semanticsSource = ParagraphSource<Object?>.build(
       block: block,
       decorations: decorations,
+      reveal: semanticsReveal,
       resolveStyle: (_) => null,
       spec: widget.paragraphSpec,
     );

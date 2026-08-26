@@ -1648,6 +1648,57 @@ void main() {
     expect(find.byKey(const ValueKey('content-block-0')), findsNothing);
   });
 
+  testWidgets('debugMountedRowCount tracks lazy sliver rows without finders',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(700, (index) => 'row $index'),
+    );
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        cacheExtent: 100,
+        estimatedBlockHeight: 30,
+        blockBuilder: (context, block, focusNode) => SizedBox(
+          key: ValueKey('content-${block.id}'),
+          height: 30,
+        ),
+      ),
+    )));
+    await tester.pump();
+
+    int visibleBlockRows() {
+      var count = 0;
+      for (var index = 0; index < document.blockCount; index++) {
+        if (find
+            .byKey(ValueKey('content-block-$index'))
+            .evaluate()
+            .isNotEmpty) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    expect(key.currentState!.debugMountedRowCount, lessThan(50));
+    expect(key.currentState!.debugMountedRowCount, visibleBlockRows());
+
+    final scrollable = tester.widget<Scrollable>(find.byType(Scrollable));
+    scrollable.controller!.jumpTo(scrollable.controller!.position.maxScrollExtent);
+    await tester.pump();
+    expect(key.currentState!.debugMountedRowCount, lessThan(50));
+    expect(key.currentState!.debugMountedRowCount, visibleBlockRows());
+  });
+
   testWidgets('newer and cancelled block scrolls invalidate older requests',
       (tester) async {
     final document = _document(

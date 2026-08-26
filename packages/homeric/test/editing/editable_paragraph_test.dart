@@ -1049,6 +1049,66 @@ void main() {
     handle.dispose();
   });
 
+  testWidgets(
+      'connection loss without composition reattaches and accepts the next delta',
+      (tester) async {
+    final document = _document('ab');
+    final controller = HomericEditorController(
+      document: document,
+      selection: const HomericSelection.collapsed(2),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    expect(controller.composing, isNull);
+    final staleDelta = session.debugDeltaCallback!;
+
+    await _sendConnectionClosed(binding, 1);
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+    expect(session.isAttached, isTrue,
+        reason: 'the still-focused host must reopen one input epoch');
+    expect(session.debugDeltaCallback, isNot(same(staleDelta)));
+
+    staleDelta(<TextEditingDelta>[
+      const TextEditingDeltaInsertion(
+        oldText: 'ab',
+        textInserted: 'X',
+        insertionOffset: 1,
+        selection: TextSelection.collapsed(offset: 2),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+
+    await _sendDeltas(binding, 2, [
+      _delta(
+        oldText: 'ab',
+        deltaText: 'Y',
+        start: 1,
+        end: 1,
+        selection: 2,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'aYb');
+    expect(controller.canUndo, isTrue);
+  });
+
   testWidgets('paste started before blur stays stale after refocus',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
@@ -3040,6 +3100,21 @@ Map<String, Object?> _delta({
       'composingBase': -1,
       'composingExtent': -1,
     };
+
+Future<void> _sendConnectionClosed(
+  TestWidgetsFlutterBinding binding,
+  int clientId,
+) async {
+  final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+    'method': 'TextInputClient.onConnectionClosed',
+    'args': <Object?>[clientId],
+  });
+  await binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/textinput',
+    message,
+    (_) {},
+  );
+}
 
 Future<void> _sendDeltas(
   TestWidgetsFlutterBinding binding,

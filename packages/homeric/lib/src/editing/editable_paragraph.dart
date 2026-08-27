@@ -1680,7 +1680,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   static bool _touches(int start, int end, int? rangeStart, int? rangeEnd) {
     if (rangeStart == null || rangeEnd == null) return false;
-    if (rangeStart == rangeEnd) return rangeStart >= start && rangeStart <= end;
+    // Decoration ranges are half-open [start, end); a collapsed caret exactly
+    // at end must not reveal (e.g. trailing space after `[label](url)`).
+    if (rangeStart == rangeEnd) return rangeStart >= start && rangeStart < end;
     return rangeStart < end && rangeEnd > start;
   }
 

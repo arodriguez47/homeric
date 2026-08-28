@@ -43,7 +43,10 @@ final class _JournalPaintMap {
   TextStyle? styleAtViewOffset(int offset) => paintedStyles[offset];
 }
 
-/// Journal markdown decorations: hide list marker prefixes, paint body as list item.
+/// HOM-36 host path: zero-length hide folds the markdown prefix out of view.
+///
+/// Leaves no visible list mark — see [journalMarkdownListVisibleMarkDecorations]
+/// for the HOM-43 host contract.
 List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   final text = block.text;
   final result = <Decoration>[];
@@ -74,6 +77,50 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   return result;
 }
 
+/// HOM-43 host path: replace the markdown list prefix with a visible mark.
+///
+/// Uses the library's existing non-empty [ReplacementContent] path — not a
+/// zero-length [markdownMarkHideReplacement]. The host chooses `•` / `1.`;
+/// Homeric already paints that substitution into view text.
+List<Decoration> journalMarkdownListVisibleMarkDecorations(Block block) {
+  final text = block.text;
+  final result = <Decoration>[];
+
+  void replacePrefix(int start, int end, String visible) {
+    result.add(
+      Decoration.replace(
+        block.id,
+        start,
+        end,
+        replacementLength: visible.length,
+        spec: ReplacementText(visible),
+      ),
+    );
+  }
+
+  void styleRange(int start, int end, String spec) {
+    if (end > start) {
+      result.add(Decoration.inline(block.id, start, end, spec: spec));
+    }
+  }
+
+  final bulletMatch = RegExp(r'^[-*] ').firstMatch(text);
+  if (bulletMatch != null) {
+    replacePrefix(0, bulletMatch.end, '•');
+    styleRange(bulletMatch.end, text.length, 'listItem');
+    return result;
+  }
+
+  final orderedMatch = RegExp(r'^(\d+)\. ').firstMatch(text);
+  if (orderedMatch != null) {
+    final number = orderedMatch.group(1)!;
+    replacePrefix(0, orderedMatch.end, '$number.');
+    styleRange(orderedMatch.end, text.length, 'listItem');
+  }
+
+  return result;
+}
+
 Document _document(String text) => Document([
       Block(
         id: 'b',
@@ -86,6 +133,8 @@ Widget _documentHarness({
   required HomericEditorController controller,
   required HomericTextInputSession session,
   required _JournalPaintMap paintMap,
+  List<Decoration> Function(Block block) deriveDecorations =
+      journalMarkdownDecorationsForBlock,
 }) =>
     Directionality(
       textDirection: TextDirection.ltr,
@@ -110,7 +159,7 @@ Widget _documentHarness({
                     inputSession: session,
                     blockId: block.id,
                     focusNode: focusNode,
-                    deriveDecorations: journalMarkdownDecorationsForBlock,
+                    deriveDecorations: deriveDecorations,
                     resolveStyle: paintMap.resolve,
                     paintStyler: paintMap.paint,
                   ),
@@ -472,5 +521,159 @@ void main() {
 
     expect(paintMap.paintCalls, greaterThan(0));
     expect(paintMap.styleAtViewOffset(0), isNotNull);
+  });
+
+  group('HOM-43 visible list mark via ReplacementContent', () {
+    test('zero-length hide leaves no viewport mark; ReplacementText does', () {
+      final block = para('b', '- item ');
+      final emptyHide = deriveViewText(
+        block,
+        journalMarkdownDecorationsForBlock(block),
+      );
+      expect(emptyHide.viewText, 'item ',
+          reason: 'HOM-36 empty hide folds the prefix to nothing');
+
+      final visible = deriveViewText(
+        block,
+        journalMarkdownListVisibleMarkDecorations(block),
+      );
+      expect(visible.viewText, '•item ',
+          reason: 'host-emitted • replacement paints into view text');
+
+      final ordered = para('b', '1. item ');
+      final orderedVisible = deriveViewText(
+        ordered,
+        journalMarkdownListVisibleMarkDecorations(ordered),
+      );
+      expect(orderedVisible.viewText, '1.item ',
+          reason: 'host-emitted 1. replacement paints into view text');
+    });
+
+    testWidgets(
+        'after leave, • stays visible; trailing-space caret stays clean',
+        (tester) async {
+      const literal = '- item ';
+      final document = _document(literal);
+      final controller = HomericEditorController(
+        document: document,
+        selection:
+            HomericSelection.collapsed(document.positionAt(0, literal.length)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+
+      paintMap.beginBuild();
+      await tester.pumpWidget(_documentHarness(
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+        deriveDecorations: journalMarkdownListVisibleMarkDecorations,
+      ));
+      await tester.pump();
+
+      expect(controller.document.blocks.single.text, literal,
+          reason: 'stored source must remain literal markdown');
+      expect(_paragraphRender(tester).source.viewText, '•item ',
+          reason: 'after leave, a visible bullet replaces the hidden - ');
+      expect(paintMap.styleAtViewOffset(1), isNotNull,
+          reason: 'list body still paints via inline listItem style');
+
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 0)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(_paragraphRender(tester).source.viewText, literal,
+          reason: 'caret on the prefix reveals literal markdown');
+
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, literal.length)),
+      );
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.paintedStyles.clear();
+      await tester.pump();
+
+      expect(_paragraphRender(tester).source.viewText, '•item ',
+          reason:
+              'trailing-space caret must not re-reveal; • stays in the viewport');
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(paintMap.styleAtViewOffset(1), isNotNull);
+    });
+
+    testWidgets(
+        'after leave, 1. stays visible; trailing-space caret stays clean',
+        (tester) async {
+      const literal = '1. item ';
+      final document = _document(literal);
+      final controller = HomericEditorController(
+        document: document,
+        selection:
+            HomericSelection.collapsed(document.positionAt(0, literal.length)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+
+      paintMap.beginBuild();
+      await tester.pumpWidget(_documentHarness(
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+        deriveDecorations: journalMarkdownListVisibleMarkDecorations,
+      ));
+      await tester.pump();
+
+      expect(_paragraphRender(tester).source.viewText, '1.item ',
+          reason: 'after leave, a visible number replaces the hidden 1. ');
+      expect(paintMap.styleAtViewOffset(2), isNotNull);
+
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(_paragraphRender(tester).source.viewText, literal,
+          reason: 'caret on the ordered prefix reveals literal markdown');
+
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, literal.length)),
+      );
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.paintedStyles.clear();
+      await tester.pump();
+
+      expect(_paragraphRender(tester).source.viewText, '1.item ',
+          reason:
+              'trailing-space caret must not re-reveal; 1. stays in the viewport');
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(paintMap.styleAtViewOffset(2), isNotNull);
+    });
+
+    testWidgets('* prefix uses the same • replacement path as -',
+        (tester) async {
+      const literal = '* item ';
+      final controller = HomericEditorController(document: _document(literal));
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+
+      paintMap.beginBuild();
+      await tester.pumpWidget(_documentHarness(
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+        deriveDecorations: journalMarkdownListVisibleMarkDecorations,
+      ));
+      await tester.pump();
+
+      expect(_paragraphRender(tester).source.viewText, '•item ');
+      expect(paintMap.styleAtViewOffset(1), isNotNull);
+    });
   });
 }

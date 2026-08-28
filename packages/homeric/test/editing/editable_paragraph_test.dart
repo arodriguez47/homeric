@@ -3054,6 +3054,76 @@ void main() {
     expect(before.hasFocus, isTrue);
     expect(controller.document.blocks.single.text, 'abc');
   });
+
+  testWidgets('Tab nests a list item; Shift-Tab outdents or traverses',
+      (tester) async {
+    final document = _document('- item');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 6)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final before = FocusNode();
+    final editor = FocusNode();
+    final after = FocusNode();
+    addTearDown(before.dispose);
+    addTearDown(editor.dispose);
+    addTearDown(after.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: Column(children: [
+        Focus(focusNode: before, child: const SizedBox(width: 1, height: 1)),
+        SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: editor,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+          ),
+        ),
+        Focus(focusNode: after, child: const SizedBox(width: 1, height: 1)),
+      ]),
+    ));
+    await tester.pump();
+    editor.requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  - item');
+    expect(after.hasFocus, isFalse);
+    expect(
+      controller.blockOffsetForGlobalPosition('b', controller.selection!.head),
+      8,
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '    - item');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  - item');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '- item');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '- item');
+    expect(before.hasFocus, isTrue);
+  });
 }
 
 Document _document(String text) => Document([

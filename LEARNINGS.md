@@ -2,27 +2,6 @@
 
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
-## editor-architect — 2026-08-28 — Tab on list items is a prefix nest, not focus traverse
-
-**What:** Desktop foundation mapped Tab/Shift+Tab to focus traversal and never
-inserted a tab character. Journal list UX needs Tab to nest the current
-markdown list line (`- `/`* `/`1. `) by rewriting the leading indent. On main,
-Tab therefore left the list item unchanged (focus moved) or, in hosts that
-intercepted Tab differently, inserted a useless literal tab — neither nested.
-
-**Why it mattered:** Nesting is a block-prefix transform (two spaces per level)
-plus caret delta, not an outliner and not `InsertTab`. Shift+Tab is the pair:
-outdent when an indent level exists, otherwise fall through to focus traverse.
-Journal hide decorations must accept optional leading whitespace on the marker
-or a nested item fails the trailing-space hide path.
-
-**Rule going forward:** Keep non-list Tab as focus traverse. List Tab goes
-through `HomericMarkdownListIndent` and `applyBlockEditBatch` on the prefix
-only. Hosts using `HomericEditableParagraph` get nest without wiring Tab;
-hosts that swallow Tab in their own bindings must either stop claiming it or
-invoke the same helper. Nexus learnings mirror deferred for this cut (HOM-44
-Homeric-only).
-
 ## editor-architect — 2026-08-25 — Pending-row hosts must keep boundary Backspace live
 
 **What:** After Enter, Homeric retargets the platform connection to a pending-row

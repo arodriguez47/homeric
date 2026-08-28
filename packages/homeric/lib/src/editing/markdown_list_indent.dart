@@ -4,6 +4,9 @@
 /// Homeric stores literal source. Nesting is not a structural outliner and not
 /// a literal tab insert. Hosts match with [HomericMarkdownListPrefix.match]
 /// (column-0 *or* indented) before emitting hide / visible-mark decorations.
+///
+/// Hide and visible-mark ranges start at [HomericMarkdownListMatch.markerStart],
+/// not column 0 — leading indent stays in view after leave.
 library;
 
 /// Bullet vs ordered journal list marker.
@@ -20,6 +23,7 @@ final class HomericMarkdownListMatch {
   /// Creates a match over the leading indent plus marker prefix.
   const HomericMarkdownListMatch({
     required this.indentLength,
+    required this.markerEnd,
     required this.prefixEnd,
     required this.kind,
     this.orderedDigits = '',
@@ -28,11 +32,20 @@ final class HomericMarkdownListMatch {
   /// Length of leading spaces/tabs before the marker.
   final int indentLength;
 
-  /// Exclusive end of indent + marker (from document offset `0`).
-  final int prefixEnd;
-
-  /// Document start of the `- `/`* `/`N. ` marker (after indent).
+  /// Document start of the `-` / `*` / `N.` marker (after indent).
   int get markerStart => indentLength;
+
+  /// Exclusive end of the marker characters only (`-` / `*` / `12.`).
+  ///
+  /// Does not include the required trailing space after the marker. Visible
+  /// replacements cover `[markerStart, markerEnd)` so that space stays in view.
+  final int markerEnd;
+
+  /// Exclusive end of indent + marker + trailing space (from offset `0`).
+  ///
+  /// Empty-hide decorations cover `[markerStart, prefixEnd)` so indent remains
+  /// while the markdown chrome folds away.
+  final int prefixEnd;
 
   /// Bullet or ordered.
   final HomericMarkdownListKind kind;
@@ -41,6 +54,9 @@ final class HomericMarkdownListMatch {
   final String orderedDigits;
 
   /// Viewport mark for the HOM-43 [ReplacementContent] host path.
+  ///
+  /// Does not include a trailing space — the source space after the marker is
+  /// kept so the view reads `• item` / `  • item`.
   String get visibleMark =>
       kind == HomericMarkdownListKind.bullet ? '•' : '$orderedDigits.';
 }
@@ -49,24 +65,30 @@ final class HomericMarkdownListMatch {
 final class HomericMarkdownListPrefix {
   HomericMarkdownListPrefix._();
 
-  static final RegExp _pattern = RegExp(r'^([ \t]*)(?:([-*] )|(\d+)\. )');
+  /// Indent, then `-`/`*` or `N.`, then a required trailing space.
+  static final RegExp _pattern = RegExp(r'^([ \t]*)(?:([-*])|(\d+)\.) ');
 
   /// Match [text] as a list line, or `null` if it is not one.
   static HomericMarkdownListMatch? match(String text) {
     final matched = _pattern.firstMatch(text);
     if (matched == null) return null;
     final indent = matched.group(1)!;
+    final markerStart = indent.length;
+    final prefixEnd = matched.end;
+    final markerEnd = prefixEnd - 1;
     final bullet = matched.group(2);
     if (bullet != null) {
       return HomericMarkdownListMatch(
         indentLength: indent.length,
-        prefixEnd: matched.end,
+        markerEnd: markerEnd,
+        prefixEnd: prefixEnd,
         kind: HomericMarkdownListKind.bullet,
       );
     }
     return HomericMarkdownListMatch(
       indentLength: indent.length,
-      prefixEnd: matched.end,
+      markerEnd: markerEnd,
+      prefixEnd: prefixEnd,
       kind: HomericMarkdownListKind.ordered,
       orderedDigits: matched.group(3)!,
     );

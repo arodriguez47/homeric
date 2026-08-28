@@ -7,6 +7,8 @@ void main() {
       final plain = HomericMarkdownListPrefix.match('- item');
       expect(plain, isNotNull);
       expect(plain!.indentLength, 0);
+      expect(plain.markerStart, 0);
+      expect(plain.markerEnd, 1);
       expect(plain.prefixEnd, 2);
       expect(plain.kind, HomericMarkdownListKind.bullet);
       expect(plain.visibleMark, '•');
@@ -15,12 +17,15 @@ void main() {
       expect(nested, isNotNull);
       expect(nested!.indentLength, 2);
       expect(nested.markerStart, 2);
+      expect(nested.markerEnd, 3);
       expect(nested.prefixEnd, 4);
       expect(nested.visibleMark, '•');
 
       final ordered = HomericMarkdownListPrefix.match('  12. item');
       expect(ordered, isNotNull);
       expect(ordered!.indentLength, 2);
+      expect(ordered.markerStart, 2);
+      expect(ordered.markerEnd, 5);
       expect(ordered.prefixEnd, 6);
       expect(ordered.kind, HomericMarkdownListKind.ordered);
       expect(ordered.orderedDigits, '12');

@@ -25,6 +25,7 @@ import '../view/view_map.dart';
 import 'editable_document.dart';
 import 'editor_clipboard.dart';
 import 'editor_controller.dart';
+import 'markdown_list_indent.dart';
 import 'selection_overlay.dart';
 import 'spell_check.dart';
 
@@ -1210,9 +1211,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         invoke: _moveCaret,
       ),
       _TraverseIntent: _HostAction<_TraverseIntent>(
-        invoke: (intent) => intent.backward
-            ? _focusNode.previousFocus()
-            : _focusNode.nextFocus(),
+        invoke: _handleTraverseIntent,
       ),
       _MoveDocumentBlockIntent: _HostAction<_MoveDocumentBlockIntent>(
         // Keep the exact chord at this nearest command boundary even when
@@ -1440,6 +1439,38 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     return commandContext == null
         ? null
         : Actions.maybeInvoke(commandContext, intent);
+  }
+
+  /// Tab nests a markdown list item; Shift+Tab outdents. Otherwise focus
+  /// traversal (desktop foundation R8 for non-list text).
+  Object? _handleTraverseIntent(_TraverseIntent intent) {
+    if (_tryMarkdownListIndent(outdent: intent.backward)) {
+      return null;
+    }
+    return intent.backward
+        ? _focusNode.previousFocus()
+        : _focusNode.nextFocus();
+  }
+
+  bool _tryMarkdownListIndent({required bool outdent}) {
+    if (!_canMutateActions) return false;
+    final local = _localSelection();
+    if (local == null || !local.isCollapsed) return false;
+    final block = _block;
+    if (block == null) return false;
+    final edit = outdent
+        ? HomericMarkdownListIndent.outdent(block.text)
+        : HomericMarkdownListIndent.nest(block.text);
+    if (edit == null) return false;
+    final nextCaret = (local.head + edit.caretDelta)
+        .clamp(0, block.contentLength + edit.caretDelta);
+    return _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[
+        CanonicalTextEdit(edit.start, edit.end, edit.replacement),
+      ],
+      selection: BlockTextSelection.collapsed(nextCaret),
+    );
   }
 
   _DocumentCommandDisposition _invokeDocumentCommand(

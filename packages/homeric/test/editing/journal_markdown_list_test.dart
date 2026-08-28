@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
@@ -57,14 +58,14 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
     }
   }
 
-  final bulletMatch = RegExp(r'^[-*] ').firstMatch(text);
+  final bulletMatch = RegExp(r'^[ \t]*[-*] ').firstMatch(text);
   if (bulletMatch != null) {
     hideDelimiter(0, bulletMatch.end);
     styleRange(bulletMatch.end, text.length, 'listItem');
     return result;
   }
 
-  final orderedMatch = RegExp(r'^\d+\. ').firstMatch(text);
+  final orderedMatch = RegExp(r'^[ \t]*\d+\. ').firstMatch(text);
   if (orderedMatch != null) {
     hideDelimiter(0, orderedMatch.end);
     styleRange(orderedMatch.end, text.length, 'listItem');
@@ -322,6 +323,126 @@ void main() {
 
     expect(_paragraphRender(tester).source.viewText, 'item ');
     expect(paintMap.styleAtViewOffset(0), isNotNull);
+  });
+
+  testWidgets(
+      'Tab nests list item; Shift+Tab outdents; trailing space stays clean',
+      (tester) async {
+    const literal = '- item ';
+    final document = _document(literal);
+    final controller = HomericEditorController(
+      document: document,
+      selection:
+          HomericSelection.collapsed(document.positionAt(0, literal.length)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final paintMap = _JournalPaintMap();
+    final before = FocusNode();
+    FocusNode? editorFocus;
+    addTearDown(before.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    paintMap.beginBuild();
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: Localizations(
+        locale: const Locale('en'),
+        delegates: const <LocalizationsDelegate<dynamic>>[
+          DefaultWidgetsLocalizations.delegate,
+        ],
+        child: Overlay(
+          initialEntries: <OverlayEntry>[
+            OverlayEntry(
+              builder: (_) => Column(
+                children: [
+                  Focus(
+                    focusNode: before,
+                    child: const SizedBox(width: 1, height: 1),
+                  ),
+                  SizedBox(
+                    width: 320,
+                    height: 120,
+                    child: HomericEditableDocument.builder(
+                      controller: controller,
+                      inputSession: session,
+                      cacheExtent: 0,
+                      estimatedBlockHeight: 44,
+                      blockBuilder: (context, block, focusNode) {
+                        editorFocus = focusNode;
+                        return HomericEditableParagraph(
+                          controller: controller,
+                          inputSession: session,
+                          blockId: block.id,
+                          focusNode: focusNode,
+                          deriveDecorations: journalMarkdownDecorationsForBlock,
+                          resolveStyle: paintMap.resolve,
+                          paintStyler: paintMap.paint,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ));
+    await tester.pump();
+    expect(editorFocus, isNotNull);
+    editorFocus!.requestFocus();
+    await tester.pump();
+    controller.setSelection(
+      HomericSelection.collapsed(
+        controller.document.positionAt(0, literal.length),
+      ),
+    );
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+
+    expect(controller.document.blocks.single.text, '  - item ',
+        reason: 'Tab must nest via leading indent, not insert a tab char');
+    expect(controller.selection!.isCollapsed, isTrue);
+    expect(
+      controller.blockOffsetForGlobalPosition(
+        'b',
+        controller.selection!.anchor,
+      ),
+      '  - item '.length,
+      reason: 'trailing-space caret must track the nest delta',
+    );
+    paintMap.beginBuild();
+    await tester.pump();
+    expect(_paragraphRender(tester).source.viewText, 'item ',
+        reason: 'nested marker+indent must stay folded at trailing space');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+
+    expect(controller.document.blocks.single.text, '- item ');
+    expect(
+      controller.blockOffsetForGlobalPosition(
+        'b',
+        controller.selection!.anchor,
+      ),
+      literal.length,
+    );
+    expect(before.hasFocus, isFalse,
+        reason: 'outdent claims Shift+Tab when an indent level exists');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+
+    expect(controller.document.blocks.single.text, '- item ',
+        reason: 'unindented list falls through to focus traversal');
+    expect(before.hasFocus, isTrue);
   });
 
   testWidgets(

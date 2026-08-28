@@ -2,6 +2,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
 void main() {
+  group('HomericMarkdownListPrefix', () {
+    test('tokenizes column-0 and indented bullet/ordered markers', () {
+      final plain = HomericMarkdownListPrefix.match('- item');
+      expect(plain, isNotNull);
+      expect(plain!.indentLength, 0);
+      expect(plain.prefixEnd, 2);
+      expect(plain.kind, HomericMarkdownListKind.bullet);
+      expect(plain.visibleMark, '•');
+
+      final nested = HomericMarkdownListPrefix.match('  - item');
+      expect(nested, isNotNull);
+      expect(nested!.indentLength, 2);
+      expect(nested.markerStart, 2);
+      expect(nested.prefixEnd, 4);
+      expect(nested.visibleMark, '•');
+
+      final ordered = HomericMarkdownListPrefix.match('  12. item');
+      expect(ordered, isNotNull);
+      expect(ordered!.indentLength, 2);
+      expect(ordered.prefixEnd, 6);
+      expect(ordered.kind, HomericMarkdownListKind.ordered);
+      expect(ordered.orderedDigits, '12');
+      expect(ordered.visibleMark, '12.');
+
+      expect(HomericMarkdownListPrefix.match('plain'), isNull);
+      expect(HomericMarkdownListPrefix.match('-item'), isNull);
+      expect(HomericMarkdownListPrefix.match('1.item'), isNull);
+    });
+  });
+
   group('HomericMarkdownListIndent', () {
     test('detects bullet, star, and ordered markers with optional indent', () {
       expect(HomericMarkdownListIndent.isListItem('- item'), isTrue);

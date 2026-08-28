@@ -46,35 +46,23 @@ final class _JournalPaintMap {
 /// HOM-36 host path: zero-length hide folds the markdown prefix out of view.
 ///
 /// Leaves no visible list mark — see [journalMarkdownListVisibleMarkDecorations]
-/// for the HOM-43 host contract.
+/// for the HOM-43 host contract. Uses [HomericMarkdownListPrefix] so nested
+/// indented lines (`  - item`) still tokenize.
 List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   final text = block.text;
-  final result = <Decoration>[];
+  final match = HomericMarkdownListPrefix.match(text);
+  if (match == null) return const <Decoration>[];
 
-  void hideDelimiter(int start, int end) {
-    result.add(markdownMarkHideReplacement(block.id, start, end));
-  }
-
-  void styleRange(int start, int end, String spec) {
-    if (end > start) {
-      result.add(Decoration.inline(block.id, start, end, spec: spec));
-    }
-  }
-
-  final bulletMatch = RegExp(r'^[ \t]*[-*] ').firstMatch(text);
-  if (bulletMatch != null) {
-    hideDelimiter(0, bulletMatch.end);
-    styleRange(bulletMatch.end, text.length, 'listItem');
-    return result;
-  }
-
-  final orderedMatch = RegExp(r'^[ \t]*\d+\. ').firstMatch(text);
-  if (orderedMatch != null) {
-    hideDelimiter(0, orderedMatch.end);
-    styleRange(orderedMatch.end, text.length, 'listItem');
-  }
-
-  return result;
+  return <Decoration>[
+    markdownMarkHideReplacement(block.id, 0, match.prefixEnd),
+    if (match.prefixEnd < text.length)
+      Decoration.inline(
+        block.id,
+        match.prefixEnd,
+        text.length,
+        spec: 'listItem',
+      ),
+  ];
 }
 
 /// HOM-43 host path: replace the markdown list prefix with a visible mark.
@@ -82,43 +70,30 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
 /// Uses the library's existing non-empty [ReplacementContent] path — not a
 /// zero-length [markdownMarkHideReplacement]. The host chooses `•` / `1.`;
 /// Homeric already paints that substitution into view text.
+///
+/// Nested lines (`  - item`) use [HomericMarkdownListPrefix] so Tab indent
+/// still tokenizes and still swaps to `•` / `N.` after leave.
 List<Decoration> journalMarkdownListVisibleMarkDecorations(Block block) {
   final text = block.text;
-  final result = <Decoration>[];
+  final match = HomericMarkdownListPrefix.match(text);
+  if (match == null) return const <Decoration>[];
 
-  void replacePrefix(int start, int end, String visible) {
-    result.add(
-      Decoration.replace(
+  return <Decoration>[
+    Decoration.replace(
+      block.id,
+      0,
+      match.prefixEnd,
+      replacementLength: match.visibleMark.length,
+      spec: ReplacementText(match.visibleMark),
+    ),
+    if (match.prefixEnd < text.length)
+      Decoration.inline(
         block.id,
-        start,
-        end,
-        replacementLength: visible.length,
-        spec: ReplacementText(visible),
+        match.prefixEnd,
+        text.length,
+        spec: 'listItem',
       ),
-    );
-  }
-
-  void styleRange(int start, int end, String spec) {
-    if (end > start) {
-      result.add(Decoration.inline(block.id, start, end, spec: spec));
-    }
-  }
-
-  final bulletMatch = RegExp(r'^[-*] ').firstMatch(text);
-  if (bulletMatch != null) {
-    replacePrefix(0, bulletMatch.end, '•');
-    styleRange(bulletMatch.end, text.length, 'listItem');
-    return result;
-  }
-
-  final orderedMatch = RegExp(r'^(\d+)\. ').firstMatch(text);
-  if (orderedMatch != null) {
-    final number = orderedMatch.group(1)!;
-    replacePrefix(0, orderedMatch.end, '$number.');
-    styleRange(orderedMatch.end, text.length, 'listItem');
-  }
-
-  return result;
+  ];
 }
 
 Document _document(String text) => Document([
@@ -547,6 +522,127 @@ void main() {
       );
       expect(orderedVisible.viewText, '1.item ',
           reason: 'host-emitted 1. replacement paints into view text');
+    });
+
+    test('indented nested lines still tokenize and paint • / N.', () {
+      final nested = para('b', '  - item ');
+      final match = HomericMarkdownListPrefix.match(nested.text);
+      expect(match, isNotNull);
+      expect(match!.indentLength, 2);
+      expect(match.prefixEnd, 4);
+
+      final column0Only = RegExp(r'^[-*] ').firstMatch(nested.text);
+      expect(column0Only, isNull,
+          reason: 'adversary: column-0-only regex misses nested Tab indent');
+
+      final visible = deriveViewText(
+        nested,
+        journalMarkdownListVisibleMarkDecorations(nested),
+      );
+      expect(visible.viewText, '•item ',
+          reason: 'nested indent+marker still swaps to • after leave');
+      expect(visible.viewText.contains('-'), isFalse,
+          reason: 'literal dash must not remain on screen after leave');
+
+      final nestedOrdered = para('b', '  1. item ');
+      final orderedVisible = deriveViewText(
+        nestedOrdered,
+        journalMarkdownListVisibleMarkDecorations(nestedOrdered),
+      );
+      expect(orderedVisible.viewText, '1.item ');
+    });
+
+    testWidgets('after Tab nest and leave, • stays visible; dash does not',
+        (tester) async {
+      const literal = '- item ';
+      final document = _document(literal);
+      final controller = HomericEditorController(
+        document: document,
+        selection:
+            HomericSelection.collapsed(document.positionAt(0, literal.length)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      FocusNode? editorFocus;
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+
+      paintMap.beginBuild();
+      await tester.pumpWidget(Directionality(
+        textDirection: TextDirection.ltr,
+        child: Localizations(
+          locale: const Locale('en'),
+          delegates: const <LocalizationsDelegate<dynamic>>[
+            DefaultWidgetsLocalizations.delegate,
+          ],
+          child: Overlay(
+            initialEntries: <OverlayEntry>[
+              OverlayEntry(
+                builder: (_) => SizedBox(
+                  width: 320,
+                  height: 120,
+                  child: HomericEditableDocument.builder(
+                    controller: controller,
+                    inputSession: session,
+                    cacheExtent: 0,
+                    estimatedBlockHeight: 44,
+                    blockBuilder: (context, block, focusNode) {
+                      editorFocus = focusNode;
+                      return HomericEditableParagraph(
+                        controller: controller,
+                        inputSession: session,
+                        blockId: block.id,
+                        focusNode: focusNode,
+                        deriveDecorations:
+                            journalMarkdownListVisibleMarkDecorations,
+                        resolveStyle: paintMap.resolve,
+                        paintStyler: paintMap.paint,
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ));
+      await tester.pump();
+      editorFocus!.requestFocus();
+      await tester.pump();
+      controller.setSelection(
+        HomericSelection.collapsed(
+          controller.document.positionAt(0, literal.length),
+        ),
+      );
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+
+      expect(controller.document.blocks.single.text, '  - item ');
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(_paragraphRender(tester).source.viewText, '•item ',
+          reason: 'after Tab nest + leave, nested prefix still shows •');
+      expect(_paragraphRender(tester).source.viewText.contains('-'), isFalse);
+
+      controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 0)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(_paragraphRender(tester).source.viewText, '  - item ',
+          reason: 'caret on nested prefix reveals literal indent+marker');
+
+      controller.setSelection(
+        HomericSelection.collapsed(
+          controller.document.positionAt(0, '  - item '.length),
+        ),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(_paragraphRender(tester).source.viewText, '•item ',
+          reason: 'trailing-space caret stays clean on nested list');
     });
 
     testWidgets(

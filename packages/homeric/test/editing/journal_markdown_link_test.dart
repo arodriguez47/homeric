@@ -47,6 +47,9 @@ final class _JournalPaintMap {
 }
 
 /// Journal markdown decorations: hide `[` / `](url)`, paint label as link.
+///
+/// Uses [HomericMarkdownLink] so `![alt](url)` is not treated as a link
+/// (see HOM-45 / [HomericMarkdownImage]).
 List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   final text = block.text;
   final result = <Decoration>[];
@@ -61,11 +64,10 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
     }
   }
 
-  for (final match in RegExp(r'\[([^\]]+)\]\(([^)]+)\)').allMatches(text)) {
-    final label = match.group(1)!;
-    hideDelimiter(match.start, match.start + 1);
-    hideDelimiter(match.start + 1 + label.length, match.end);
-    styleRange(match.start + 1, match.start + 1 + label.length, 'link');
+  for (final match in HomericMarkdownLink.allMatches(text)) {
+    hideDelimiter(match.start, match.labelStart);
+    hideDelimiter(match.closeStart, match.end);
+    styleRange(match.labelStart, match.labelEnd, 'link');
   }
 
   return result;

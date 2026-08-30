@@ -3814,6 +3814,147 @@ void main() {
       HomericFocusSettlementResult.missing,
     );
   });
+
+  testWidgets(
+      'typewriter focus keeps the caret line in the middle third while typing',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(60, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    final scrollController = ScrollController();
+    addTearDown(scrollController.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        key: key,
+        controller: controller,
+        inputSession: session,
+        scrollController: scrollController,
+        typewriterFocus: true,
+        // Room to center near edges without fighting scroll extent.
+        padding: const EdgeInsets.symmetric(vertical: 200),
+        cacheExtent: 250,
+        estimatedBlockHeight: 44,
+        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: block.id,
+          focusNode: focusNode,
+          resolveStyle: (_) => _style,
+        ),
+      ),
+    )));
+    await tester.pump();
+
+    Future<void> expectCaretInMiddleThird() async {
+      // Typewriter may re-schedule after viewport-anchor correction.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      final caret = key.currentState!.activeCaretGeometry;
+      expect(caret, isNotNull);
+      final documentBox = tester.renderObject(
+        find.byType(HomericEditableDocument),
+      ) as RenderBox;
+      final viewportTop = documentBox.localToGlobal(Offset.zero).dy;
+      final viewportHeight = documentBox.size.height;
+      final relativeY = caret!.globalRect.center.dy - viewportTop;
+      expect(
+        relativeY,
+        inInclusiveRange(viewportHeight / 3, 2 * viewportHeight / 3),
+        reason: 'caret Y=$relativeY must stay in middle third of '
+            'viewportHeight=$viewportHeight',
+      );
+    }
+
+    // Mount a mid-document block, then let typewriter pin the caret line.
+    final focusPending = key.currentState!.settleFocusOnBlock('block-20');
+    await tester.pumpAndSettle();
+    expect(await focusPending, HomericFocusSettlementResult.focused);
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(
+        controller.document.indexOfBlockId('block-20')!,
+        5,
+      )),
+    );
+    await expectCaretInMiddleThird();
+    final caretYBefore =
+        key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+    final scrollBefore = scrollController.offset;
+
+    expect(controller.replaceSelection('X'), isTrue);
+    await expectCaretInMiddleThird();
+
+    // Paragraph breaks push the logical caret down; the page should move so
+    // the caret line remains in the middle third.
+    for (var i = 0; i < 8; i++) {
+      expect(controller.insertParagraphBreak(), isTrue);
+      await expectCaretInMiddleThird();
+    }
+
+    final caretYAfter =
+        key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+    expect(
+      caretYAfter,
+      closeTo(caretYBefore, 24),
+      reason: 'typewriter keeps caret Y stable; the page moves instead',
+    );
+    expect(scrollController.offset, greaterThan(scrollBefore));
+  });
+
+  testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewportTop = documentBox.localToGlobal(Offset.zero).dy;
+    final before = key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+
+    for (var i = 0; i < 12; i++) {
+      expect(controller.insertParagraphBreak(), isTrue);
+      await tester.pump();
+      await tester.pump();
+    }
+
+    final after = key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+    final relativeY = after - viewportTop;
+    expect(after, greaterThan(before));
+    expect(
+      relativeY > documentBox.size.height * 2 / 3 ||
+          relativeY < documentBox.size.height / 3,
+      isTrue,
+      reason: 'default path must not pin caret into the middle third',
+    );
+  });
 }
 
 Widget _editableDocument(

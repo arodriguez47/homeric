@@ -20,6 +20,7 @@ import '../transform/mapping.dart';
 import '../transform/replace_step.dart';
 import '../transform/step_map.dart' show Mappable, MapResult;
 import '../transform/transaction.dart';
+import 'markdown_list_indent.dart';
 
 /// Identifies the canonical command that produced a committed document change.
 enum HomericCommitOrigin {
@@ -1015,13 +1016,47 @@ class HomericEditorController extends ChangeNotifier {
     );
   }
 
-  /// Splits after replacing any expanded selection, focusing the fresh
-  /// trailing block at offset zero.
-  bool insertParagraphBreak({String? trailingBlockId}) =>
-      replaceSelectionStructurally(
-        '\n',
-        firstTrailingBlockId: trailingBlockId,
-      );
+  /// Splits after replacing any expanded selection.
+  ///
+  /// On a markdown list item ([HomericMarkdownListPrefix.match]), Enter
+  /// continues the list: the trailing block opens with the same bullet chrome
+  /// or the next ordered marker. An empty list item (prefix only) exits the
+  /// list by clearing that prefix instead of inserting a bare paragraph.
+  bool insertParagraphBreak({String? trailingBlockId}) {
+    final current = _selection;
+    if (current != null && _isValidSelection(_document, current)) {
+      final start = _document.resolve(current.start);
+      final end = _document.resolve(current.end);
+      if (start is InlinePosition &&
+          end is InlinePosition &&
+          start.blockIndex == end.blockIndex) {
+        final text = start.block.text;
+        final match = HomericMarkdownListPrefix.match(text);
+        if (match != null && text.length == match.prefixEnd) {
+          return applyBlockEditBatch(
+            blockId: start.block.id,
+            edits: <CanonicalTextEdit>[
+              CanonicalTextEdit(0, match.prefixEnd, ''),
+            ],
+            selection: const BlockTextSelection.collapsed(0),
+          );
+        }
+        if (match != null &&
+            start.offset >= match.prefixEnd &&
+            end.offset >= match.prefixEnd) {
+          final prefix = HomericMarkdownListPrefix.continuedPrefix(text, match);
+          return replaceSelectionStructurally(
+            '\n$prefix',
+            firstTrailingBlockId: trailingBlockId,
+          );
+        }
+      }
+    }
+    return replaceSelectionStructurally(
+      '\n',
+      firstTrailingBlockId: trailingBlockId,
+    );
+  }
 
   /// Applies a stale-safe stable-ID block move as one history unit.
   ///

@@ -35,6 +35,27 @@ void main() {
       expect(HomericMarkdownListPrefix.match('-item'), isNull);
       expect(HomericMarkdownListPrefix.match('1.item'), isNull);
     });
+
+    test('continuedPrefix copies bullet chrome and bumps ordered digits', () {
+      final bullet = HomericMarkdownListPrefix.match('  * item');
+      expect(bullet, isNotNull);
+      expect(
+        HomericMarkdownListPrefix.continuedPrefix('  * item', bullet!),
+        '  * ',
+      );
+
+      final dash = HomericMarkdownListPrefix.match('- item');
+      expect(
+        HomericMarkdownListPrefix.continuedPrefix('- item', dash!),
+        '- ',
+      );
+
+      final ordered = HomericMarkdownListPrefix.match('  12. item');
+      expect(
+        HomericMarkdownListPrefix.continuedPrefix('  12. item', ordered!),
+        '  13. ',
+      );
+    });
   });
 
   group('HomericMarkdownListIndent', () {

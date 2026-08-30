@@ -1,5 +1,6 @@
 /// Journal-facing markdown list lines: tokenize optional leading indent, then
-/// nest/outdent via a two-space prefix rewrite.
+/// nest/outdent via a two-space prefix rewrite. Enter continuation copies or
+/// bumps the marker prefix (see [HomericMarkdownListPrefix.continuedPrefix]).
 ///
 /// Homeric stores literal source. Nesting is not a structural outliner and not
 /// a literal tab insert. Hosts match with [HomericMarkdownListPrefix.match]
@@ -92,6 +93,21 @@ final class HomericMarkdownListPrefix {
       kind: HomericMarkdownListKind.ordered,
       orderedDigits: matched.group(3)!,
     );
+  }
+
+  /// Prefix inserted after a newline when Enter continues [match] on [text].
+  ///
+  /// Bullets copy indent + `- `/`* ` verbatim. Ordered markers keep indent and
+  /// bump the decimal (`12. ` → `13. `).
+  static String continuedPrefix(String text, HomericMarkdownListMatch match) {
+    final indent = text.substring(0, match.indentLength);
+    switch (match.kind) {
+      case HomericMarkdownListKind.bullet:
+        return text.substring(0, match.prefixEnd);
+      case HomericMarkdownListKind.ordered:
+        final next = int.parse(match.orderedDigits) + 1;
+        return '$indent$next. ';
+    }
   }
 }
 

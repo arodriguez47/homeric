@@ -74,7 +74,6 @@ final class HomericMarkdownListPrefix {
     final matched = _pattern.firstMatch(text);
     if (matched == null) return null;
     final indent = matched.group(1)!;
-    final markerStart = indent.length;
     final prefixEnd = matched.end;
     final markerEnd = prefixEnd - 1;
     final bullet = matched.group(2);

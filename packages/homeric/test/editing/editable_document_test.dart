@@ -772,7 +772,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('platform close revokes document-owned touch handle drag',
+  testWidgets('platform close revokes document drag while reattaching input',
       (tester) async {
     TextInputConnection.debugResetId();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -838,7 +838,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(session.isAttached, isFalse);
+    expect(session.isAttached, isTrue);
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMovingEndpoint, isNull);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
@@ -947,7 +947,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('platform close revokes paragraph-owned long press drag',
+  testWidgets('platform close revokes paragraph drag while reattaching input',
       (tester) async {
     TextInputConnection.debugResetId();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -1011,7 +1011,7 @@ void main() {
       (_) {},
     );
     await tester.pump();
-    expect(session.isAttached, isFalse);
+    expect(session.isAttached, isTrue);
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
 

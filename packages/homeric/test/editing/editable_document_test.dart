@@ -3850,27 +3850,37 @@ void main() {
     addTearDown(session.dispose);
     addTearDown(controller.dispose);
 
-    await tester.pumpWidget(_withOverlay(SizedBox(
-      width: 500,
-      height: 300,
-      child: HomericEditableDocument.builder(
-        key: key,
-        controller: controller,
-        inputSession: session,
-        scrollController: scrollController,
-        typewriterFocus: true,
-        // Room to center near edges without fighting scroll extent.
-        padding: const EdgeInsets.symmetric(vertical: 200),
-        cacheExtent: 250,
-        estimatedBlockHeight: 44,
-        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
-          controller: controller,
-          inputSession: session,
-          blockId: block.id,
-          focusNode: focusNode,
-          resolveStyle: (_) => _style,
-        ),
-      ),
+    Widget documentWidget(ScrollController activeScrollController) => SizedBox(
+          width: 500,
+          height: 300,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: controller,
+            inputSession: session,
+            scrollController: activeScrollController,
+            typewriterFocus: true,
+            // Room to center near edges without fighting scroll extent.
+            padding: const EdgeInsets.symmetric(vertical: 200),
+            cacheExtent: 250,
+            estimatedBlockHeight: 44,
+            blockBuilder: (context, block, focusNode) =>
+                HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        );
+
+    var activeScrollController = scrollController;
+    late StateSetter rebuildDocument;
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (context, setState) {
+        rebuildDocument = setState;
+        return documentWidget(activeScrollController);
+      },
     )));
     await tester.pump();
 
@@ -3946,6 +3956,41 @@ void main() {
       reason: 'typewriter keeps caret Y stable; the page moves instead',
     );
     expect(scrollController.offset, greaterThan(scrollBefore));
+
+    // A consumer can replace its external controller while typewriter is
+    // waiting for the old position to become idle. The pending listener must
+    // be detached and centering must resume against the replacement.
+    final oldScroll = scrollController.animateTo(
+      (scrollController.offset + 80).clamp(
+        scrollController.position.minScrollExtent,
+        scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.linear,
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(scrollController.position.isScrollingNotifier.value, isTrue);
+    expect(controller.replaceSelection('Z'), isTrue);
+    await tester.pump();
+
+    final replacementScrollController = ScrollController();
+    addTearDown(replacementScrollController.dispose);
+    rebuildDocument(() {
+      activeScrollController = replacementScrollController;
+    });
+    await tester.pumpAndSettle();
+    await expectCaretInMiddleThird();
+    expect(
+      key.currentState!.debugScrollController,
+      same(replacementScrollController),
+    );
+    expect(replacementScrollController.hasClients, isTrue);
+
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await oldScroll;
+    await expectCaretInMiddleThird();
   });
 
   testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',

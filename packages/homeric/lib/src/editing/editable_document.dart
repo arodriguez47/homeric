@@ -644,9 +644,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   void didUpdateWidget(HomericEditableDocument oldWidget) {
     super.didUpdateWidget(oldWidget);
     _validateSession();
+    final scrollControllerChanged =
+        !identical(oldWidget.scrollController, widget.scrollController);
     if (!identical(oldWidget.controller, widget.controller) ||
         !identical(oldWidget.inputSession, widget.inputSession) ||
-        !identical(oldWidget.scrollController, widget.scrollController)) {
+        scrollControllerChanged) {
       cancelPointerSelectionDrag();
       hideTouchSelectionChrome();
     } else if (!identical(
@@ -667,7 +669,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       oldWidget.inputSession.resumeDeltas();
       if (_selectionDragActive) widget.inputSession.suspendDeltas();
     }
-    if (!identical(oldWidget.scrollController, widget.scrollController)) {
+    if (scrollControllerChanged) {
+      _typewriterFocusGeneration++;
+      _cancelTypewriterScrollIdleWait();
       if (oldWidget.scrollController == null) _scrollController.dispose();
       _scrollController = widget.scrollController ?? ScrollController();
     }
@@ -683,8 +687,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
     if (widget.typewriterFocus &&
         (!oldWidget.typewriterFocus ||
-            !identical(oldWidget.controller, widget.controller))) {
-      _scheduleTypewriterFocus();
+            !identical(oldWidget.controller, widget.controller) ||
+            scrollControllerChanged)) {
+      _scheduleTypewriterFocus(force: scrollControllerChanged);
     }
   }
 
@@ -704,6 +709,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   /// Bounded retained source-text footprint of the paragraph cache.
   int get debugParagraphLayoutCacheTextCodeUnits =>
       _paragraphLayoutCache.textCodeUnits;
+
+  @visibleForTesting
+  ScrollController get debugScrollController => _scrollController;
 
   /// Cancels a pointer drag if focus remains outside every editor row.
   ///

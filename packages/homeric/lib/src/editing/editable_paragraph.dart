@@ -880,15 +880,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         _overlayContext = overlayContext;
         final geometryDocumentRevision = _controller.documentRevision;
         _geometryDocumentRevision = geometryDocumentRevision;
-        final consumerGeometry = HomericEditableBlockGeometry._(
-          blockId: widget.blockId,
-          documentRevision: geometryDocumentRevision,
-          layoutGeneration: geometry.generation,
-          geometry: geometry,
-          isCurrent: () =>
-              geometryDocumentRevision == _controller.documentRevision &&
-              _isCurrentGeometry(geometry),
-        );
+        final consumerGeometry =
+            _consumerGeometry(geometry, geometryDocumentRevision);
         _documentHost?.registerSelectionHost(
           widget.blockId,
           owner: this,
@@ -900,15 +893,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             return render.localToGlobal(Offset.zero) & render.size;
           },
           hitTest: (globalPoint) {
-            if (!_isCurrentGeometry(geometry)) return null;
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
             final render = overlayContext.findRenderObject();
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
             final localPoint = render.globalToLocal(globalPoint);
-            final rect = geometry.blockRect.value;
+            final paragraphGeometry = current._geometry;
+            final rect = paragraphGeometry.blockRect.value;
             final hit = _caretForPoint(
-              geometry,
+              paragraphGeometry,
               Offset(
                 localPoint.dx.clamp(rect.left, rect.right),
                 localPoint.dy.clamp(rect.top, rect.bottom),
@@ -917,15 +912,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             return (offset: hit.position, affinity: hit.affinity);
           },
           wordRangeAt: (globalPoint) {
-            if (!_isCurrentGeometry(geometry)) return null;
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
             final render = overlayContext.findRenderObject();
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
             final localPoint = render.globalToLocal(globalPoint);
-            final rect = geometry.blockRect.value;
+            final paragraphGeometry = current._geometry;
+            final rect = paragraphGeometry.blockRect.value;
             return _wordForPoint(
-              geometry,
+              paragraphGeometry,
               Offset(
                 localPoint.dx.clamp(rect.left, rect.right),
                 localPoint.dy.clamp(rect.top, rect.bottom),
@@ -933,15 +930,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             );
           },
           globalRangeRects: (range) {
-            if (geometryDocumentRevision != _controller.documentRevision ||
-                !_isCurrentGeometry(geometry)) {
-              return null;
-            }
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
             final render = overlayContext.findRenderObject();
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
-            final localRects = consumerGeometry.rectsForRange(range);
+            final localRects = current.rectsForRange(range);
             if (localRects == null) return null;
             return <Rect>[
               for (final rect in localRects)
@@ -949,8 +944,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             ];
           },
           activeCaretGeometry: () {
-            if (geometryDocumentRevision != _controller.documentRevision ||
-                !_isCurrentGeometry(geometry) ||
+            final current = _currentConsumerGeometry();
+            if (current == null ||
                 _controller.activeBlockId != widget.blockId) {
               return null;
             }
@@ -963,7 +958,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                 !render.hasSize) {
               return null;
             }
-            final localRect = consumerGeometry.caretRect(
+            final localRect = current.caretRect(
               selection.head,
               affinity: selection.affinity,
             );
@@ -971,20 +966,24 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             final globalOrigin = render.localToGlobal(localRect.topLeft);
             return HomericActiveCaretGeometry(
               blockId: widget.blockId,
-              documentRevision: geometryDocumentRevision,
-              layoutGeneration: geometry.generation,
+              documentRevision: current.documentRevision,
+              layoutGeneration: current.layoutGeneration,
               globalRect: globalOrigin & localRect.size,
             );
           },
-          magnifierInfo: (globalPoint) => _magnifierInfoForPoint(
-            geometry,
-            overlayContext,
-            globalPoint,
-          ),
+          magnifierInfo: (globalPoint) {
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
+            return _magnifierInfoForPoint(
+              current._geometry,
+              overlayContext,
+              globalPoint,
+            );
+          },
           selectionEndpointGeometry: (endpoint, blockOffset, affinity) {
+            final current = _currentConsumerGeometry();
             if (_resolvedTouchSelectionConfiguration == null ||
-                geometryDocumentRevision != _controller.documentRevision ||
-                !_isCurrentGeometry(geometry)) {
+                current == null) {
               return null;
             }
             final localEndpoint = _localSelectionEndpoint(endpoint);
@@ -997,7 +996,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
-            final localRect = consumerGeometry.caretRect(
+            final localRect = current.caretRect(
               blockOffset,
               affinity: affinity,
             );
@@ -1005,7 +1004,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             return (
               globalRect:
                   render.localToGlobal(localRect.topLeft) & localRect.size,
-              layoutGeneration: geometry.generation,
+              layoutGeneration: current.layoutGeneration,
               layerLink: _selectionLayerLink(endpoint),
               textDirection:
                   widget.paragraphSpec.direction == ParagraphDirection.rtl
@@ -1030,32 +1029,56 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           onPointerCancel: (_) => _cancelGestureSequence(),
           child: TextSelectionGestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTapDown: (details) => _tapDown(geometry, details),
+            onTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) _tapDown(current, details);
+            },
             onSingleTapUp: (details) {
-              if (!consumerGeometry.isCurrent) return;
+              final current = _currentConsumerGeometry();
+              if (current == null) return;
               _completeSingleTap(details.kind);
               widget.onSingleTap?.call(
-                consumerGeometry,
+                current,
                 details.localPosition,
                 details.globalPosition,
               );
             },
-            onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
-            onTripleTapDown: (details) => _tripleTapDown(geometry, details),
-            onSingleLongTapStart: (details) =>
-                _longPressStart(geometry, details),
-            onSingleLongTapMoveUpdate: (details) =>
-                _longPressMoveUpdate(geometry, details),
+            onDoubleTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) _doubleTapDown(current, details);
+            },
+            onTripleTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) _tripleTapDown(current, details);
+            },
+            onSingleLongTapStart: (details) {
+              final current = _currentGeometry();
+              if (current != null) _longPressStart(current, details);
+            },
+            onSingleLongTapMoveUpdate: (details) {
+              final current = _currentGeometry();
+              if (current != null) _longPressMoveUpdate(current, details);
+            },
             onSingleLongTapEnd: (_) => _longPressEnd(),
-            onDragSelectionStart: (details) =>
-                _startSelectionDrag(geometry, details),
-            onDragSelectionUpdate: (details) =>
-                _updateSelectionDrag(geometry, details.localPosition),
+            onDragSelectionStart: (details) {
+              final current = _currentGeometry();
+              if (current != null) _startSelectionDrag(current, details);
+            },
+            onDragSelectionUpdate: (details) {
+              final current = _currentGeometry();
+              if (current != null) {
+                _updateSelectionDrag(current, details.localPosition);
+              }
+            },
             onDragSelectionEnd: (_) => _endSelectionPointer(),
             onSingleTapCancel: _cancelGestureSequence,
             onTapTrackReset: _cancelGestureSequence,
-            onSecondaryTapDown: (details) =>
-                _secondaryTapDown(geometry, details.localPosition),
+            onSecondaryTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) {
+                _secondaryTapDown(current, details.localPosition);
+              }
+            },
             onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
             child: const SizedBox.expand(),
           ),
@@ -1065,14 +1088,18 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             : MouseRegion(
                 opaque: false,
                 onHover: (event) {
-                  if (!consumerGeometry.isCurrent) return;
+                  final current = _currentConsumerGeometry();
+                  if (current == null) return;
                   widget.onHover?.call(
-                    consumerGeometry,
+                    current,
                     event.localPosition,
                     event.position,
                   );
                 },
-                onExit: (_) => widget.onHoverExit?.call(consumerGeometry),
+                onExit: (_) {
+                  final current = _currentConsumerGeometry();
+                  if (current != null) widget.onHoverExit?.call(current);
+                },
                 child: selectionPlane,
               );
         return <Widget>[
@@ -3042,6 +3069,26 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       return geometry;
     }
     return _paragraphGeometry = ParagraphGeometry(render);
+  }
+
+  HomericEditableBlockGeometry _consumerGeometry(
+    ParagraphGeometry geometry,
+    int documentRevision,
+  ) =>
+      HomericEditableBlockGeometry._(
+        blockId: widget.blockId,
+        documentRevision: documentRevision,
+        layoutGeneration: geometry.generation,
+        geometry: geometry,
+        isCurrent: () =>
+            documentRevision == _controller.documentRevision &&
+            _isCurrentGeometry(geometry),
+      );
+
+  HomericEditableBlockGeometry? _currentConsumerGeometry() {
+    final geometry = _currentGeometry();
+    if (geometry == null) return null;
+    return _consumerGeometry(geometry, _controller.documentRevision);
   }
 
   bool _isCurrentGeometry(ParagraphGeometry geometry) {

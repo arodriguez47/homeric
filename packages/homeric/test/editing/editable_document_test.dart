@@ -3676,6 +3676,24 @@ void main() {
     expect(padded!.globalRect.top, closeTo(initial!.globalRect.top + 48, 0.01));
     expect(identical(session.controller, controller), isTrue);
 
+    final render = tester.renderObject<RenderHomericParagraph>(
+      find.byKey(const ValueKey('homeric-editable-block-0')),
+    );
+    final generationBeforeRenderOnlyLayout = render.layoutGeneration;
+    render.markNeedsLayout();
+    await tester.pump();
+    expect(
+      render.layoutGeneration,
+      greaterThan(generationBeforeRenderOnlyLayout),
+    );
+    expect(firstGeometry!.isCurrent, isFalse);
+    expect(
+      key.currentState!.activeCaretGeometry,
+      isNotNull,
+      reason: 'selection-host callbacks must resolve the current render '
+          'generation even when the paragraph widget did not rebuild',
+    );
+
     expect(controller.replaceSelection('X'), isTrue);
     expect(firstGeometry!.isCurrent, isFalse,
         reason: 'document revision invalidates geometry before the next frame');

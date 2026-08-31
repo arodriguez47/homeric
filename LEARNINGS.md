@@ -459,6 +459,7 @@ that does not exist.
 best-effort, require a checked-in host, a clean release build, and a repeatable
 launch command. Keep host readiness, automated adapter evidence, browser or
 device interaction, and certification as separate claims.
+
 ## render-engineer — 2026-09-02 — Snapshot side-channel styles before invalidating layout
 
 **What:** A Journal host clears and refills a style map while rebuilding a
@@ -479,3 +480,23 @@ compare a snapshot of its last consumed output at the render boundary. Skip
 invalidation when the output is equal, repaint paint-only differences, and
 relayout once for metric differences. Pin the unchanged notification loop plus
 paint-only and metric-changing refreshes.
+
+## editor-architect — 2026-08-31 — Pointer callbacks resolve geometry at event time
+
+**What:** A paragraph can complete a render-only relayout without rebuilding
+the widget closures installed by its overlay. Those closures retained the old
+`ParagraphGeometry`, so the generation guard correctly rejected mouse taps,
+selection-host hit tests, caret queries, hover, and touch geometry even though
+the render object already had valid current geometry.
+
+**Why it mattered:** A Nexus-side render-tree fallback appeared to repair the
+first click after blur, but duplicated private hit-testing and still missed
+later focused clicks. Enabling typewriter focus made the same stale active
+caret query visible as inconsistent centering. Both symptoms came from the
+editor's geometry-capability boundary, not from host focus policy.
+
+**Rule going forward:** Closures may retain generation-stamped geometry for
+painting and consumer overlays, but every pointer or selection-host callback
+must ask the paragraph state for a fresh current geometry capability when the
+event occurs. Keep stale generations fail-closed; refresh the witness instead
+of bypassing the guard in a host application.

@@ -1150,7 +1150,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
           movingEndpoint: _touchMovingEndpoint,
         ) ==
         HomericSelectionEndpoint.end) {
-      (start, end) = (end, start);
+      final previousStart = start;
+      start = end;
+      end = previousStart;
     }
     if (start == null && end == null) {
       _disposeTouchSelectionOverlay();

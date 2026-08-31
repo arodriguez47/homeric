@@ -1981,7 +1981,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           movingEndpoint: _localTouchMovingEndpoint,
         ) ==
         HomericSelectionEndpoint.end) {
-      (start, end) = (end, start);
+      final previousStart = start;
+      start = end;
+      end = previousStart;
     }
     if (start == null || end == null) {
       _disposeLocalTouchSelectionOverlay();

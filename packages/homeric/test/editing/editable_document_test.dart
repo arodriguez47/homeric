@@ -3911,6 +3911,23 @@ void main() {
         key.currentState!.activeCaretGeometry!.globalRect.center.dy;
     final scrollBefore = scrollController.offset;
 
+    final scrollAway = scrollController.animateTo(
+      (scrollController.offset + 80).clamp(
+        scrollController.position.minScrollExtent,
+        scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.linear,
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(scrollController.position.isScrollingNotifier.value, isTrue);
+    expect(controller.replaceSelection('Y'), isTrue);
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await scrollAway;
+    await expectCaretInMiddleThird();
+
     expect(controller.replaceSelection('X'), isTrue);
     await expectCaretInMiddleThird();
 

@@ -1097,8 +1097,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                   );
                 },
                 onExit: (_) {
-                  final current = _currentConsumerGeometry();
-                  if (current != null) widget.onHoverExit?.call(current);
+                  widget.onHoverExit?.call(
+                    _currentConsumerGeometry() ?? consumerGeometry,
+                  );
                 },
                 child: selectionPlane,
               );

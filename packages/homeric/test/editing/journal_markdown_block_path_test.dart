@@ -1,7 +1,6 @@
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
-import 'package:homeric/src/render/homeric_paragraph.dart';
 
 import '../transform/transform_test_utils.dart';
 
@@ -19,10 +18,7 @@ final class _JournalPaintMap {
     'bold': TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
     'italic': TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
     'code': TextStyle(fontSize: 14, fontFamily: 'monospace'),
-    'strike': TextStyle(
-      fontSize: 14,
-      decoration: TextDecoration.lineThrough,
-    ),
+    'strike': TextStyle(fontSize: 14, decoration: TextDecoration.lineThrough),
     'link': TextStyle(fontSize: 14, color: Color(0xFF0000FF)),
   };
 
@@ -56,13 +52,15 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   final result = <Decoration>[];
 
   void hideDelimiter(int start, int end) {
-    result.add(Decoration.replace(
-      block.id,
-      start,
-      end,
-      replacementLength: 0,
-      spec: 'hide',
-    ));
+    result.add(
+      Decoration.replace(
+        block.id,
+        start,
+        end,
+        replacementLength: 0,
+        spec: 'hide',
+      ),
+    );
   }
 
   void styleRange(int start, int end, String spec) {
@@ -77,8 +75,9 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
     styleRange(match.start + 2, match.end - 2, 'bold');
   }
 
-  for (final match
-      in RegExp(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)').allMatches(text)) {
+  for (final match in RegExp(
+    r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)',
+  ).allMatches(text)) {
     hideDelimiter(match.start, match.start + 1);
     hideDelimiter(match.end - 1, match.end);
     styleRange(match.start + 1, match.end - 1, 'italic');
@@ -141,9 +140,7 @@ Widget _withOverlay(Widget child) => Directionality(
           DefaultWidgetsLocalizations.delegate,
         ],
         child: Overlay(
-          initialEntries: <OverlayEntry>[
-            OverlayEntry(builder: (_) => child),
-          ],
+          initialEntries: <OverlayEntry>[OverlayEntry(builder: (_) => child)],
         ),
       ),
     );
@@ -163,26 +160,27 @@ Future<void> _pumpDocument(
   required _JournalPaintMap paintMap,
 }) async {
   paintMap.beginBuild();
-  await tester.pumpWidget(_documentHarness(
-    controller: controller,
-    session: session,
-    paintMap: paintMap,
-  ));
+  await tester.pumpWidget(
+    _documentHarness(
+      controller: controller,
+      session: session,
+      paintMap: paintMap,
+    ),
+  );
   await tester.pump();
 }
 
 ParagraphSource<TextStyle> _boldSource(_JournalPaintMap paintMap) =>
     ParagraphSource.build(
       block: para('b', '**bold**'),
-      decorations: journalMarkdownDecorationsForBlock(
-        para('b', '**bold**'),
-      ),
+      decorations: journalMarkdownDecorationsForBlock(para('b', '**bold**')),
       resolveStyle: paintMap.resolve,
     );
 
 void main() {
-  testWidgets('deriveDecorations hides bold/italic delimiters in view text',
-      (tester) async {
+  testWidgets('deriveDecorations hides bold/italic delimiters in view text', (
+    tester,
+  ) async {
     final controller = HomericEditorController(
       document: _document('**bold** and *italic*'),
     );
@@ -201,8 +199,9 @@ void main() {
     expect(_paragraphRender(tester).source.viewText, 'bold and italic');
   });
 
-  testWidgets('deriveDecorations keeps code/strike/link delimiters visible',
-      (tester) async {
+  testWidgets('deriveDecorations keeps code/strike/link delimiters visible', (
+    tester,
+  ) async {
     final controller = HomericEditorController(
       document: _document('`code` ~~strike~~ [label](https://x.test)'),
     );
@@ -225,67 +224,77 @@ void main() {
   });
 
   testWidgets(
-      'layout-equal source update reshapes paintStyler glyphs on the render object',
-      (tester) async {
-    final paintMap = _JournalPaintMap();
-  paintMap.beginBuild();
-    final source = _boldSource(paintMap);
-    await tester.pumpWidget(Directionality(
-      textDirection: TextDirection.ltr,
-      child: SizedBox(
-        width: 200,
-        child: HomericParagraph(source: source, paintStyler: paintMap.paint),
-      ),
-    ));
-    await tester.pump();
-    expect(paintMap.lastPaintedWeight, FontWeight.w700);
+    'layout-equal source update reshapes paintStyler glyphs on the render object',
+    (tester) async {
+      final paintMap = _JournalPaintMap();
+      paintMap.beginBuild();
+      final source = _boldSource(paintMap);
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            child: HomericParagraph(
+              source: source,
+              paintStyler: paintMap.paint,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(paintMap.lastPaintedWeight, FontWeight.w700);
 
-    final render = tester.renderObject<RenderHomericParagraph>(
-      find.byType(HomericParagraph),
-    );
-    paintMap.beginBuild();
-    paintMap.paintCalls = 0;
-    paintMap.lastPaintedWeight = null;
-    render.source = _boldSource(paintMap);
-    await tester.pump();
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph),
+      );
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.lastPaintedWeight = null;
+      render.source = _boldSource(paintMap);
+      await tester.pump();
 
-    expect(paintMap.paintCalls, greaterThan(0));
-    expect(paintMap.lastPaintedWeight, FontWeight.w700);
-  });
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(paintMap.lastPaintedWeight, FontWeight.w700);
+    },
+  );
 
   testWidgets(
-      'layout-equal controller notify still paints journal mark styles via paintStyler',
-      (tester) async {
-    final controller = HomericEditorController(
-      document: _document('**bold**'),
-    );
-    final session = HomericTextInputSession(controller: controller);
-    final paintMap = _JournalPaintMap();
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+    'layout-equal controller notify still paints journal mark styles via paintStyler',
+    (tester) async {
+      final controller = HomericEditorController(
+        document: _document('**bold**'),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
 
-    await _pumpDocument(
-      tester,
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    );
+      await _pumpDocument(
+        tester,
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+      );
 
-    expect(_paragraphRender(tester).source.viewText, 'bold');
-    expect(paintMap.lastPaintedWeight, FontWeight.w700);
+      expect(_paragraphRender(tester).source.viewText, 'bold');
+      expect(paintMap.lastPaintedWeight, FontWeight.w700);
 
-    paintMap.paintCalls = 0;
-    paintMap.lastPaintedWeight = null;
-    paintMap.beginBuild();
-    controller.notifyListeners();
-    await tester.pump();
+      paintMap.paintCalls = 0;
+      paintMap.lastPaintedWeight = null;
+      paintMap.beginBuild();
+      controller.notifyListeners();
+      await tester.pump();
 
-    expect(paintMap.paintCalls, greaterThan(0),
-        reason: 'paintStyler must run when the resolve map is refilled');
-    expect(
-      paintMap.lastPaintedWeight,
-      FontWeight.w700,
-      reason: 'bold weight must paint after a layout-equal source update',
-    );
-  });
+      expect(
+        paintMap.paintCalls,
+        greaterThan(0),
+        reason: 'paintStyler must run when the resolve map is refilled',
+      );
+      expect(
+        paintMap.lastPaintedWeight,
+        FontWeight.w700,
+        reason: 'bold weight must paint after a layout-equal source update',
+      );
+    },
+  );
 }

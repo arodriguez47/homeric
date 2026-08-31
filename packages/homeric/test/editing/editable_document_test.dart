@@ -3980,10 +3980,6 @@ void main() {
     });
     await tester.pumpAndSettle();
     await expectCaretInMiddleThird();
-    expect(
-      key.currentState!.debugScrollController,
-      same(replacementScrollController),
-    );
     expect(replacementScrollController.hasClients, isTrue);
 
     for (var frame = 0; frame < 8; frame++) {

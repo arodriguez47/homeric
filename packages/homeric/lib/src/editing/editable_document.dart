@@ -710,9 +710,6 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   int get debugParagraphLayoutCacheTextCodeUnits =>
       _paragraphLayoutCache.textCodeUnits;
 
-  @visibleForTesting
-  ScrollController get debugScrollController => _scrollController;
-
   /// Cancels a pointer drag if focus remains outside every editor row.
   ///
   /// The deferred check lets a recycled row transfer focus within the same

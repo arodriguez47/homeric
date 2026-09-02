@@ -459,3 +459,21 @@ that does not exist.
 best-effort, require a checked-in host, a clean release build, and a repeatable
 launch command. Keep host readiness, automated adapter evidence, browser or
 device interaction, and certification as separate claims.
+## render-engineer — 2026-09-02 — Snapshot side-channel styles before invalidating layout
+
+**What:** A Journal host clears and refills a style map while rebuilding a
+content-equal `ParagraphSource`. Relayout on every equal source created a
+geometry-notification feedback loop on Flutter 3.47, but treating every refresh
+as paint-only was also unsafe because the map can contain font metrics. The
+render object now snapshots the exact styles used by its live paragraph,
+ignores an unchanged refill, and relayouts once when any resolved style changes.
+
+**Why it mattered:** Source equality cannot prove that a stable callback returns
+the same values. Unconditional invalidation loops when layout feeds host state,
+while unconditional paint invalidation can retain stale wrapping, selection
+geometry, and inline-child offsets after a metric change.
+
+**Rule going forward:** When a stable callback reads mutable side-channel state,
+compare a snapshot of its last consumed output at the render boundary. Skip
+invalidation when the output is equal and conservatively relayout once when it
+changes. Pin both the unchanged notification loop and a metric-changing refresh.

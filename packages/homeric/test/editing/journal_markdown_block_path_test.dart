@@ -11,6 +11,7 @@ final class _JournalPaintMap {
 
   final Map<int, TextStyle> resolved = <int, TextStyle>{};
   int paintCalls = 0;
+  TextStyle boldStyle = markStyles['bold']!;
 
   static const layoutOnly = TextStyle(fontSize: 14, color: Color(0xFF000000));
 
@@ -27,7 +28,8 @@ final class _JournalPaintMap {
   TextStyle resolve(RunStyleContext run) {
     var style = layoutOnly;
     for (final decoration in run.decorations) {
-      final mark = markStyles[decoration.spec];
+      final mark =
+          decoration.spec == 'bold' ? boldStyle : markStyles[decoration.spec];
       if (mark != null) style = mark;
     }
     resolved[run.viewStart] = style;
@@ -224,7 +226,7 @@ void main() {
   });
 
   testWidgets(
-    'layout-equal source update reshapes paintStyler glyphs on the render object',
+    'layout-equal source samples unchanged paintStyler without relayout',
     (tester) async {
       final paintMap = _JournalPaintMap();
       paintMap.beginBuild();
@@ -247,6 +249,7 @@ void main() {
       final render = tester.renderObject<RenderHomericParagraph>(
         find.byType(HomericParagraph),
       );
+      final generation = render.layoutGeneration;
       paintMap.beginBuild();
       paintMap.paintCalls = 0;
       paintMap.lastPaintedWeight = null;
@@ -255,6 +258,64 @@ void main() {
 
       expect(paintMap.paintCalls, greaterThan(0));
       expect(paintMap.lastPaintedWeight, FontWeight.w700);
+      expect(
+        render.layoutGeneration,
+        generation,
+        reason: 'an unchanged style refresh must not schedule layout',
+      );
+
+      await tester.pump();
+      expect(
+        render.layoutGeneration,
+        generation,
+        reason: 'the unchanged style refresh must not leave a layout loop',
+      );
+    },
+  );
+
+  testWidgets(
+    'layout-equal source relayouts once when side-channel metrics change',
+    (tester) async {
+      final paintMap = _JournalPaintMap();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            child: HomericParagraph(
+              source: _boldSource(paintMap),
+              paintStyler: paintMap.paint,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph),
+      );
+      final generation = render.layoutGeneration;
+      final height = render.layoutParagraph.height;
+
+      paintMap.boldStyle = const TextStyle(
+        fontSize: 28,
+        fontWeight: FontWeight.w700,
+      );
+      paintMap.beginBuild();
+      render.source = _boldSource(paintMap);
+      await tester.pump();
+
+      expect(render.layoutGeneration, generation + 1);
+      expect(render.layoutParagraph.height, greaterThan(height));
+
+      await tester.pump();
+      expect(
+        render.layoutGeneration,
+        generation + 1,
+        reason:
+            'the refreshed style snapshot must stop the layout feedback loop',
+      );
     },
   );
 
@@ -278,6 +339,7 @@ void main() {
 
       expect(_paragraphRender(tester).source.viewText, 'bold');
       expect(paintMap.lastPaintedWeight, FontWeight.w700);
+      final generation = _paragraphRender(tester).layoutGeneration;
 
       paintMap.paintCalls = 0;
       paintMap.lastPaintedWeight = null;
@@ -294,6 +356,14 @@ void main() {
         paintMap.lastPaintedWeight,
         FontWeight.w700,
         reason: 'bold weight must paint after a layout-equal source update',
+      );
+      expect(_paragraphRender(tester).layoutGeneration, generation);
+
+      await tester.pump();
+      expect(
+        _paragraphRender(tester).layoutGeneration,
+        generation,
+        reason: 'the document geometry callback must not restart layout',
       );
     },
   );

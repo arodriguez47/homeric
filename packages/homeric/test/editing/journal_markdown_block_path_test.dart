@@ -41,11 +41,13 @@ final class _JournalPaintMap {
     final style = resolved[segment.viewStart] ?? segment.style;
     lastPaintedWeight = style.fontWeight;
     lastPaintedStyle = style.fontStyle;
+    lastPaintedColor = style.color;
     return style;
   }
 
   FontWeight? lastPaintedWeight;
   FontStyle? lastPaintedStyle;
+  Color? lastPaintedColor;
 }
 
 /// Journal markdown decorations: hide `**`/`*` delimiters, style all five marks.
@@ -316,6 +318,48 @@ void main() {
         reason:
             'the refreshed style snapshot must stop the layout feedback loop',
       );
+    },
+  );
+
+  testWidgets(
+    'layout-equal source rebuilds paint only when side-channel color changes',
+    (tester) async {
+      final paintMap = _JournalPaintMap();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            child: HomericParagraph(
+              source: _boldSource(paintMap),
+              paintStyler: paintMap.paint,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph),
+      );
+      final generation = render.layoutGeneration;
+      paintMap.boldStyle = const TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFFFF0000),
+      );
+      paintMap.beginBuild();
+      final probe = HomericParagraphLayoutProbe.start();
+      render.source = _boldSource(paintMap);
+      await tester.pump();
+
+      expect(
+        probe.stop().countFor(HomericParagraphLayoutCategory.paintRebuild),
+        greaterThan(0),
+      );
+      expect(paintMap.lastPaintedColor, const Color(0xFFFF0000));
+      expect(render.layoutGeneration, generation);
     },
   );
 

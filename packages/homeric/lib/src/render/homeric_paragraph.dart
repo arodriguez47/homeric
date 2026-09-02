@@ -347,13 +347,19 @@ class RenderHomericParagraph extends RenderBox
       // layout-only segment styles stay identical. A layout-equal source
       // update must still sample paintStyler's fresh values. Rebuild only
       // when those values changed: an unconditional relayout feeds geometry
-      // notification back into another equal source update, while treating
-      // every change as paint-only would leave metric-changing side-channel
-      // styles with stale geometry.
+      // notification back into another equal source update. Paint-only
+      // differences stay in the repaint band; metric differences relayout so
+      // wrapping, selection geometry, and inline children remain current.
       if (_paintStyler != null && _paragraph != null) {
         final resolvedStyles = _resolvePaintStyles(value);
-        if (!listEquals(_livePaintStyles, resolvedStyles)) {
-          _markNeedsRebuild();
+        switch (_comparePaintStyles(_livePaintStyles, resolvedStyles)) {
+          case RenderComparison.layout:
+            _markNeedsRebuild();
+          case RenderComparison.paint:
+            _rebuildForPaint = true;
+            markNeedsPaint();
+          case RenderComparison.metadata || RenderComparison.identical:
+            _livePaintStyles = resolvedStyles;
         }
       }
       return;
@@ -877,6 +883,33 @@ class RenderHomericParagraph extends RenderBox
           if (segment case final TextSegment<TextStyle> text)
             _paintStyler?.call(text) ?? text.style,
       ];
+
+  static RenderComparison _comparePaintStyles(
+    List<TextStyle>? previous,
+    List<TextStyle> current,
+  ) {
+    if (previous == null || previous.length != current.length) {
+      return RenderComparison.layout;
+    }
+    var result = RenderComparison.identical;
+    for (var index = 0; index < current.length; index += 1) {
+      switch (previous[index].compareTo(current[index])) {
+        case RenderComparison.layout:
+          return RenderComparison.layout;
+        case RenderComparison.paint:
+          result = RenderComparison.paint;
+          break;
+        case RenderComparison.metadata:
+          if (result == RenderComparison.identical) {
+            result = RenderComparison.metadata;
+          }
+          break;
+        case RenderComparison.identical:
+          break;
+      }
+    }
+    return result;
+  }
 
   ui.Paragraph _buildParagraph(
     List<PlaceholderDimensions> dimensions, {

@@ -466,7 +466,8 @@ content-equal `ParagraphSource`. Relayout on every equal source created a
 geometry-notification feedback loop on Flutter 3.47, but treating every refresh
 as paint-only was also unsafe because the map can contain font metrics. The
 render object now snapshots the exact styles used by its live paragraph,
-ignores an unchanged refill, and relayouts once when any resolved style changes.
+ignores an unchanged refill, repaints paint-only differences, and relayouts once
+when resolved metrics change.
 
 **Why it mattered:** Source equality cannot prove that a stable callback returns
 the same values. Unconditional invalidation loops when layout feeds host state,
@@ -475,5 +476,6 @@ geometry, and inline-child offsets after a metric change.
 
 **Rule going forward:** When a stable callback reads mutable side-channel state,
 compare a snapshot of its last consumed output at the render boundary. Skip
-invalidation when the output is equal and conservatively relayout once when it
-changes. Pin both the unchanged notification loop and a metric-changing refresh.
+invalidation when the output is equal, repaint paint-only differences, and
+relayout once for metric differences. Pin the unchanged notification loop plus
+paint-only and metric-changing refreshes.

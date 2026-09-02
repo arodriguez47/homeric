@@ -57,17 +57,17 @@ homeric/
 ## Getting started
 
 ```bash
-# Once you have Flutter 3.24+ and Dart 3.5+ installed:
+# Once you have Flutter 3.47.2+ and Dart 3.5+ installed:
 dart pub global activate melos
 melos bootstrap
 melos run analyze
 melos run test
 ```
 
-To verify the declared minimum SDK with an installed Flutter 3.24.x binary:
+To verify the declared SDK with an installed Flutter 3.47.2 binary:
 
 ```bash
-scripts/verify_flutter_3_24.sh /path/to/flutter-3.24/bin/flutter
+scripts/verify_flutter_3_47_2.sh /path/to/flutter-3.47.2/bin/flutter
 ```
 
 The gate validates its tracked package/playground test targets before running

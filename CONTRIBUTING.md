@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-# Flutter 3.24+ and Dart 3.5+ required.
+# Flutter 3.47.2+ and Dart 3.5+ required.
 dart pub global activate melos
 melos bootstrap
 ```

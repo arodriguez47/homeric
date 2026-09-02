@@ -32,9 +32,9 @@ fi
 
 check_manifest
 
-flutter_bin="${1:-${HOMERIC_FLUTTER_3_24:-}}"
+flutter_bin="${1:-${HOMERIC_FLUTTER_3_47_2:-}}"
 if [[ -z "$flutter_bin" ]]; then
-  echo "Pass a Flutter 3.24 SDK binary or set HOMERIC_FLUTTER_3_24." >&2
+  echo "Pass a Flutter 3.47.2 SDK binary or set HOMERIC_FLUTTER_3_47_2." >&2
   exit 2
 fi
 if [[ ! -x "$flutter_bin" ]]; then
@@ -47,14 +47,14 @@ framework_version="$(
   printf '%s' "$version_json" |
     sed -n 's/.*"frameworkVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 )"
-if [[ "$framework_version" != 3.24.* ]]; then
-  echo "Expected Flutter 3.24.x, found ${framework_version:-unknown}." >&2
+if [[ "$framework_version" != 3.47.2 ]]; then
+  echo "Expected Flutter 3.47.2, found ${framework_version:-unknown}." >&2
   exit 2
 fi
 
 echo "Using Flutter $framework_version"
 
-work_root="$(mktemp -d "${TMPDIR:-/tmp}/homeric-flutter-3.24.XXXXXX")"
+work_root="$(mktemp -d "${TMPDIR:-/tmp}/homeric-flutter-3.47.2.XXXXXX")"
 trap 'rm -rf "$work_root"' EXIT
 tar \
   --exclude='.git' \
@@ -79,4 +79,4 @@ playground_dir="$package_dir/examples/playground"
   "$flutter_bin" test test
 )
 
-echo "Flutter 3.24 compatibility gate passed"
+echo "Flutter 3.47.2 compatibility gate passed"

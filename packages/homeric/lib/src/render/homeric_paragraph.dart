@@ -123,12 +123,15 @@ part 'paragraph_layout_cache.dart';
 /// the [TextStyle] to render [segment] with (typically
 /// `segment.style.copyWith(color: …)`).
 ///
-/// Contract: the returned style may differ from `segment.style` **only in
-/// paint-affecting fields** (color, decoration color, shadows…). Changing
-/// layout-affecting fields (font size, weight, family, height…) from a
-/// paint-only styler violates the deferred-rebuild contract and trips a
-/// layout-identity assert during paint. Stylers are compared by identity:
-/// pass the same function instance while nothing changed.
+/// Contract: a change delivered through the [paintStyler] setter may differ
+/// from `segment.style` **only in paint-affecting fields** (color, decoration
+/// color, shadows…). It uses a deferred paint rebuild, so a layout-affecting
+/// change (font size, weight, family, height…) trips a layout-identity assert.
+/// A stable styler may read side-channel values that include layout fields
+/// when the host also refreshes [source]; an equal-source refresh samples the
+/// resolved styles and relayouts only when those values changed. Stylers are
+/// compared by identity: pass the same function instance while nothing
+/// changed.
 typedef PaintOnlyStyler = TextStyle Function(TextSegment<TextStyle> segment);
 
 /// Builds the inline child widget for one slot of a [HomericParagraph].
@@ -342,12 +345,22 @@ class RenderHomericParagraph extends RenderBox
       _source = value;
       // Journal hosts clear and refill a resolve map every build while
       // layout-only segment styles stay identical. A layout-equal source
-      // update must still reshape so paintStyler reads the fresh map.
+      // update must still sample paintStyler's fresh values. Rebuild only
+      // when those values changed: an unconditional relayout feeds geometry
+      // notification back into another equal source update. Paint-only
+      // differences stay in the repaint band; metric differences relayout so
+      // wrapping, selection geometry, and inline children remain current.
       if (_paintStyler != null && _paragraph != null) {
-        _paragraph!.dispose();
-        _paragraph = null;
-        _lastLayoutMaxWidth = null;
-        markNeedsLayout();
+        final resolvedStyles = _resolvePaintStyles(value);
+        switch (_comparePaintStyles(_livePaintStyles, resolvedStyles)) {
+          case RenderComparison.layout:
+            _markNeedsRebuild();
+          case RenderComparison.paint:
+            _rebuildForPaint = true;
+            markNeedsPaint();
+          case RenderComparison.metadata || RenderComparison.identical:
+            _livePaintStyles = resolvedStyles;
+        }
       }
       return;
     }
@@ -583,6 +596,7 @@ class RenderHomericParagraph extends RenderBox
   ui.Paragraph? _intrinsicsParagraph;
   ui.Paragraph? _lineTemplate;
   List<PlaceholderDimensions>? _liveDimensions;
+  List<TextStyle>? _livePaintStyles;
   List<PlaceholderDimensions>? _intrinsicsDimensions;
   bool _rebuildForPaint = false;
   int _layoutGeneration = 0;
@@ -678,6 +692,7 @@ class RenderHomericParagraph extends RenderBox
     _paragraph?.dispose();
     _paragraph = null;
     _liveDimensions = null;
+    _livePaintStyles = null;
     _intrinsicsParagraph?.dispose();
     _intrinsicsParagraph = null;
     _intrinsicsDimensions = null;
@@ -703,6 +718,7 @@ class RenderHomericParagraph extends RenderBox
     }
     _paragraph = null;
     _liveDimensions = null;
+    _livePaintStyles = null;
     _lastLayoutMaxWidth = null;
     cache._release(
       key,
@@ -861,10 +877,48 @@ class RenderHomericParagraph extends RenderBox
   /// Builds a fresh `ui.Paragraph` from [source] — the
   /// `pushStyle`/`addText`/`addPlaceholder` loop over U1's segments, with
   /// one [PlaceholderDimensions] per slot in slot-index order.
-  ui.Paragraph _buildParagraph(List<PlaceholderDimensions> dimensions) {
+  List<TextStyle> _resolvePaintStyles(ParagraphSource<TextStyle> source) =>
+      <TextStyle>[
+        for (final segment in source.segments)
+          if (segment case final TextSegment<TextStyle> text)
+            _paintStyler?.call(text) ?? text.style,
+      ];
+
+  static RenderComparison _comparePaintStyles(
+    List<TextStyle>? previous,
+    List<TextStyle> current,
+  ) {
+    if (previous == null || previous.length != current.length) {
+      return RenderComparison.layout;
+    }
+    var result = RenderComparison.identical;
+    for (var index = 0; index < current.length; index += 1) {
+      switch (previous[index].compareTo(current[index])) {
+        case RenderComparison.layout:
+          return RenderComparison.layout;
+        case RenderComparison.paint:
+          result = RenderComparison.paint;
+          break;
+        case RenderComparison.metadata:
+          if (result == RenderComparison.identical) {
+            result = RenderComparison.metadata;
+          }
+          break;
+        case RenderComparison.identical:
+          break;
+      }
+    }
+    return result;
+  }
+
+  ui.Paragraph _buildParagraph(
+    List<PlaceholderDimensions> dimensions, {
+    bool captureLivePaintStyles = false,
+  }) {
     final source = _source;
     assert(dimensions.length == source.slots.length);
     final builder = ui.ParagraphBuilder(_paragraphStyle());
+    final resolvedStyles = captureLivePaintStyles ? <TextStyle>[] : null;
     final base = _baseStyle;
     if (base != null) {
       // Root style: per-run styles push on top of it and the engine
@@ -875,6 +929,7 @@ class RenderHomericParagraph extends RenderBox
       switch (segment) {
         case final TextSegment<TextStyle> text:
           final style = _paintStyler?.call(text) ?? text.style;
+          resolvedStyles?.add(style);
           builder.pushStyle(style.getTextStyle(textScaler: _textScaler));
           builder.addText(text.text);
           builder.pop();
@@ -897,6 +952,9 @@ class RenderHomericParagraph extends RenderBox
         builder.placeholderCount == source.slots.length,
         'ParagraphSource invariant violated: ${source.slots.length} '
         'slot(s) but ${builder.placeholderCount} placeholder(s) emitted');
+    if (resolvedStyles != null) {
+      _livePaintStyles = List<TextStyle>.unmodifiable(resolvedStyles);
+    }
     return builder.build();
   }
 
@@ -1046,7 +1104,10 @@ class RenderHomericParagraph extends RenderBox
               maxWidth: constraints.maxWidth,
             );
       if (cached == null) {
-        _paragraph = paragraph = _buildParagraph(dimensions);
+        _paragraph = paragraph = _buildParagraph(
+          dimensions,
+          captureLivePaintStyles: true,
+        );
         // A fresh build already reflects the current paintStyler.
         _rebuildForPaint = false;
       } else if (_paintStyler != null) {
@@ -1057,7 +1118,10 @@ class RenderHomericParagraph extends RenderBox
         // stale glyphs. Reshape here so paintStyler runs against the
         // current map; layout-only cache hits stay free below.
         cached.paragraph.dispose();
-        _paragraph = paragraph = _buildParagraph(dimensions);
+        _paragraph = paragraph = _buildParagraph(
+          dimensions,
+          captureLivePaintStyles: true,
+        );
         _lastLayoutMaxWidth = null;
         _rebuildForPaint = false;
       } else {
@@ -1224,7 +1288,10 @@ class RenderHomericParagraph extends RenderBox
       // (TextPainter.paint's _rebuildParagraphForPaint path). Slot
       // dimensions are the live ones: a paint-only change cannot resize
       // children.
-      final rebuilt = _buildParagraph(_liveDimensions!);
+      final rebuilt = _buildParagraph(
+        _liveDimensions!,
+        captureLivePaintStyles: true,
+      );
       HomericParagraphLayoutProbe.layout(
         HomericParagraphLayoutCategory.paintRebuild,
         rebuilt,

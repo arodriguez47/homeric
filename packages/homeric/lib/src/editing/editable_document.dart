@@ -622,6 +622,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _syncOrder(force: true);
     _captureSemanticsState();
     widget.controller.addListener(_controllerChanged);
+    widget.scrollPadding?.addListener(_scrollPaddingChanged);
     FocusManager.instance.addListener(_focusTreeChanged);
     WidgetsBinding.instance.addObserver(this);
   }
@@ -646,6 +647,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _validateSession();
     final scrollControllerChanged =
         !identical(oldWidget.scrollController, widget.scrollController);
+    final scrollPaddingChanged =
+        !identical(oldWidget.scrollPadding, widget.scrollPadding);
     if (!identical(oldWidget.controller, widget.controller) ||
         !identical(oldWidget.inputSession, widget.inputSession) ||
         scrollControllerChanged) {
@@ -669,6 +672,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       oldWidget.inputSession.resumeDeltas();
       if (_selectionDragActive) widget.inputSession.suspendDeltas();
     }
+    if (scrollPaddingChanged) {
+      oldWidget.scrollPadding?.removeListener(_scrollPaddingChanged);
+      widget.scrollPadding?.addListener(_scrollPaddingChanged);
+    }
     if (scrollControllerChanged) {
       _typewriterFocusGeneration++;
       _cancelTypewriterScrollIdleWait();
@@ -688,9 +695,16 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (widget.typewriterFocus &&
         (!oldWidget.typewriterFocus ||
             !identical(oldWidget.controller, widget.controller) ||
-            scrollControllerChanged)) {
+            scrollControllerChanged ||
+            scrollPaddingChanged ||
+            oldWidget.padding != widget.padding ||
+            oldWidget.layoutRevision != widget.layoutRevision)) {
       _scheduleTypewriterFocus(force: true);
     }
+  }
+
+  void _scrollPaddingChanged() {
+    _scheduleTypewriterFocus(force: true);
   }
 
   /// Suspends platform deltas while a document-global drag moves its head.
@@ -2277,6 +2291,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeListener(_focusTreeChanged);
     widget.controller.removeListener(_controllerChanged);
+    widget.scrollPadding?.removeListener(_scrollPaddingChanged);
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
     _commandHosts.clear();
     _mountedRows.clear();

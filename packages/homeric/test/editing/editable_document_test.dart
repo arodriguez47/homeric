@@ -3846,10 +3846,14 @@ void main() {
     final session = HomericTextInputSession(controller: controller);
     final key = GlobalKey<HomericEditableDocumentState>();
     final scrollController = ScrollController();
+    final livePadding = ValueNotifier<EdgeInsetsGeometry>(
+      const EdgeInsets.symmetric(vertical: 200),
+    );
     var activeController = controller;
     var activeSession = session;
     var typewriterFocusEnabled = true;
     addTearDown(scrollController.dispose);
+    addTearDown(livePadding.dispose);
     addTearDown(session.dispose);
     addTearDown(controller.dispose);
 
@@ -3863,7 +3867,7 @@ void main() {
             scrollController: activeScrollController,
             typewriterFocus: typewriterFocusEnabled,
             // Room to center near edges without fighting scroll extent.
-            padding: const EdgeInsets.symmetric(vertical: 200),
+            scrollPadding: livePadding,
             cacheExtent: 250,
             estimatedBlockHeight: 44,
             blockBuilder: (context, block, focusNode) =>
@@ -4032,6 +4036,17 @@ void main() {
       activeController = replacementController;
       activeSession = replacementSession;
     });
+    await expectCaretInMiddleThird();
+
+    // Live viewport inset changes must re-center an unchanged logical caret.
+    replacementScrollController.jumpTo(
+      (replacementScrollController.offset + 80).clamp(
+        replacementScrollController.position.minScrollExtent,
+        replacementScrollController.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    livePadding.value = const EdgeInsets.symmetric(vertical: 240);
     await expectCaretInMiddleThird();
   });
 

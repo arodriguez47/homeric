@@ -689,7 +689,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         (!oldWidget.typewriterFocus ||
             !identical(oldWidget.controller, widget.controller) ||
             scrollControllerChanged)) {
-      _scheduleTypewriterFocus(force: scrollControllerChanged);
+      _scheduleTypewriterFocus(force: true);
     }
   }
 

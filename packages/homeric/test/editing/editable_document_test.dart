@@ -3846,6 +3846,9 @@ void main() {
     final session = HomericTextInputSession(controller: controller);
     final key = GlobalKey<HomericEditableDocumentState>();
     final scrollController = ScrollController();
+    var activeController = controller;
+    var activeSession = session;
+    var typewriterFocusEnabled = true;
     addTearDown(scrollController.dispose);
     addTearDown(session.dispose);
     addTearDown(controller.dispose);
@@ -3855,18 +3858,18 @@ void main() {
           height: 300,
           child: HomericEditableDocument.builder(
             key: key,
-            controller: controller,
-            inputSession: session,
+            controller: activeController,
+            inputSession: activeSession,
             scrollController: activeScrollController,
-            typewriterFocus: true,
+            typewriterFocus: typewriterFocusEnabled,
             // Room to center near edges without fighting scroll extent.
             padding: const EdgeInsets.symmetric(vertical: 200),
             cacheExtent: 250,
             estimatedBlockHeight: 44,
             blockBuilder: (context, block, focusNode) =>
                 HomericEditableParagraph(
-              controller: controller,
-              inputSession: session,
+              controller: activeController,
+              inputSession: activeSession,
               blockId: block.id,
               focusNode: focusNode,
               resolveStyle: (_) => _style,
@@ -3885,24 +3888,27 @@ void main() {
     await tester.pump();
 
     Future<void> expectCaretInMiddleThird() async {
-      // Typewriter may re-schedule after viewport-anchor correction.
-      await tester.pump();
-      await tester.pump();
-      await tester.pump();
-      await tester.pump();
-      final caret = key.currentState!.activeCaretGeometry;
-      expect(caret, isNotNull);
-      final documentBox = tester.renderObject(
-        find.byType(HomericEditableDocument),
-      ) as RenderBox;
-      final viewportTop = documentBox.localToGlobal(Offset.zero).dy;
-      final viewportHeight = documentBox.size.height;
-      final relativeY = caret!.globalRect.center.dy - viewportTop;
-      expect(
-        relativeY,
-        inInclusiveRange(viewportHeight / 3, 2 * viewportHeight / 3),
-        reason: 'caret Y=$relativeY must stay in middle third of '
-            'viewportHeight=$viewportHeight',
+      double? lastRelativeY;
+      double? lastViewportHeight;
+      for (var frame = 0; frame < 12; frame++) {
+        await tester.pump();
+        final caret = key.currentState!.activeCaretGeometry;
+        if (caret == null) continue;
+        final documentBox = tester.renderObject(
+          find.byType(HomericEditableDocument),
+        ) as RenderBox;
+        final viewportTop = documentBox.localToGlobal(Offset.zero).dy;
+        final viewportHeight = documentBox.size.height;
+        final relativeY = caret.globalRect.center.dy - viewportTop;
+        lastRelativeY = relativeY;
+        lastViewportHeight = viewportHeight;
+        if ((relativeY - viewportHeight / 2).abs() < 0.5) {
+          return;
+        }
+      }
+      fail(
+        'caret Y=$lastRelativeY must reach the viewport center for '
+        'viewportHeight=$lastViewportHeight within 12 frames',
       );
     }
 
@@ -3986,6 +3992,46 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
     }
     await oldScroll;
+    await expectCaretInMiddleThird();
+
+    // Re-enabling the feature must center the unchanged logical caret.
+    rebuildDocument(() {
+      typewriterFocusEnabled = false;
+    });
+    await tester.pump();
+    replacementScrollController.jumpTo(
+      (replacementScrollController.offset + 80).clamp(
+        replacementScrollController.position.minScrollExtent,
+        replacementScrollController.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    rebuildDocument(() {
+      typewriterFocusEnabled = true;
+    });
+    await expectCaretInMiddleThird();
+
+    // A replacement editor controller can have the same selection and
+    // revision values; its identity change must still force centering.
+    replacementScrollController.jumpTo(
+      (replacementScrollController.offset + 80).clamp(
+        replacementScrollController.position.minScrollExtent,
+        replacementScrollController.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    final replacementController = HomericEditorController(
+      document: controller.document,
+      selection: controller.selection,
+    );
+    final replacementSession =
+        HomericTextInputSession(controller: replacementController);
+    addTearDown(replacementSession.dispose);
+    addTearDown(replacementController.dispose);
+    rebuildDocument(() {
+      activeController = replacementController;
+      activeSession = replacementSession;
+    });
     await expectCaretInMiddleThird();
   });
 

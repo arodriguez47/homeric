@@ -453,6 +453,23 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
     widget.inputSession.addListener(_inputSessionChanged);
     WidgetsBinding.instance.addObserver(this);
+    // A host may rebuild the same block under a different presentation
+    // wrapper while retaining its document-owned FocusNode. The outgoing
+    // paragraph closes its input epoch during disposal, but the replacement
+    // receives an already-focused node, so Focus emits no new callback that
+    // would normally attach input. Reconcile once after the replacement has
+    // mounted and the outgoing host has finished disposing.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _disposing ||
+          !_focusNode.hasFocus ||
+          _controller.isReadOnly ||
+          _controller.activeBlockId != widget.blockId ||
+          widget.inputSession.isAttached) {
+        return;
+      }
+      _attachInput();
+    });
   }
 
   @override

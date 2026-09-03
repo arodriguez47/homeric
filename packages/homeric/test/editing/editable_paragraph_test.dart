@@ -1152,6 +1152,54 @@ void main() {
     expect(controller.canUndo, isTrue);
   });
 
+  testWidgets(
+      'replacement paragraph reattaches an already-focused external node',
+      (tester) async {
+    final controller = HomericEditorController(
+      document: _document(''),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    HomericEditableParagraph paragraph() => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          focusNode: focusNode,
+          blockId: 'b',
+          resolveStyle: (_) => _style,
+        );
+
+    await tester.pumpWidget(_harness(paragraph()));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+
+    // Reparenting through a new presentation wrapper disposes the outgoing
+    // editable paragraph while preserving the external document focus node.
+    await tester.pumpWidget(
+      _harness(Row(children: <Widget>[Expanded(child: paragraph())])),
+    );
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+    expect(session.isAttached, isTrue);
+    session.debugDeltaCallback!(const <TextEditingDelta>[
+      TextEditingDeltaInsertion(
+        oldText: '',
+        textInserted: 'x',
+        insertionOffset: 0,
+        selection: TextSelection.collapsed(offset: 1),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'x');
+  });
+
   testWidgets('paste started before blur stays stale after refocus',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

@@ -500,3 +500,32 @@ painting and consumer overlays, but every pointer or selection-host callback
 must ask the paragraph state for a fresh current geometry capability when the
 event occurs. Keep stale generations fail-closed; refresh the witness instead
 of bypassing the guard in a host application.
+
+## editor-architect — 2026-09-01 — Cross-wrapper deletion follows surviving content
+
+A mouse drag that visually begins at a private-comment row can resolve one
+character inside that row. Treating only offset zero as a complete-wrapper
+delete left the real selection inert. Homeric’s join descriptor provides the
+safe distinction: a private-leading selection may cross into an ordinary
+endpoint only when `removedOffset == removed.contentLength`, proving that no
+ordinary suffix survives or is pulled into the private wrapper.
+
+**Rule going forward:** Pin structural selection behavior at both the visual
+boundary and the nearest interior caret. Permit removal of selected siblings
+inside the leading private wrapper, but allow the final private-to-ordinary
+join only when the ordinary endpoint is fully consumed. Test Delete and
+Backspace, and keep a partial ordinary suffix as the fail-closed control.
+
+## editor-architect — 2026-09-01 — View-only sigils join document selection explicitly
+
+The private-comment `%%` is a separate view-only row cell, not canonical
+paragraph text, so a mouse drag beginning on it never reaches Homeric's
+paragraph selection host. The host must begin a document-owned pointer drag at
+the corresponding block offset zero, forward move/up events in global
+coordinates, and then end that same drag generation.
+
+**Rule going forward:** Any selectable-looking chrome outside canonical text
+must bridge into the editor's public document-selection API rather than
+inventing local range math. Keep the drag owner in session state: selection
+updates rebuild widgets between pointer-down and pointer-up, so a widget-owned
+identity leaves input suspended and makes the next Delete appear inert.

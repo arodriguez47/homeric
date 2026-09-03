@@ -450,7 +450,8 @@ class HomericEditableDocument extends StatefulWidget {
         scrollPadding = null,
         cacheExtent = 250,
         estimatedBlockHeight = 48,
-        layoutRevision = null;
+        layoutRevision = null,
+        typewriterFocus = false;
 
   const HomericEditableDocument.builder({
     super.key,
@@ -463,6 +464,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.cacheExtent = 250,
     this.estimatedBlockHeight = 48,
     this.layoutRevision,
+    this.typewriterFocus = false,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
     this.onMoveBlock,
     this.onMoveRejected,
@@ -487,6 +489,14 @@ class HomericEditableDocument extends StatefulWidget {
   final double cacheExtent;
   final double estimatedBlockHeight;
   final Object? layoutRevision;
+
+  /// When true, keeps the collapsed caret line in the middle third of the
+  /// document viewport by scrolling the page (iA Writer-style typewriter
+  /// focus). Opt-in: hosts must set this on [HomericEditableDocument.builder].
+  ///
+  /// Near document edges, scroll extent may prevent centering; combining with
+  /// [padding] / [scrollPadding] gives room to keep the caret mid-viewport.
+  final bool typewriterFocus;
 
   /// Ordered consumer shortcut registrations shared by every paragraph.
   ///
@@ -565,6 +575,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   int _focusRequestGeneration = 0;
   int _consumerScrollGeneration = 0;
   int _focusLossCheckGeneration = 0;
+  int _typewriterFocusGeneration = 0;
+  VoidCallback? _removeTypewriterScrollIdleListener;
+  HomericSelection? _typewriterSelection;
+  int _typewriterContentRevision = -1;
   HomericSelection? _semanticsSelection;
   HomericTextRange? _semanticsComposing;
   bool _semanticsCanUndo = false;
@@ -608,6 +622,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _syncOrder(force: true);
     _captureSemanticsState();
     widget.controller.addListener(_controllerChanged);
+    widget.scrollPadding?.addListener(_scrollPaddingChanged);
     FocusManager.instance.addListener(_focusTreeChanged);
     WidgetsBinding.instance.addObserver(this);
   }
@@ -630,9 +645,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   void didUpdateWidget(HomericEditableDocument oldWidget) {
     super.didUpdateWidget(oldWidget);
     _validateSession();
+    final scrollControllerChanged =
+        !identical(oldWidget.scrollController, widget.scrollController);
+    final scrollPaddingChanged =
+        !identical(oldWidget.scrollPadding, widget.scrollPadding);
     if (!identical(oldWidget.controller, widget.controller) ||
         !identical(oldWidget.inputSession, widget.inputSession) ||
-        !identical(oldWidget.scrollController, widget.scrollController)) {
+        scrollControllerChanged) {
       cancelPointerSelectionDrag();
       hideTouchSelectionChrome();
     } else if (!identical(
@@ -653,7 +672,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       oldWidget.inputSession.resumeDeltas();
       if (_selectionDragActive) widget.inputSession.suspendDeltas();
     }
-    if (!identical(oldWidget.scrollController, widget.scrollController)) {
+    if (scrollPaddingChanged) {
+      oldWidget.scrollPadding?.removeListener(_scrollPaddingChanged);
+      widget.scrollPadding?.addListener(_scrollPaddingChanged);
+    }
+    if (scrollControllerChanged) {
+      _typewriterFocusGeneration++;
+      _cancelTypewriterScrollIdleWait();
       if (oldWidget.scrollController == null) _scrollController.dispose();
       _scrollController = widget.scrollController ?? ScrollController();
     }
@@ -663,6 +688,23 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       );
       _syncOrder(force: true);
     }
+    if (!widget.typewriterFocus && oldWidget.typewriterFocus) {
+      _typewriterFocusGeneration++;
+      _cancelTypewriterScrollIdleWait();
+    }
+    if (widget.typewriterFocus &&
+        (!oldWidget.typewriterFocus ||
+            !identical(oldWidget.controller, widget.controller) ||
+            scrollControllerChanged ||
+            scrollPaddingChanged ||
+            oldWidget.padding != widget.padding ||
+            oldWidget.layoutRevision != widget.layoutRevision)) {
+      _scheduleTypewriterFocus(force: true);
+    }
+  }
+
+  void _scrollPaddingChanged() {
+    _scheduleTypewriterFocus(force: true);
   }
 
   /// Suspends platform deltas while a document-global drag moves its head.
@@ -1667,6 +1709,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         if (!mounted || (isCurrent != null && !isCurrent())) {
           return HomericScrollToBlockResult.stale;
         }
+        _scheduleTypewriterFocus(force: true);
         return HomericScrollToBlockResult.reached;
       }
     }
@@ -1689,6 +1732,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final semanticsChanged = _captureSemanticsState();
     if ((documentChanged || semanticsChanged) && mounted) setState(() {});
     if (_touchSelectionRequested) _scheduleTouchSelectionSync();
+    _scheduleTypewriterFocus();
     if (widget.controller.isReadOnly) {
       widget.inputSession.blur();
       return;
@@ -1715,6 +1759,102 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
   }
 
+  /// Scrolls so the collapsed caret line stays in the middle third of the
+  /// viewport when [HomericEditableDocument.typewriterFocus] is enabled.
+  void _scheduleTypewriterFocus({bool force = false}) {
+    if (!widget.typewriterFocus || widget.blockBuilder == null) return;
+    final selection = widget.controller.selection;
+    final contentRevision = widget.controller.contentRevision;
+    if (!force &&
+        selection == _typewriterSelection &&
+        contentRevision == _typewriterContentRevision) {
+      return;
+    }
+    _typewriterSelection = selection;
+    _typewriterContentRevision = contentRevision;
+    _cancelTypewriterScrollIdleWait();
+    final generation = ++_typewriterFocusGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _typewriterFocusGeneration) return;
+      _applyTypewriterFocus();
+    });
+  }
+
+  void _applyTypewriterFocus({int attempt = 0}) {
+    if (!widget.typewriterFocus ||
+        widget.blockBuilder == null ||
+        _selectionDragActive ||
+        _selectionAutoScrollTimer != null ||
+        !_scrollController.hasClients) {
+      return;
+    }
+    final position = _scrollController.position;
+    if (position.isScrollingNotifier.value) {
+      _waitForTypewriterScrollIdle(position, attempt: attempt);
+      return;
+    }
+    final selection = widget.controller.selection;
+    if (selection == null || !selection.isCollapsed) return;
+    final caret = activeCaretGeometry;
+    if (caret == null) {
+      // Geometry may arrive one frame after a recycled row mounts.
+      if (attempt >= 2) return;
+      final generation = _typewriterFocusGeneration;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || generation != _typewriterFocusGeneration) return;
+        _applyTypewriterFocus(attempt: attempt + 1);
+      });
+      return;
+    }
+    final render = context.findRenderObject();
+    if (render is! RenderBox || !render.attached || !render.hasSize) return;
+    final viewportTop = render.localToGlobal(Offset.zero).dy;
+    final viewportHeight = render.size.height;
+    if (viewportHeight <= 0) return;
+    final caretCenterY = caret.globalRect.center.dy - viewportTop;
+    // Keep the caret line at viewport center (always inside the middle third
+    // when scroll extent allows). Near document edges, clamping may leave the
+    // caret outside the band until [padding]/[scrollPadding] creates room.
+    final delta = caretCenterY - viewportHeight / 2;
+    if (delta.abs() < 0.5) return;
+    final target = (_scrollController.offset + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if ((target - _scrollController.offset).abs() < 0.5) return;
+    _scrollController.jumpTo(target);
+  }
+
+  void _waitForTypewriterScrollIdle(
+    ScrollPosition position, {
+    required int attempt,
+  }) {
+    _cancelTypewriterScrollIdleWait();
+    final generation = _typewriterFocusGeneration;
+    late VoidCallback listener;
+    listener = () {
+      if (!mounted ||
+          generation != _typewriterFocusGeneration ||
+          !widget.typewriterFocus) {
+        _cancelTypewriterScrollIdleWait();
+        return;
+      }
+      if (position.isScrollingNotifier.value) return;
+      _cancelTypewriterScrollIdleWait();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || generation != _typewriterFocusGeneration) return;
+        _applyTypewriterFocus(attempt: attempt);
+      });
+    };
+    position.isScrollingNotifier.addListener(listener);
+    _removeTypewriterScrollIdleListener =
+        () => position.isScrollingNotifier.removeListener(listener);
+  }
+
+  void _cancelTypewriterScrollIdleWait() {
+    final remove = _removeTypewriterScrollIdleListener;
+    _removeTypewriterScrollIdleListener = null;
+    remove?.call();
+  }
+
   void _scheduleActiveHostSettlement(String blockId) {
     final generation = ++_focusRequestGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -1723,7 +1863,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
           widget.controller.activeBlockId != blockId) {
         return;
       }
-      if (_retargetActiveHost()) return;
+      if (_retargetActiveHost()) {
+        _scheduleTypewriterFocus(force: true);
+        return;
+      }
       final result = await scrollToBlock(blockId);
       if (!mounted ||
           generation != _focusRequestGeneration ||
@@ -1732,6 +1875,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         return;
       }
       _retargetActiveHost();
+      _scheduleTypewriterFocus(force: true);
     });
   }
 
@@ -2046,6 +2190,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       if ((_scrollController.offset - target).abs() > 0.5) {
         _scrollController.jumpTo(target);
       }
+      _scheduleTypewriterFocus(force: true);
     });
   }
 
@@ -2134,16 +2279,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         (_scrollController.offset + correction)
             .clamp(position.minScrollExtent, position.maxScrollExtent),
       );
+      _scheduleTypewriterFocus(force: true);
     });
   }
 
   @override
   void dispose() {
     _stopSelectionAutoscroll();
+    _cancelTypewriterScrollIdleWait();
     _touchOverlayCoordinator.dispose();
     WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeListener(_focusTreeChanged);
     widget.controller.removeListener(_controllerChanged);
+    widget.scrollPadding?.removeListener(_scrollPaddingChanged);
     if (_selectionDragActive) widget.inputSession.resumeDeltas();
     _commandHosts.clear();
     _mountedRows.clear();

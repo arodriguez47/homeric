@@ -459,6 +459,7 @@ that does not exist.
 best-effort, require a checked-in host, a clean release build, and a repeatable
 launch command. Keep host readiness, automated adapter evidence, browser or
 device interaction, and certification as separate claims.
+
 ## render-engineer — 2026-09-02 — Snapshot side-channel styles before invalidating layout
 
 **What:** A Journal host clears and refills a style map while rebuilding a
@@ -479,3 +480,52 @@ compare a snapshot of its last consumed output at the render boundary. Skip
 invalidation when the output is equal, repaint paint-only differences, and
 relayout once for metric differences. Pin the unchanged notification loop plus
 paint-only and metric-changing refreshes.
+
+## editor-architect — 2026-08-31 — Pointer callbacks resolve geometry at event time
+
+**What:** A paragraph can complete a render-only relayout without rebuilding
+the widget closures installed by its overlay. Those closures retained the old
+`ParagraphGeometry`, so the generation guard correctly rejected mouse taps,
+selection-host hit tests, caret queries, hover, and touch geometry even though
+the render object already had valid current geometry.
+
+**Why it mattered:** A Nexus-side render-tree fallback appeared to repair the
+first click after blur, but duplicated private hit-testing and still missed
+later focused clicks. Enabling typewriter focus made the same stale active
+caret query visible as inconsistent centering. Both symptoms came from the
+editor's geometry-capability boundary, not from host focus policy.
+
+**Rule going forward:** Closures may retain generation-stamped geometry for
+painting and consumer overlays, but every pointer or selection-host callback
+must ask the paragraph state for a fresh current geometry capability when the
+event occurs. Keep stale generations fail-closed; refresh the witness instead
+of bypassing the guard in a host application.
+
+## editor-architect — 2026-09-01 — Cross-wrapper deletion follows surviving content
+
+A mouse drag that visually begins at a private-comment row can resolve one
+character inside that row. Treating only offset zero as a complete-wrapper
+delete left the real selection inert. Homeric’s join descriptor provides the
+safe distinction: a private-leading selection may cross into an ordinary
+endpoint only when `removedOffset == removed.contentLength`, proving that no
+ordinary suffix survives or is pulled into the private wrapper.
+
+**Rule going forward:** Pin structural selection behavior at both the visual
+boundary and the nearest interior caret. Permit removal of selected siblings
+inside the leading private wrapper, but allow the final private-to-ordinary
+join only when the ordinary endpoint is fully consumed. Test Delete and
+Backspace, and keep a partial ordinary suffix as the fail-closed control.
+
+## editor-architect — 2026-09-01 — View-only sigils join document selection explicitly
+
+The private-comment `%%` is a separate view-only row cell, not canonical
+paragraph text, so a mouse drag beginning on it never reaches Homeric's
+paragraph selection host. The host must begin a document-owned pointer drag at
+the corresponding block offset zero, forward move/up events in global
+coordinates, and then end that same drag generation.
+
+**Rule going forward:** Any selectable-looking chrome outside canonical text
+must bridge into the editor's public document-selection API rather than
+inventing local range math. Keep the drag owner in session state: selection
+updates rebuild widgets between pointer-down and pointer-up, so a widget-owned
+identity leaves input suspended and makes the next Delete appear inert.

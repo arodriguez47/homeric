@@ -82,6 +82,49 @@ void main() {
     expect(controller.document.blocks.single.text, 'ac');
   });
 
+  testWidgets('mouse tap resolves geometry after a render-only relayout',
+      (tester) async {
+    final document = _document('alpha beta gamma delta');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+
+    final paragraph = find.byType(HomericParagraph);
+    final render = tester.renderObject<RenderHomericParagraph>(paragraph);
+    final originalGeneration = render.layoutGeneration;
+    render.markNeedsLayout();
+    await tester.pump();
+    expect(render.layoutGeneration, greaterThan(originalGeneration));
+
+    await tester.tapAt(
+      tester.getTopLeft(paragraph) + const Offset(92, 7),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+
+    expect(
+      controller.selection,
+      isNot(HomericSelection.collapsed(document.positionAt(0, 0))),
+      reason: 'a render-only layout must not leave pointer callbacks holding '
+          'a stale geometry generation',
+    );
+    expect(controller.selection!.head, greaterThan(5),
+        reason: 'the click must land near the requested middle-of-line glyph, '
+            'not merely restore focus at the beginning');
+  });
+
   testWidgets('standalone touch selection uses paragraph-local chrome',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -1107,6 +1150,54 @@ void main() {
     await tester.pump();
     expect(controller.document.blocks.single.text, 'aYb');
     expect(controller.canUndo, isTrue);
+  });
+
+  testWidgets(
+      'replacement paragraph reattaches an already-focused external node',
+      (tester) async {
+    final controller = HomericEditorController(
+      document: _document(''),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    HomericEditableParagraph paragraph() => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          focusNode: focusNode,
+          blockId: 'b',
+          resolveStyle: (_) => _style,
+        );
+
+    await tester.pumpWidget(_harness(paragraph()));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+
+    // Reparenting through a new presentation wrapper disposes the outgoing
+    // editable paragraph while preserving the external document focus node.
+    await tester.pumpWidget(
+      _harness(Row(children: <Widget>[Expanded(child: paragraph())])),
+    );
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+    expect(session.isAttached, isTrue);
+    session.debugDeltaCallback!(const <TextEditingDelta>[
+      TextEditingDeltaInsertion(
+        oldText: '',
+        textInserted: 'x',
+        insertionOffset: 0,
+        selection: TextSelection.collapsed(offset: 1),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'x');
   });
 
   testWidgets('paste started before blur stays stale after refocus',

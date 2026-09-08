@@ -523,6 +523,9 @@ class HomericEditableDocument extends StatefulWidget {
   ///
   /// Defaults to 22. The result must be finite and nonnegative. The drag
   /// target remains 44 by 44 pixels; centers below 22 move only the glyph.
+  /// Keep this callback stable across builds to retain cached row heights.
+  /// When its captured layout state changes, update [layoutRevision] even if
+  /// the callback itself is unchanged.
   final double Function(BuildContext context, Block block)? blockGrabberCenterY;
 
   /// Touch-selection policy shared by every mounted paragraph.
@@ -724,6 +727,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   /// Exposed for performance-contract tests; ordinary block-local text edits
   /// must not advance it.
   int get debugHeightOrderRebuildCount => _heightOrderRebuildCount;
+
+  /// Measured row height, or its estimate when no current measurement exists.
+  @visibleForTesting
+  double debugCachedBlockHeight(int index) =>
+      _heightCache.offsetBefore(index + 1) - _heightCache.offsetBefore(index);
 
   /// Number of detached shaped paragraphs retained for recycled rows.
   int get debugParagraphLayoutCacheEntries => _paragraphLayoutCache.entryCount;
@@ -2348,7 +2356,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     EdgeInsetsGeometry padding,
   ) {
     _layoutWidth = constraints.maxWidth;
-    final globalLayoutSignature = (_layoutWidth, widget.layoutRevision);
+    final globalLayoutSignature =
+        (_layoutWidth, widget.layoutRevision, widget.blockGrabberCenterY);
     if (_globalLayoutSignature != globalLayoutSignature) {
       _globalLayoutSignature = globalLayoutSignature;
       _heightCache.invalidateAll();
@@ -2405,7 +2414,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                 final witness = _heightCache.prepareMeasurement(
                   blockId: block.id,
                   documentRevision: widget.controller.documentRevision,
-                  layoutSignature: (block, _layoutWidth, widget.layoutRevision),
+                  layoutSignature: (
+                    block,
+                    _layoutWidth,
+                    widget.layoutRevision,
+                    widget.blockGrabberCenterY,
+                  ),
                 );
                 return _DocumentBlockRow(
                   key: _rowKeyFor(block.id),

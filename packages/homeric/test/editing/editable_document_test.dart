@@ -1642,6 +1642,75 @@ void main() {
     expect(find.byType(SizedBox).evaluate().length, lessThan(40));
   });
 
+  testWidgets('grabber resolver changes invalidate off-screen row heights',
+      (tester) async {
+    final document =
+        _document(List<String>.generate(40, (index) => 'row $index'));
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final scrollController = ScrollController();
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(scrollController.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    double initialCenter(BuildContext context, Block block) => 66;
+    double changedCenter(BuildContext context, Block block) => 88;
+    var resolver = initialCenter;
+    late StateSetter rebuild;
+    Widget build(double Function(BuildContext, Block) resolver) => SizedBox(
+          width: 500,
+          height: 180,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: controller,
+            inputSession: session,
+            scrollController: scrollController,
+            cacheExtent: 0,
+            estimatedBlockHeight: 44,
+            blockGrabberCenterY: resolver,
+            blockBuilder: (_, block, __) => SizedBox(
+              key: ValueKey('height-content-${block.id}'),
+              height: 30,
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (_, setState) {
+        rebuild = setState;
+        return build(resolver);
+      },
+    )));
+    await tester.pump();
+    expect(key.currentState!.debugCachedBlockHeight(0), 88);
+    expect(key.currentState!.debugCachedBlockHeight(1), 88);
+    scrollController.jumpTo(1000);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('height-content-block-0')), findsNothing);
+    rebuild(() {});
+    await tester.pump();
+    expect(key.currentState!.debugCachedBlockHeight(0), 88,
+        reason: 'the same resolver must retain off-screen measurements');
+    rebuild(() => resolver = changedCenter);
+    await tester.pump();
+    expect(key.currentState!.debugCachedBlockHeight(0), 44,
+        reason: 'a changed resolver must discard stale off-screen heights');
+    expect(key.currentState!.debugCachedBlockHeight(1), 44);
+    final mountedContent = find.byWidgetPredicate((widget) =>
+        widget is SizedBox &&
+        widget.key is ValueKey<String> &&
+        (widget.key! as ValueKey<String>).value.startsWith('height-content-'));
+    expect(mountedContent, findsWidgets);
+    for (final element in mountedContent.evaluate()) {
+      final blockId = (element.widget.key! as ValueKey<String>)
+          .value
+          .replaceFirst('height-content-', '');
+      final index = document.indexOfBlockId(blockId)!;
+      expect(key.currentState!.debugCachedBlockHeight(index), 110,
+          reason: 'mounted rows must record the new resolver geometry');
+    }
+  });
+
   testWidgets(
       'recycled unchanged paragraphs reuse layout while changed content misses',
       (tester) async {

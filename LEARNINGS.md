@@ -9,6 +9,9 @@ center resolver; wrapped blocks stay aligned to their first line. Move the
 target down for centers beyond 22px so enlarged heading grabbers remain inside
 their hit area. Geometry tests compare against the rendered first caret line,
 not the resolver's own formula. Optical alignment still needs a real-font check.
+Resolver changes must invalidate off-screen row heights as well as mounted
+measurements. Use stable consumer callbacks and the existing layout revision
+for captured font/scale changes, so ordinary rebuilds retain useful heights.
 
 ## editor-architect — 2026-09-08 — First-comment deletion needs a public survivor
 

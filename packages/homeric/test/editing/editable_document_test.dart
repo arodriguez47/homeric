@@ -14,6 +14,29 @@ import 'package:homeric/homeric.dart';
 const _style = TextStyle(fontSize: 14);
 
 void main() {
+  for (final forward in [false, true]) {
+    testWidgets('platform Delete removes an empty block forward=$forward',
+        (tester) async {
+      final document = _document(['left', '', 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+      await tester.pump();
+      await tester.sendKeyEvent(
+          forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.document.blocks.map((b) => b.text), ['left', 'right'],
+          reason: 'an empty native text field must not swallow block deletion');
+      expect(controller.undo(), isTrue);
+      expect(
+          controller.document.blocks.map((b) => b.text), ['left', '', 'right']);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
   test('touch configuration resolves mobile defaults and explicit policy', () {
     const adaptive = HomericTouchSelectionConfiguration.adaptive();
 

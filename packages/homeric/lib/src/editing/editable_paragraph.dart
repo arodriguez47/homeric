@@ -1206,6 +1206,18 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
+      // Native input owns only this paragraph's text. At its edge (or with
+      // a document selection), it cannot delete a block boundary and may
+      // emit no text delta at all. Keep those keys in the document controller.
+      for (final forward in <bool>[false, true])
+        if (_documentHost != null)
+          for (final shift in <bool>[false, true])
+            SingleActivator(
+              forward
+                  ? LogicalKeyboardKey.delete
+                  : LogicalKeyboardKey.backspace,
+              shift: shift,
+            ): DeleteCharacterIntent(forward: forward),
       if (_documentHost != null)
         const SingleActivator(LogicalKeyboardKey.enter):
             const HomericInsertParagraphBreakIntent(),

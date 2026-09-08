@@ -1,5 +1,23 @@
 # Learnings
 
+## editor-architect — 2026-09-08 — Native text fields cannot delete document boundaries
+
+Flutter's browser text-input shortcuts delegate deletion to a native field that
+contains only the active paragraph. Backspace on an empty paragraph emits no
+delta, so document-level unwrapping and joining never run. Explicit document-host
+Backspace/Delete bindings must use the existing composition/read-only-gated
+controller actions, including pending-row handling. Desktop widget tests alone
+miss this: run the regression under `flutter test --platform chrome`.
+
+Reflection: the focused keyboard change retains canonical ownership and undo;
+Histos additionally permits discarding fully consumed private wrappers, never
+moving surviving private suffixes. Ordinary-survivor normalization must apply
+only to selections ending in ordinary text. Test preceding ordinary paragraphs,
+legacy blocks without saved IDs, and unselected children in the final wrapper.
+Independent review found no blocking issue; real AppKit one-key/one-edit
+validation remains required before release. Two unrelated browser arrow-key
+tests also fail with the keyboard fix disabled; do not call that suite green.
+
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
 ## editor-architect — 2026-08-25 — Pending-row hosts must keep boundary Backspace live

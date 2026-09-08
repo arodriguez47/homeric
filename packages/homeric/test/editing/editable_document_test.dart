@@ -2731,6 +2731,37 @@ void main() {
     );
   });
 
+  for (final centerY in <double?>[null, 14, 66]) {
+    testWidgets('consumer positions grabber center at $centerY',
+        (tester) async {
+      final document = _document(<String>['alpha']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(
+        controller,
+        session,
+        blockGrabberCenterY: centerY == null ? null : (_, __) => centerY,
+      ));
+      final glyph = find.text('⋮');
+      final row = find.ancestor(of: glyph, matching: find.byType(Row)).first;
+      final target = find.ancestor(
+        of: glyph,
+        matching: find.byWidgetPredicate((widget) =>
+            widget is SizedBox && widget.width == 44 && widget.height == 44),
+      );
+      expect(target, findsOneWidget);
+      expect(tester.getSize(target), const Size(44, 44));
+      expect(tester.getCenter(glyph).dy - tester.getTopLeft(row).dy,
+          closeTo(centerY ?? 22, 0.001));
+      expect(tester.getRect(target).contains(tester.getCenter(glyph)), isTrue);
+    });
+  }
+
   testWidgets('consumer can hide the grabber until its row is hovered',
       (tester) async {
     final document = _document(<String>['alpha', 'beta']);
@@ -4229,6 +4260,7 @@ Widget _editableDocument(
   ValueChanged<HomericBlockMoveRejection>? onMoveRejected,
   ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
   HomericBlockGrabberStyle blockGrabberStyle = const HomericBlockGrabberStyle(),
+  double Function(BuildContext, Block)? blockGrabberCenterY,
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -4242,6 +4274,7 @@ Widget _editableDocument(
         onMoveRejected: onMoveRejected,
         onCommandRejected: onCommandRejected,
         blockGrabberStyle: blockGrabberStyle,
+        blockGrabberCenterY: blockGrabberCenterY,
         cacheExtent: 0,
         estimatedBlockHeight: 44,
         blockBuilder: (context, block, focusNode) => HomericEditableParagraph(

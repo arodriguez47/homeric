@@ -13,7 +13,67 @@ import 'package:homeric/homeric.dart';
 
 const _style = TextStyle(fontSize: 14);
 
+final class _CutClipboard implements HomericClipboardAdapter {
+  final writes = <String>[];
+
+  @override
+  Future<String?> readText() async => null;
+
+  @override
+  Future<void> writeText(String text) async => writes.add(text);
+}
+
 void main() {
+  testWidgets('Shift Delete preserves the platform cut clipboard',
+      (tester) async {
+    final clipboard = _CutClipboard();
+    final document = _document(['left', 'right']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    FocusNode? firstFocus;
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        blockBuilder: (context, block, focusNode) {
+          if (block.id == 'block-0') firstFocus = focusNode;
+          return HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            blockId: block.id,
+            focusNode: focusNode,
+            clipboard: clipboard,
+            resolveStyle: (_) => _style,
+          );
+        },
+      ),
+    )));
+    firstFocus!.requestFocus();
+    await tester.pump();
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 4),
+    ));
+    await tester.pump();
+    expect(controller.activeBlockId, 'block-0');
+    expect(controller.selection?.isCollapsed, isFalse);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(clipboard.writes, ['left'],
+        reason: 'Shift Delete must copy before removing selected text');
+    expect(controller.document.blocks.first.text, '');
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.first.text, 'left');
+    await tester.pumpWidget(const SizedBox.shrink());
+  },
+      variant: const TargetPlatformVariant(
+          {TargetPlatform.windows, TargetPlatform.linux}));
   for (final forward in [false, true]) {
     testWidgets('platform Delete removes an empty block forward=$forward',
         (tester) async {

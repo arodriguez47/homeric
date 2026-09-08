@@ -1211,13 +1211,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       // emit no text delta at all. Keep those keys in the document controller.
       for (final forward in <bool>[false, true])
         if (_documentHost != null)
-          for (final shift in <bool>[false, true])
-            SingleActivator(
-              forward
-                  ? LogicalKeyboardKey.delete
-                  : LogicalKeyboardKey.backspace,
-              shift: shift,
-            ): DeleteCharacterIntent(forward: forward),
+          SingleActivator(
+            forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace,
+          ): DeleteCharacterIntent(forward: forward),
       if (_documentHost != null)
         const SingleActivator(LogicalKeyboardKey.enter):
             const HomericInsertParagraphBreakIntent(),

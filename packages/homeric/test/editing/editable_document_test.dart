@@ -13,7 +13,132 @@ import 'package:homeric/homeric.dart';
 
 const _style = TextStyle(fontSize: 14);
 
+final class _CutClipboard implements HomericClipboardAdapter {
+  final writes = <String>[];
+
+  @override
+  Future<String?> readText() async => null;
+
+  @override
+  Future<void> writeText(String text) async => writes.add(text);
+}
+
 void main() {
+  testWidgets('Shift Delete preserves the platform cut clipboard',
+      (tester) async {
+    final clipboard = _CutClipboard();
+    final document = _document(['left', 'right']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    FocusNode? firstFocus;
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        blockBuilder: (context, block, focusNode) {
+          if (block.id == 'block-0') firstFocus = focusNode;
+          return HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            blockId: block.id,
+            focusNode: focusNode,
+            clipboard: clipboard,
+            resolveStyle: (_) => _style,
+          );
+        },
+      ),
+    )));
+    firstFocus!.requestFocus();
+    await tester.pump();
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 4),
+    ));
+    await tester.pump();
+    expect(controller.activeBlockId, 'block-0');
+    expect(controller.selection?.isCollapsed, isFalse);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(clipboard.writes, ['left'],
+        reason: 'Shift Delete must copy before removing selected text');
+    expect(controller.document.blocks.first.text, '');
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.first.text, 'left');
+    await tester.pumpWidget(const SizedBox.shrink());
+  },
+      variant: const TargetPlatformVariant(
+          {TargetPlatform.windows, TargetPlatform.linux}));
+  for (final forward in [false, true]) {
+    testWidgets('deletion waits for pointer selection drag forward=$forward',
+        (tester) async {
+      final document = _document(['left', 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      final key = GlobalKey<HomericEditableDocumentState>();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session, key: key));
+      final focus = tester
+          .widget<HomericEditableParagraph>(
+              find.byType(HomericEditableParagraph).first)
+          .focusNode!;
+      focus.requestFocus();
+      await tester.pump();
+      key.currentState!.beginPointerSelectionDrag(document.positionAt(0, 0));
+      controller.setSelection(HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 4),
+      ));
+      await tester.pump();
+      final revision = controller.documentRevision;
+      expect(focus.hasFocus, isTrue);
+      expect(controller.activeBlockId, 'block-0');
+      final deleteKey =
+          forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace;
+      await tester.sendKeyEvent(deleteKey);
+      await tester.pump();
+      expect(controller.documentRevision, revision,
+          reason: 'keyboard deletion must not mutate an active selection drag');
+      expect(controller.document.blocks.first.text, 'left');
+      expect(key.currentState!.pointerSelectionDragActive, isTrue);
+      expect(controller.undo(), isFalse);
+      key.currentState!.endPointerSelectionDrag();
+      await tester.pump();
+      await tester.sendKeyEvent(deleteKey);
+      await tester.pump();
+      expect(controller.document.blocks.first.text, '');
+      expect(controller.undo(), isTrue);
+      expect(controller.document.blocks.first.text, 'left');
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+    testWidgets('platform Delete removes an empty block forward=$forward',
+        (tester) async {
+      final document = _document(['left', '', 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+      await tester.pump();
+      await tester.sendKeyEvent(
+          forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.document.blocks.map((b) => b.text), ['left', 'right'],
+          reason: 'an empty native text field must not swallow block deletion');
+      expect(controller.undo(), isTrue);
+      expect(
+          controller.document.blocks.map((b) => b.text), ['left', '', 'right']);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
   test('touch configuration resolves mobile defaults and explicit policy', () {
     const adaptive = HomericTouchSelectionConfiguration.adaptive();
 

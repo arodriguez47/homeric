@@ -1206,6 +1206,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
+      // Native input owns only this paragraph's text. At its edge (or with
+      // a document selection), it cannot delete a block boundary and may
+      // emit no text delta at all. Keep those keys in the document controller.
+      for (final forward in <bool>[false, true])
+        if (_documentHost != null)
+          SingleActivator(
+            forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace,
+          ): DeleteCharacterIntent(forward: forward),
       if (_documentHost != null)
         const SingleActivator(LogicalKeyboardKey.enter):
             const HomericInsertParagraphBreakIntent(),
@@ -1285,11 +1293,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         // trailing row mounts, so the still-focused leading row must keep
         // boundary Backspace/Delete live through pending-row settlement.
         enabled: (_) =>
-            _canMutateActions ||
-            (_ownsEditingFocus &&
-                !_controller.isReadOnly &&
-                _controller.composing == null &&
-                (_documentHost?.acceptsPendingRowStructuralKey ?? false)),
+            (_documentHost?.acceptsPendingRowStructuralKey ?? true) &&
+            (_canMutateActions ||
+                (_ownsEditingFocus &&
+                    !_controller.isReadOnly &&
+                    _controller.composing == null &&
+                    (_documentHost?.acceptsPendingRowStructuralKey ?? false))),
         invoke: (intent) => intent.forward
             ? _controller.deleteForward()
             : _controller.deleteBackward(),

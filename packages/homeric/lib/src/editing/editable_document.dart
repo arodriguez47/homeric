@@ -445,6 +445,7 @@ class HomericEditableDocument extends StatefulWidget {
         const HomericTouchSelectionConfiguration.adaptive(),
   })  : blockBuilder = null,
         blockGrabberStyle = const HomericBlockGrabberStyle(),
+        blockGrabberCenterY = null,
         scrollController = null,
         padding = EdgeInsets.zero,
         scrollPadding = null,
@@ -458,6 +459,7 @@ class HomericEditableDocument extends StatefulWidget {
     required this.controller,
     required this.inputSession,
     required this.blockBuilder,
+    this.blockGrabberCenterY,
     this.scrollController,
     this.padding = EdgeInsets.zero,
     this.scrollPadding,
@@ -516,6 +518,15 @@ class HomericEditableDocument extends StatefulWidget {
 
   /// Presentation applied to every document edge grabber.
   final HomericBlockGrabberStyle blockGrabberStyle;
+
+  /// Resolves the grabber's visual center, in logical pixels from the row top.
+  ///
+  /// Defaults to 22. The result must be finite and nonnegative. The drag
+  /// target remains 44 by 44 pixels; centers below 22 move only the glyph.
+  /// Keep this callback stable across builds to retain cached row heights.
+  /// When its captured layout state changes, update [layoutRevision] even if
+  /// the callback itself is unchanged.
+  final double Function(BuildContext context, Block block)? blockGrabberCenterY;
 
   /// Touch-selection policy shared by every mounted paragraph.
   final HomericTouchSelectionConfiguration touchSelectionConfiguration;
@@ -716,6 +727,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   /// Exposed for performance-contract tests; ordinary block-local text edits
   /// must not advance it.
   int get debugHeightOrderRebuildCount => _heightOrderRebuildCount;
+
+  /// Measured row height, or its estimate when no current measurement exists.
+  @visibleForTesting
+  double debugCachedBlockHeight(int index) =>
+      _heightCache.offsetBefore(index + 1) - _heightCache.offsetBefore(index);
 
   /// Number of detached shaped paragraphs retained for recycled rows.
   int get debugParagraphLayoutCacheEntries => _paragraphLayoutCache.entryCount;
@@ -2340,7 +2356,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     EdgeInsetsGeometry padding,
   ) {
     _layoutWidth = constraints.maxWidth;
-    final globalLayoutSignature = (_layoutWidth, widget.layoutRevision);
+    final globalLayoutSignature =
+        (_layoutWidth, widget.layoutRevision, widget.blockGrabberCenterY);
     if (_globalLayoutSignature != globalLayoutSignature) {
       _globalLayoutSignature = globalLayoutSignature;
       _heightCache.invalidateAll();
@@ -2397,7 +2414,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                 final witness = _heightCache.prepareMeasurement(
                   blockId: block.id,
                   documentRevision: widget.controller.documentRevision,
-                  layoutSignature: (block, _layoutWidth, widget.layoutRevision),
+                  layoutSignature: (
+                    block,
+                    _layoutWidth,
+                    widget.layoutRevision,
+                    widget.blockGrabberCenterY,
+                  ),
                 );
                 return _DocumentBlockRow(
                   key: _rowKeyFor(block.id),
@@ -2414,6 +2436,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                           widget.inputSession.activeBlockId == block.id),
                   canReorder: () => canReorderBlock(block.id),
                   grabberStyle: widget.blockGrabberStyle,
+                  grabberCenterY: widget.blockGrabberCenterY,
                   onMove: (delta) => moveBlockBy(block.id, delta),
                   onHeight: _recordHeight,
                   onMount: (context, focusNode) {
@@ -2565,6 +2588,7 @@ class _DocumentBlockRow extends StatefulWidget {
     required this.keepAlive,
     required this.canReorder,
     required this.grabberStyle,
+    required this.grabberCenterY,
     required this.onMove,
     required this.onHeight,
     required this.onMount,
@@ -2581,6 +2605,7 @@ class _DocumentBlockRow extends StatefulWidget {
   final ValueGetter<bool> keepAlive;
   final ValueGetter<bool> canReorder;
   final HomericBlockGrabberStyle grabberStyle;
+  final double Function(BuildContext context, Block block)? grabberCenterY;
   final ValueChanged<int> onMove;
   final void Function(BlockHeightWitness witness, double height) onHeight;
   final void Function(BuildContext context, FocusNode focusNode) onMount;
@@ -2640,6 +2665,9 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
     final inheritedColor =
         DefaultTextStyle.of(context).style.color ?? const Color(0xFF000000);
     final canReorder = widget.canReorder();
+    final centerY = widget.grabberCenterY?.call(context, widget.block) ?? 22;
+    assert(centerY.isFinite && centerY >= 0,
+        'The block grabber center must be finite and nonnegative.');
     final hoverChangesOpacity =
         widget.grabberStyle.idleOpacity != widget.grabberStyle.hoverOpacity;
     final grabberTextStyle = TextStyle(
@@ -2691,15 +2719,24 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           label:
               'Move block, block ${widget.index + 1} of ${widget.totalCount}',
           customSemanticsActions: actions,
-          child: ReorderableDragStartListener(
-            index: widget.index,
-            enabled: canReorder,
-            child: MouseRegion(
-              cursor: canReorder ? SystemMouseCursors.grab : MouseCursor.defer,
-              child: SizedBox(
-                width: 44,
-                height: 44,
-                child: Center(child: grabber),
+          child: Padding(
+            padding: EdgeInsets.only(top: centerY > 22 ? centerY - 22 : 0),
+            child: ReorderableDragStartListener(
+              index: widget.index,
+              enabled: canReorder,
+              child: MouseRegion(
+                cursor:
+                    canReorder ? SystemMouseCursors.grab : MouseCursor.defer,
+                child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Center(
+                    child: Transform.translate(
+                      offset: Offset(0, centerY < 22 ? centerY - 22 : 0),
+                      child: grabber,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),

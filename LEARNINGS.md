@@ -1,5 +1,29 @@
 # Learnings
 
+## editor-layout — 2026-09-08 — Grabber geometry is not hit-target geometry
+
+Keep the reorder hit target at 44px without centering its dots at 22px for
+every consumer. Journal first-line height and top padding differ by block and
+text scale. Share the paragraph's style/spacing calculation with the grabber
+center resolver; wrapped blocks stay aligned to their first line. Move the
+target down for centers beyond 22px so enlarged heading grabbers remain inside
+their hit area. Geometry tests compare against the rendered first caret line,
+not the resolver's own formula. Optical alignment still needs a real-font check.
+Resolver changes must invalidate off-screen row heights as well as mounted
+measurements. Use stable consumer callbacks and the existing layout revision
+for captured font/scale changes, so ordinary rebuilds retain useful heights.
+
+## editor-architect — 2026-09-08 — First-comment deletion needs a public survivor
+
+Test private-comment deletion with the comment at document index zero, not only
+after an ordinary paragraph. Generic range replacement retains the first block,
+which leaves an empty private wrapper when its visible text is fully selected.
+For a complete initial private group selected into public prose, retain the
+public endpoint and remove selected preceding blocks atomically. Preserve its
+unselected suffix and attributes; never migrate deleted private sidecars into
+public prose. Assert exact wire types and one-step Undo/Redo, not only empty text.
+Physical browser shortcuts need separate coverage from direct history calls.
+
 ## editor-architect — 2026-09-08 — Native text fields cannot delete document boundaries
 
 Flutter's browser text-input shortcuts delegate deletion to a native field that

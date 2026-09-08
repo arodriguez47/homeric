@@ -1293,11 +1293,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         // trailing row mounts, so the still-focused leading row must keep
         // boundary Backspace/Delete live through pending-row settlement.
         enabled: (_) =>
-            _canMutateActions ||
-            (_ownsEditingFocus &&
-                !_controller.isReadOnly &&
-                _controller.composing == null &&
-                (_documentHost?.acceptsPendingRowStructuralKey ?? false)),
+            (_documentHost?.acceptsPendingRowStructuralKey ?? true) &&
+            (_canMutateActions ||
+                (_ownsEditingFocus &&
+                    !_controller.isReadOnly &&
+                    _controller.composing == null &&
+                    (_documentHost?.acceptsPendingRowStructuralKey ?? false))),
         invoke: (intent) => intent.forward
             ? _controller.deleteForward()
             : _controller.deleteBackward(),

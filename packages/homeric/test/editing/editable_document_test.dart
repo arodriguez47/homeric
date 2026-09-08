@@ -75,6 +75,48 @@ void main() {
       variant: const TargetPlatformVariant(
           {TargetPlatform.windows, TargetPlatform.linux}));
   for (final forward in [false, true]) {
+    testWidgets('deletion waits for pointer selection drag forward=$forward',
+        (tester) async {
+      final document = _document(['left', 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      final key = GlobalKey<HomericEditableDocumentState>();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session, key: key));
+      final focus = tester
+          .widget<HomericEditableParagraph>(
+              find.byType(HomericEditableParagraph).first)
+          .focusNode!;
+      focus.requestFocus();
+      await tester.pump();
+      key.currentState!.beginPointerSelectionDrag(document.positionAt(0, 0));
+      controller.setSelection(HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 4),
+      ));
+      await tester.pump();
+      final revision = controller.documentRevision;
+      expect(focus.hasFocus, isTrue);
+      expect(controller.activeBlockId, 'block-0');
+      final deleteKey =
+          forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace;
+      await tester.sendKeyEvent(deleteKey);
+      await tester.pump();
+      expect(controller.documentRevision, revision,
+          reason: 'keyboard deletion must not mutate an active selection drag');
+      expect(controller.document.blocks.first.text, 'left');
+      expect(key.currentState!.pointerSelectionDragActive, isTrue);
+      expect(controller.undo(), isFalse);
+      key.currentState!.endPointerSelectionDrag();
+      await tester.pump();
+      await tester.sendKeyEvent(deleteKey);
+      await tester.pump();
+      expect(controller.document.blocks.first.text, '');
+      expect(controller.undo(), isTrue);
+      expect(controller.document.blocks.first.text, 'left');
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
     testWidgets('platform Delete removes an empty block forward=$forward',
         (tester) async {
       final document = _document(['left', '', 'right']);

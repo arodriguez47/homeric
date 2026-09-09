@@ -1206,6 +1206,22 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
+      // Browser text input knows only one paragraph, so document navigation
+      // must reach our existing guarded movement action rather than the DOM.
+      if (_documentHost != null) ...{
+        const SingleActivator(LogicalKeyboardKey.arrowUp):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: false, collapseSelection: true),
+        const SingleActivator(LogicalKeyboardKey.arrowDown):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: true, collapseSelection: true),
+        const SingleActivator(LogicalKeyboardKey.arrowUp, shift: true):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: false, collapseSelection: false),
+        const SingleActivator(LogicalKeyboardKey.arrowDown, shift: true):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: true, collapseSelection: false),
+      },
       // Native input owns only this paragraph's text. At its edge (or with
       // a document selection), it cannot delete a block boundary and may
       // emit no text delta at all. Keep those keys in the document controller.
@@ -1588,9 +1604,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       }
     }
     final fallback = intent.fallback;
-    if (fallback != null && context.isCurrent) {
-      _dispatchIntent(fallback);
-      return _DocumentCommandDisposition.handled;
+    final commandContext = _commandContext;
+    if (fallback != null && context.isCurrent && commandContext != null) {
+      final action =
+          Actions.maybeFind<Intent>(commandContext, intent: fallback);
+      if (action == null || !action.isEnabled(fallback)) {
+        return _DocumentCommandDisposition.ignored;
+      }
+      final result = _dispatchIntent(fallback);
+      return switch (action.toKeyEventResult(fallback, result)) {
+        KeyEventResult.handled => _DocumentCommandDisposition.handled,
+        KeyEventResult.ignored => _DocumentCommandDisposition.ignored,
+        KeyEventResult.skipRemainingHandlers =>
+          _DocumentCommandDisposition.skipRemainingHandlers,
+      };
     }
     return _DocumentCommandDisposition.ignored;
   }
@@ -3464,7 +3491,7 @@ String? _appKitSelectorForShortcut(ShortcutActivator shortcut) {
   return null;
 }
 
-enum _DocumentCommandDisposition { ignored, handled }
+enum _DocumentCommandDisposition { ignored, handled, skipRemainingHandlers }
 
 final class _DocumentCommandAction extends Action<_DocumentCommandIntent> {
   _DocumentCommandAction(this.state, this.epoch);
@@ -3485,9 +3512,12 @@ final class _DocumentCommandAction extends Action<_DocumentCommandIntent> {
     _DocumentCommandIntent intent,
     _DocumentCommandDisposition invokeResult,
   ) =>
-      invokeResult == _DocumentCommandDisposition.handled
-          ? KeyEventResult.handled
-          : KeyEventResult.ignored;
+      switch (invokeResult) {
+        _DocumentCommandDisposition.handled => KeyEventResult.handled,
+        _DocumentCommandDisposition.ignored => KeyEventResult.ignored,
+        _DocumentCommandDisposition.skipRemainingHandlers =>
+          KeyEventResult.skipRemainingHandlers,
+      };
 }
 
 final class _HostAction<T extends Intent> extends Action<T> {

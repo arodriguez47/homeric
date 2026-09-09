@@ -1,5 +1,25 @@
 # Learnings
 
+## editor-architect — 2026-09-09 — Selection deletion need not join privacy boundaries
+
+An ordinary-to-private selection must not join the surviving private suffix
+into public prose, but rejecting the entire deletion is not the only safe
+choice. Trim the selected endpoint text separately and remove fully selected
+middle blocks in one transaction, preserving endpoint ownership and metadata.
+Test real upward mouse drags, both Delete keys, partial and complete endpoints,
+and exact one-step Undo/Redo; downward-only coverage misses this boundary.
+
+## editor-architect — 2026-09-08 — Browser vertical keys need document routing
+
+Browser default shortcuts delegate plain Up/Down to a paragraph-local native
+field, bypassing the document movement action. Bind document-hosted vertical
+keys explicitly to the existing guarded intent; preserve modified chords and
+standalone paragraph behavior. Run physical-key navigation tests in Chrome,
+not only native widget tests, and retain Shift-selection anchor assertions.
+Use canonical const shortcut activators so consumer bindings can override the
+same keys. An ignored consumer command must preserve the fallback action's
+enabled state and key disposition, especially during text composition.
+
 ## editor-layout — 2026-09-08 — Grabber geometry is not hit-target geometry
 
 Keep the reorder hit target at 44px without centering its dots at 22px for

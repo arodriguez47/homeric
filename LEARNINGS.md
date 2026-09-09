@@ -16,6 +16,9 @@ field, bypassing the document movement action. Bind document-hosted vertical
 keys explicitly to the existing guarded intent; preserve modified chords and
 standalone paragraph behavior. Run physical-key navigation tests in Chrome,
 not only native widget tests, and retain Shift-selection anchor assertions.
+Use canonical const shortcut activators so consumer bindings can override the
+same keys. An ignored consumer command must preserve the fallback action's
+enabled state and key disposition, especially during text composition.
 
 ## editor-layout — 2026-09-08 — Grabber geometry is not hit-target geometry
 

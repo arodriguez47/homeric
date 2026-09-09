@@ -23,7 +23,101 @@ final class _CutClipboard implements HomericClipboardAdapter {
   Future<void> writeText(String text) async => writes.add(text);
 }
 
+final class _DocumentCommandDispatcher extends ActionDispatcher {
+  final keyResults = <KeyEventResult>[];
+
+  @override
+  (bool, Object?) invokeActionIfEnabled(Action<Intent> action, Intent intent,
+      [BuildContext? context]) {
+    final result = super.invokeActionIfEnabled(action, intent, context);
+    if (result.$1 &&
+        intent.runtimeType.toString() == '_DocumentCommandIntent') {
+      keyResults.add(action.toKeyEventResult(intent, result.$2));
+    }
+    return result;
+  }
+}
+
 void main() {
+  for (final composing in <bool>[false, true]) {
+    for (final shortcut in const [
+      SingleActivator(LogicalKeyboardKey.arrowUp),
+      SingleActivator(LogicalKeyboardKey.arrowDown),
+      SingleActivator(LogicalKeyboardKey.arrowUp, shift: true),
+      SingleActivator(LogicalKeyboardKey.arrowDown, shift: true),
+    ]) {
+      testWidgets(
+          'ignored arrow binding preserves fallback enabled state composing=$composing shortcut=$shortcut',
+          (tester) async {
+        final controller =
+            HomericEditorController(document: _document(['alpha', 'beta']));
+        final session = HomericTextInputSession(controller: controller);
+        addTearDown(session.dispose);
+        addTearDown(controller.dispose);
+        var bindingCalls = 0;
+        final dispatcher = _DocumentCommandDispatcher();
+        await tester.pumpWidget(Actions(
+            dispatcher: dispatcher,
+            actions: const {},
+            child: _editableDocument(controller, session, commandBindings: [
+              HomericDocumentCommandBinding(
+                shortcut: shortcut,
+                onInvoke: (context) {
+                  bindingCalls++;
+                  return HomericDocumentCommandResult.ignored;
+                },
+              ),
+            ])));
+        await tester.pump();
+        final startIndex =
+            shortcut.trigger == LogicalKeyboardKey.arrowDown ? 0 : 1;
+        tester
+            .widget<HomericEditableParagraph>(
+                find.byType(HomericEditableParagraph).at(startIndex))
+            .focusNode!
+            .requestFocus();
+        await tester.pump();
+        controller.setSelection(HomericSelection.collapsed(
+            controller.document.positionAt(startIndex, 1)));
+        if (composing) {
+          expect(
+              controller.applyBlockEditBatch(
+                blockId: 'block-$startIndex',
+                edits: const [CanonicalTextEdit(0, 0, 'X')],
+                selection: const BlockTextSelection.collapsed(1),
+                composing: const BlockTextRange(0, 1),
+              ),
+              isTrue);
+        }
+        await tester.pump();
+        final selectionBefore = controller.selection;
+        final documentBefore = controller.document;
+        if (shortcut.shift) {
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        }
+        await tester.sendKeyEvent(shortcut.trigger);
+        if (shortcut.shift) {
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        }
+        await tester.pump();
+        expect(bindingCalls, 1);
+        expect(dispatcher.keyResults,
+            [composing ? KeyEventResult.ignored : KeyEventResult.handled],
+            reason:
+                'disabled IME fallback must return ignored; enabled movement consumes the key');
+        expect(controller.document, same(documentBefore));
+        if (composing) {
+          expect(controller.selection, selectionBefore);
+          expect(controller.composing, isNotNull);
+        } else {
+          expect(controller.activeBlockId, 'block-${1 - startIndex}');
+          expect(controller.selection!.isCollapsed, !shortcut.shift);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
   testWidgets('Shift Delete preserves the platform cut clipboard',
       (tester) async {
     final clipboard = _CutClipboard();

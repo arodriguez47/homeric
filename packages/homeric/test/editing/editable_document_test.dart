@@ -2369,33 +2369,48 @@ void main() {
     _expectSelectionHead(controller, blockId: 'block-1', offset: 1);
   });
 
-  testWidgets('vertical arrows cross single-line blocks and retain preferred x',
-      (tester) async {
-    final document = _document(<String>['ab', 'cd']);
-    final controller = HomericEditorController(document: document);
-    final session = HomericTextInputSession(controller: controller);
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+  for (final extend in [false, true]) {
+    testWidgets(
+        'vertical arrows cross single-line blocks and retain preferred x (extend=$extend)',
+        (tester) async {
+      final document = _document(<String>['ab', 'cd']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
 
-    await tester.pumpWidget(_editableDocument(controller, session));
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
-    controller.setSelection(
-      HomericSelection.collapsed(controller.document.positionAt(0, 1)),
-    );
-    await tester.pump();
+      await tester.pumpWidget(_editableDocument(controller, session));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+      controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 1)),
+      );
+      await tester.pump();
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
-    final preferredX = controller.preferredX;
-    expect(preferredX, isNotNull);
+      final anchor = controller.selection!.anchor;
+      if (extend) {
+        await _sendShiftArrow(tester, LogicalKeyboardKey.arrowDown);
+      } else {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      }
+      await tester.pump();
+      _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
+      expect(controller.selection!.isCollapsed, !extend);
+      if (extend) expect(controller.selection!.anchor, anchor);
+      final preferredX = controller.preferredX;
+      expect(preferredX, isNotNull);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    _expectSelectionHead(controller, blockId: 'block-0', offset: 2);
-    expect(controller.preferredX, preferredX);
-  });
+      if (extend) {
+        await _sendShiftArrow(tester, LogicalKeyboardKey.arrowUp);
+      } else {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      }
+      await tester.pump();
+      _expectSelectionHead(controller, blockId: 'block-0', offset: 2);
+      expect(controller.preferredX, preferredX);
+      if (extend) expect(controller.selection!.anchor, anchor);
+    });
+  }
 
   testWidgets('document Select All and boundary commands own global positions',
       (tester) async {

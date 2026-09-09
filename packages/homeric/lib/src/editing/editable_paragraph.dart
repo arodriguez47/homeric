@@ -1206,6 +1206,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
+      // Browser text input knows only one paragraph, so document navigation
+      // must reach our existing guarded movement action rather than the DOM.
+      if (_documentHost != null)
+        for (final forward in <bool>[false, true])
+          for (final extend in <bool>[false, true])
+            SingleActivator(
+              forward
+                  ? LogicalKeyboardKey.arrowDown
+                  : LogicalKeyboardKey.arrowUp,
+              shift: extend,
+            ): ExtendSelectionVerticallyToAdjacentLineIntent(
+              forward: forward,
+              collapseSelection: !extend,
+            ),
       // Native input owns only this paragraph's text. At its edge (or with
       // a document selection), it cannot delete a block boundary and may
       // emit no text delta at all. Keep those keys in the document controller.

@@ -2506,6 +2506,46 @@ void main() {
     });
   }
 
+  for (final extend in [false, true]) {
+    testWidgets(
+        'vertical arrows traverse consecutive empty blocks (extend=$extend)',
+        (tester) async {
+      final controller = HomericEditorController(
+        document: _document(<String>['ab', '', '', 'cd']),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session,
+          baseStyle: const TextStyle(fontSize: 16, height: 1.7),
+          paragraphSpec: const BlockParagraphSpec(lineHeight: 1.7)));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+      controller.setSelection(HomericSelection.collapsed(
+        controller.document.positionAt(0, 1),
+      ));
+      await tester.pump();
+      final anchor = controller.selection!.anchor;
+      for (final index in [1, 2, 3, 2, 1, 0]) {
+        final current = controller.document.resolve(controller.selection!.head)
+            as InlinePosition;
+        final down =
+            controller.document.indexOfBlockId(current.block.id)! < index;
+        final key =
+            down ? LogicalKeyboardKey.arrowDown : LogicalKeyboardKey.arrowUp;
+        if (extend) {
+          await _sendShiftArrow(tester, key);
+        } else {
+          await tester.sendKeyEvent(key);
+        }
+        await tester.pump();
+        _expectSelectionHead(controller,
+            blockId: 'block-$index', offset: index == 0 ? 2 : 0);
+        if (extend) expect(controller.selection!.anchor, anchor);
+      }
+    });
+  }
+
   testWidgets('document Select All and boundary commands own global positions',
       (tester) async {
     final document = _document(<String>['ab', 'cd']);
@@ -4439,6 +4479,8 @@ Widget _editableDocument(
   ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
   HomericBlockGrabberStyle blockGrabberStyle = const HomericBlockGrabberStyle(),
   double Function(BuildContext, Block)? blockGrabberCenterY,
+  TextStyle? baseStyle,
+  BlockParagraphSpec paragraphSpec = const BlockParagraphSpec(),
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -4460,6 +4502,8 @@ Widget _editableDocument(
           inputSession: session,
           blockId: block.id,
           focusNode: focusNode,
+          baseStyle: baseStyle,
+          paragraphSpec: paragraphSpec,
           resolveStyle: (_) => _style,
         ),
       ),

@@ -2986,10 +2986,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         )
         .value;
     final blockRect = geometry.blockRect.value;
+    // Empty paragraphs have one insertion position. Their font-derived caret
+    // height can differ from the layout height, so geometry cannot determine
+    // whether that sole position is at the vertical boundary.
+    final isEmptyBlock = _block?.contentLength == 0;
     final crossesVerticalBoundary = switch (intent.direction) {
-      CaretMovementDirection.up => currentCaret.top <= blockRect.top + 0.5,
+      CaretMovementDirection.up =>
+        isEmptyBlock || currentCaret.top <= blockRect.top + 0.5,
       CaretMovementDirection.down =>
-        currentCaret.bottom >= blockRect.bottom - 0.5,
+        isEmptyBlock || currentCaret.bottom >= blockRect.bottom - 0.5,
       _ => false,
     };
     if (documentHost != null &&

@@ -591,3 +591,21 @@ must bridge into the editor's public document-selection API rather than
 inventing local range math. Keep the drag owner in session state: selection
 updates rebuild widgets between pointer-down and pointer-up, so a widget-owned
 identity leaves input suspended and makes the next Delete appear inert.
+## orchestrator — 2026-09-09 — Empty paragraph arrow navigation
+
+Empty paragraphs have one insertion position. Do not require its caret rectangle
+to touch the paragraph layout bounds before crossing Up/Down: Inter's empty
+caret metrics differ from those bounds, while the Ahem test font masked the
+failure. Keep the empty-block boundary case inside the existing selection,
+geometry, and composition guards; preserve nonempty paragraph movement.
+
+Regression: real-font native journal tests plus consecutive-empty traversal and
+Shift-anchor tests. The consumer test first failed when the second Down stayed
+in the first empty block. Comment deletion and undo remain independent guards.
+## orchestrator — 2026-09-09 — Consumer privacy boundaries
+
+Histos handles Backspace at offset zero of nonempty public prose following an
+editable private comment as selection-only movement to the comment end. Generic
+joining would change content ownership and is correctly rejected by its codec.
+Keep this consumer policy outside Homeric; verify actual focus as well as global
+selection, unchanged history, and subsequent editing in the destination block.

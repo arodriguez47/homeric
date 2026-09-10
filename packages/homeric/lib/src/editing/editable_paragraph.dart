@@ -2986,15 +2986,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         )
         .value;
     final blockRect = geometry.blockRect.value;
-    // Empty paragraphs have one insertion position. Their font-derived caret
-    // height can differ from the layout height, so geometry cannot determine
-    // whether that sole position is at the vertical boundary.
-    final isEmptyBlock = _block?.contentLength == 0;
+    // Glyphless projections have no visual line to traverse, even when their
+    // canonical text is hidden by decorations. Their fallback caret height can
+    // differ from the layout height. The current geometry check above ensures
+    // this live paragraph still belongs to the same document/layout generation.
+    final hasNoVisualLines =
+        _renderParagraph!.layoutParagraph.numberOfLines == 0;
     final crossesVerticalBoundary = switch (intent.direction) {
       CaretMovementDirection.up =>
-        isEmptyBlock || currentCaret.top <= blockRect.top + 0.5,
+        hasNoVisualLines || currentCaret.top <= blockRect.top + 0.5,
       CaretMovementDirection.down =>
-        isEmptyBlock || currentCaret.bottom >= blockRect.bottom - 0.5,
+        hasNoVisualLines || currentCaret.bottom >= blockRect.bottom - 0.5,
       _ => false,
     };
     if (documentHost != null &&

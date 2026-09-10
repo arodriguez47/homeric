@@ -609,3 +609,10 @@ editable private comment as selection-only movement to the comment end. Generic
 joining would change content ownership and is correctly rejected by its codec.
 Keep this consumer policy outside Homeric; verify actual focus as well as global
 selection, unchanged history, and subsequent editing in the destination block.
+## orchestrator — 2026-09-09 — Glyphless projection boundaries
+
+Use the current rendered paragraph's zero-line geometry, not canonical content
+length, to identify the empty-caret fallback. Fully hidden nonempty text also
+has no visual line. A constrained-height regression reproduces the mismatch
+without relying on a particular font: ArrowLeft enters the hidden endpoint and
+one ArrowDown leaves it without revealing text or changing history.

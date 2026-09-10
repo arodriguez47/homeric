@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart';
@@ -2506,6 +2506,102 @@ void main() {
     });
   }
 
+  for (final extend in [false, true]) {
+    testWidgets(
+        'vertical arrows traverse consecutive empty blocks (extend=$extend)',
+        (tester) async {
+      final controller = HomericEditorController(
+        document: _document(<String>['ab', '', '', 'cd']),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session,
+          baseStyle: const TextStyle(fontSize: 16, height: 1.7),
+          paragraphSpec: const BlockParagraphSpec(lineHeight: 1.7)));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+      controller.setSelection(HomericSelection.collapsed(
+        controller.document.positionAt(0, 1),
+      ));
+      await tester.pump();
+      final anchor = controller.selection!.anchor;
+      for (final index in [1, 2, 3, 2, 1, 0]) {
+        final current = controller.document.resolve(controller.selection!.head)
+            as InlinePosition;
+        final down =
+            controller.document.indexOfBlockId(current.block.id)! < index;
+        final key =
+            down ? LogicalKeyboardKey.arrowDown : LogicalKeyboardKey.arrowUp;
+        if (extend) {
+          await _sendShiftArrow(tester, key);
+        } else {
+          await tester.sendKeyEvent(key);
+        }
+        await tester.pump();
+        _expectSelectionHead(controller,
+            blockId: 'block-$index', offset: index == 0 ? 2 : 0);
+        if (extend) expect(controller.selection!.anchor, anchor);
+      }
+    });
+  }
+
+  testWidgets('Down leaves a fully hidden paragraph from its canonical end',
+      (tester) async {
+    final document = _document(<String>['hidden', 'after']);
+    final controller = HomericEditorController(
+      document: document,
+      decorations: DecorationSet.of([
+        Decoration.replace('block-0', 0, 6, replacementLength: 0),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        blockBuilder: (context, block, focusNode) => ConstrainedBox(
+          // A minimum row height reproduces the caret/layout mismatch without
+          // relying on platform font metrics or a downloaded font fixture.
+          constraints: const BoxConstraints(minHeight: 40),
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            blockId: block.id,
+            focusNode: focusNode,
+            baseStyle: const TextStyle(fontSize: 8, height: 1),
+            paragraphSpec: const BlockParagraphSpec(lineHeight: 1.7),
+            resolveStyle: (_) => _style,
+          ),
+        ),
+      ),
+    )));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(1, 0)),
+    );
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    _expectSelectionHead(controller, blockId: 'block-0', offset: 6);
+    final render = tester.renderObject<RenderHomericParagraph>(
+      find.byType(HomericParagraph).first,
+    );
+    expect(render.source.viewText, isEmpty);
+    expect(render.layoutParagraph.numberOfLines, 0);
+    expect(render.size.height, greaterThan(render.preferredLineHeight));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
+    expect(controller.document, same(document));
+    expect(controller.canUndo, isFalse);
+  });
+
   testWidgets('document Select All and boundary commands own global positions',
       (tester) async {
     final document = _document(<String>['ab', 'cd']);
@@ -4439,6 +4535,8 @@ Widget _editableDocument(
   ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
   HomericBlockGrabberStyle blockGrabberStyle = const HomericBlockGrabberStyle(),
   double Function(BuildContext, Block)? blockGrabberCenterY,
+  TextStyle? baseStyle,
+  BlockParagraphSpec paragraphSpec = const BlockParagraphSpec(),
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -4460,6 +4558,8 @@ Widget _editableDocument(
           inputSession: session,
           blockId: block.id,
           focusNode: focusNode,
+          baseStyle: baseStyle,
+          paragraphSpec: paragraphSpec,
           resolveStyle: (_) => _style,
         ),
       ),

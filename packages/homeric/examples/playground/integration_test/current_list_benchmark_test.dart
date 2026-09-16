@@ -40,59 +40,93 @@ final class _ActionCancel {
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets(
-    'Homeric document viewport profile trace',
-    (tester) async {
-      if (_fixtureName.isEmpty) {
-        fail('HOMERIC_BENCH_FIXTURE must name a generated corpus file.');
-      }
-      tester.view
-        ..physicalSize = const Size(1440, 900)
-        ..devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
+  testWidgets('Homeric document viewport profile trace', (tester) async {
+    if (_fixtureName.isEmpty) {
+      fail('HOMERIC_BENCH_FIXTURE must name a generated corpus file.');
+    }
+    tester.view
+      ..physicalSize = const Size(1440, 900)
+      ..devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
 
-      final documentKey = GlobalKey<HomericEditableDocumentState>();
-      final coldLoad = Stopwatch()..start();
-      final markdown =
-          await rootBundle.loadString('benchmark_assets/current.md');
-      final fixtureIdentity = benchmarkFixtureIdentity(markdown);
-      final document = _scenarioDocument(markdown, _scenario);
-      final viewModel = DocumentViewModel(document: document);
-      addTearDown(viewModel.dispose);
+    final documentKey = GlobalKey<HomericEditableDocumentState>();
+    final coldLoad = Stopwatch()..start();
+    final markdown = await rootBundle.loadString('benchmark_assets/current.md');
+    final fixtureIdentity = benchmarkFixtureIdentity(markdown);
+    final document = _scenarioDocument(markdown, _scenario);
+    final viewModel = DocumentViewModel(document: document);
+    addTearDown(viewModel.dispose);
 
-      final firstController = ScrollController();
-      final firstMount = Stopwatch()..start();
-      await tester.pumpWidget(
-        _surface(viewModel, firstController, documentKey: documentKey),
+    final firstController = ScrollController();
+    final firstMount = Stopwatch()..start();
+    await tester.pumpWidget(
+      _surface(viewModel, firstController, documentKey: documentKey),
+    );
+    firstMount.stop();
+    coldLoad.stop();
+
+    var maxMounted = _mountedRows(documentKey, 'initial mount');
+    var maxParagraphCacheEntries = 0;
+    var maxParagraphCacheTextCodeUnits = 0;
+    final initialMounted = maxMounted;
+    expect(initialMounted, lessThan(500));
+    if (document.blockCount > 1) {
+      expect(
+        initialMounted,
+        lessThan(document.blockCount),
+        reason: 'the current control must stay lazy',
       );
-      firstMount.stop();
-      coldLoad.stop();
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    firstController.dispose();
 
-      var maxMounted = _mountedRows(documentKey, 'initial mount');
-      var maxParagraphCacheEntries = 0;
-      var maxParagraphCacheTextCodeUnits = 0;
-      final initialMounted = maxMounted;
-      expect(initialMounted, lessThan(500));
-      if (document.blockCount > 1) {
-        expect(initialMounted, lessThan(document.blockCount),
-            reason: 'the current control must stay lazy');
+    final disabledSamples = <Map<String, Object>>[];
+    final instrumentedSamples = <Map<String, Object>>[];
+    final coldMountSamples = <Map<String, Object>>[];
+    final layoutCounts = <HomericParagraphLayoutCategory, int>{};
+    final layoutElapsed = <HomericParagraphLayoutCategory, Duration>{};
+    final layoutSampleTotalsUs = <int>[];
+    final calibrationDisabledSamples = <Map<String, Object>>[];
+    final calibrationInstrumentedSamples = <Map<String, Object>>[];
+    var calibrationLayoutTotalCount = 0;
+    const calibratesProbe =
+        _fixtureName == 'large.md' && _scenario == 'generated';
+    for (var sample = 0; sample < benchmarkSamplePairCount; sample++) {
+      final pair = await _runSamplePair(
+        binding,
+        tester,
+        viewModel,
+        documentKey: documentKey,
+        sampleIndex: sample,
+        instrumentedFirst: benchmarkInstrumentedFirst(sample),
+        onMountedRows: (count) {
+          if (count > maxMounted) maxMounted = count;
+        },
+      );
+      disabledSamples.add(pair.disabledFrames);
+      instrumentedSamples.add(pair.instrumentedFrames);
+      coldMountSamples.addAll(pair.coldFrames);
+      if (pair.paragraphCacheEntries > maxParagraphCacheEntries) {
+        maxParagraphCacheEntries = pair.paragraphCacheEntries;
       }
-      await tester.pumpWidget(const SizedBox.shrink());
-      firstController.dispose();
-
-      final disabledSamples = <Map<String, Object>>[];
-      final instrumentedSamples = <Map<String, Object>>[];
-      final coldMountSamples = <Map<String, Object>>[];
-      final layoutCounts = <HomericParagraphLayoutCategory, int>{};
-      final layoutElapsed = <HomericParagraphLayoutCategory, Duration>{};
-      final layoutSampleTotalsUs = <int>[];
-      final calibrationDisabledSamples = <Map<String, Object>>[];
-      final calibrationInstrumentedSamples = <Map<String, Object>>[];
-      var calibrationLayoutTotalCount = 0;
-      const calibratesProbe =
-          _fixtureName == 'large.md' && _scenario == 'generated';
-      for (var sample = 0; sample < benchmarkSamplePairCount; sample++) {
-        final pair = await _runSamplePair(
+      if (pair.paragraphCacheTextCodeUnits > maxParagraphCacheTextCodeUnits) {
+        maxParagraphCacheTextCodeUnits = pair.paragraphCacheTextCodeUnits;
+      }
+      layoutSampleTotalsUs.add(pair.layout.totalElapsed.inMicroseconds);
+      for (final category in HomericParagraphLayoutCategory.values) {
+        layoutCounts.update(
+          category,
+          (value) => value + pair.layout.countFor(category),
+          ifAbsent: () => pair.layout.countFor(category),
+        );
+        layoutElapsed.update(
+          category,
+          (value) => value + (pair.layout.elapsed[category] ?? Duration.zero),
+          ifAbsent: () => pair.layout.elapsed[category] ?? Duration.zero,
+        );
+      }
+      if (calibratesProbe) {
+        final calibration = await _runCalibrationPair(
           binding,
           tester,
           viewModel,
@@ -103,153 +137,118 @@ void main() {
             if (count > maxMounted) maxMounted = count;
           },
         );
-        disabledSamples.add(pair.disabledFrames);
-        instrumentedSamples.add(pair.instrumentedFrames);
-        coldMountSamples.addAll(pair.coldFrames);
-        if (pair.paragraphCacheEntries > maxParagraphCacheEntries) {
-          maxParagraphCacheEntries = pair.paragraphCacheEntries;
-        }
-        if (pair.paragraphCacheTextCodeUnits > maxParagraphCacheTextCodeUnits) {
-          maxParagraphCacheTextCodeUnits = pair.paragraphCacheTextCodeUnits;
-        }
-        layoutSampleTotalsUs.add(
-          pair.layout.totalElapsed.inMicroseconds,
+        expect(
+          calibration.disabledInitialState,
+          calibration.instrumentedInitialState,
+          reason: 'calibration modes must start from equal fresh state',
         );
-        for (final category in HomericParagraphLayoutCategory.values) {
-          layoutCounts.update(
-            category,
-            (value) => value + pair.layout.countFor(category),
-            ifAbsent: () => pair.layout.countFor(category),
-          );
-          layoutElapsed.update(
-            category,
-            (value) => value + (pair.layout.elapsed[category] ?? Duration.zero),
-            ifAbsent: () => pair.layout.elapsed[category] ?? Duration.zero,
-          );
-        }
-        if (calibratesProbe) {
-          final calibration = await _runCalibrationPair(
-            binding,
-            tester,
-            viewModel,
-            documentKey: documentKey,
-            sampleIndex: sample,
-            instrumentedFirst: benchmarkInstrumentedFirst(sample),
-            onMountedRows: (count) {
-              if (count > maxMounted) maxMounted = count;
-            },
-          );
-          expect(
-            calibration.disabledInitialState,
-            calibration.instrumentedInitialState,
-            reason: 'calibration modes must start from equal fresh state',
-          );
-          expect(
-            calibration.layout.totalCount,
-            greaterThan(0),
-            reason: 'calibration must execute the probe bookkeeping path',
-          );
-          calibrationDisabledSamples.add(calibration.disabledFrames);
-          calibrationInstrumentedSamples.add(calibration.instrumentedFrames);
-          calibrationLayoutTotalCount += calibration.layout.totalCount;
-        }
+        expect(
+          calibration.layout.totalCount,
+          greaterThan(0),
+          reason: 'calibration must execute the probe bookkeeping path',
+        );
+        calibrationDisabledSamples.add(calibration.disabledFrames);
+        calibrationInstrumentedSamples.add(calibration.instrumentedFrames);
+        calibrationLayoutTotalCount += calibration.layout.totalCount;
       }
+    }
 
-      binding.reportData ??= <String, dynamic>{};
-      binding.reportData!['scroll_disabled'] = _aggregate(disabledSamples);
-      binding.reportData!['scroll_instrumented'] =
-          _aggregate(instrumentedSamples);
-      binding.reportData!['cold_mount'] = _aggregate(coldMountSamples);
-      final calibrationControl =
-          calibratesProbe ? calibrationDisabledSamples : disabledSamples;
-      final calibrationInstrumented =
-          calibratesProbe ? calibrationInstrumentedSamples : instrumentedSamples;
-      final overheadBps = benchmarkPairedDeltaBasisPoints(
-        controlP95Us: [
-          for (final sample in calibrationControl)
-            sample['total_p95_us']! as int,
-        ],
-        instrumentedP95Us: [
-          for (final sample in calibrationInstrumented)
-            sample['total_p95_us']! as int,
-        ],
-      );
-      binding.reportData!['calibration'] = <String, Object>{
-        'paired_total_p95_delta_basis_points': overheadBps,
-        'layout_total_count': calibrationLayoutTotalCount,
-        'valid': calibrationLayoutTotalCount > 0 && overheadBps.abs() <= 500,
-        'threshold_basis_points': 500,
-        if (calibratesProbe) ...<String, Object>{
-          'disabled': _aggregate(calibrationDisabledSamples),
-          'instrumented': _aggregate(calibrationInstrumentedSamples),
-        },
-      };
-      binding.reportData!['homeric'] = <String, dynamic>{
-        'fixture': _fixtureName,
-        'scenario': _scenario,
-        'fixture_words': fixtureIdentity.words,
-        'fixture_fnv1a32': fixtureIdentity.fnv1a32,
-        'blocks': document.blockCount,
-        'viewport': <String, Object>{
-          'logical_width': 1440,
-          'logical_height': 900,
-          'device_pixel_ratio': 1,
-          'text_scale': 1,
-          'cache_extent': 250,
-        },
-        'first_mount_us': firstMount.elapsedMicroseconds,
-        'cold_load_first_frame_us': coldLoad.elapsedMicroseconds,
-        'initial_mounted_rows': initialMounted,
-        'max_mounted_rows': maxMounted,
-        'paragraph_cache_entries': maxParagraphCacheEntries,
-        'paragraph_cache_text_code_units': maxParagraphCacheTextCodeUnits,
-        'layout_total_count':
-            layoutCounts.values.fold(0, (sum, value) => sum + value),
-        'layout_total_us': layoutElapsed.values.fold(
-          0,
-          (sum, value) => sum + value.inMicroseconds,
-        ),
-        'layout_sample_total_us': layoutSampleTotalsUs,
-        'layout_median_sample_us': _median(List.of(layoutSampleTotalsUs)),
-        'layout_counts': <String, int>{
-          for (final category in HomericParagraphLayoutCategory.values)
-            category.name: layoutCounts[category] ?? 0,
-        },
-        'layout_us': <String, int>{
-          for (final category in HomericParagraphLayoutCategory.values)
-            category.name:
-                (layoutElapsed[category] ?? Duration.zero).inMicroseconds,
-        },
-        'trace': <String, Object>{
-          'duration_ms': 5000,
-          'steps': 100,
-          'warmup_outward_traversals': 1,
-          'samples_per_mode': benchmarkSamplePairCount,
-          'order': 'balanced paired alternating disabled/instrumented',
-          'height_churn_changes': _scenario == 'height_churn' ? 3 : 0,
-        },
-      };
-    },
-    timeout: const Timeout(Duration(minutes: 20)),
-  );
+    binding.reportData ??= <String, dynamic>{};
+    binding.reportData!['scroll_disabled'] = _aggregate(disabledSamples);
+    binding.reportData!['scroll_instrumented'] = _aggregate(
+      instrumentedSamples,
+    );
+    binding.reportData!['cold_mount'] = _aggregate(coldMountSamples);
+    final calibrationControl = calibratesProbe
+        ? calibrationDisabledSamples
+        : disabledSamples;
+    final calibrationInstrumented = calibratesProbe
+        ? calibrationInstrumentedSamples
+        : instrumentedSamples;
+    final overheadBps = benchmarkPairedDeltaBasisPoints(
+      controlP95Us: [
+        for (final sample in calibrationControl) sample['total_p95_us']! as int,
+      ],
+      instrumentedP95Us: [
+        for (final sample in calibrationInstrumented)
+          sample['total_p95_us']! as int,
+      ],
+    );
+    binding.reportData!['calibration'] = <String, Object>{
+      'paired_total_p95_delta_basis_points': overheadBps,
+      'layout_total_count': calibrationLayoutTotalCount,
+      'valid': calibrationLayoutTotalCount > 0 && overheadBps.abs() <= 500,
+      'threshold_basis_points': 500,
+      if (calibratesProbe) ...<String, Object>{
+        'disabled': _aggregate(calibrationDisabledSamples),
+        'instrumented': _aggregate(calibrationInstrumentedSamples),
+      },
+    };
+    binding.reportData!['homeric'] = <String, dynamic>{
+      'fixture': _fixtureName,
+      'scenario': _scenario,
+      'fixture_words': fixtureIdentity.words,
+      'fixture_fnv1a32': fixtureIdentity.fnv1a32,
+      'blocks': document.blockCount,
+      'viewport': <String, Object>{
+        'logical_width': 1440,
+        'logical_height': 900,
+        'device_pixel_ratio': 1,
+        'text_scale': 1,
+        'cache_extent': 250,
+      },
+      'first_mount_us': firstMount.elapsedMicroseconds,
+      'cold_load_first_frame_us': coldLoad.elapsedMicroseconds,
+      'initial_mounted_rows': initialMounted,
+      'max_mounted_rows': maxMounted,
+      'paragraph_cache_entries': maxParagraphCacheEntries,
+      'paragraph_cache_text_code_units': maxParagraphCacheTextCodeUnits,
+      'layout_total_count': layoutCounts.values.fold(
+        0,
+        (sum, value) => sum + value,
+      ),
+      'layout_total_us': layoutElapsed.values.fold(
+        0,
+        (sum, value) => sum + value.inMicroseconds,
+      ),
+      'layout_sample_total_us': layoutSampleTotalsUs,
+      'layout_median_sample_us': _median(List.of(layoutSampleTotalsUs)),
+      'layout_counts': <String, int>{
+        for (final category in HomericParagraphLayoutCategory.values)
+          category.name: layoutCounts[category] ?? 0,
+      },
+      'layout_us': <String, int>{
+        for (final category in HomericParagraphLayoutCategory.values)
+          category.name:
+              (layoutElapsed[category] ?? Duration.zero).inMicroseconds,
+      },
+      'trace': <String, Object>{
+        'duration_ms': 5000,
+        'steps': 100,
+        'warmup_outward_traversals': 1,
+        'samples_per_mode': benchmarkSamplePairCount,
+        'order': 'balanced paired alternating disabled/instrumented',
+        'height_churn_changes': _scenario == 'height_churn' ? 3 : 0,
+      },
+    };
+  }, timeout: const Timeout(Duration(minutes: 20)));
 }
 
 Widget _surface(
   DocumentViewModel viewModel,
   ScrollController controller, {
   required GlobalKey<HomericEditableDocumentState> documentKey,
-}) =>
-    MaterialApp(
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
-      home: Scaffold(
-        body: EditorPage(
-          viewModel: viewModel,
-          cacheExtent: 250,
-          scrollController: controller,
-          documentKey: documentKey,
-        ),
-      ),
-    );
+}) => MaterialApp(
+  theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+  home: Scaffold(
+    body: EditorPage(
+      viewModel: viewModel,
+      cacheExtent: 250,
+      scrollController: controller,
+      documentKey: documentKey,
+    ),
+  ),
+);
 
 HomericEditableDocumentState _requireDocumentState(
   GlobalKey<HomericEditableDocumentState> documentKey, {
@@ -268,8 +267,7 @@ HomericEditableDocumentState _requireDocumentState(
 int _mountedRows(
   GlobalKey<HomericEditableDocumentState> documentKey,
   String stage,
-) =>
-    _requireDocumentState(documentKey, stage: stage).debugMountedRowCount;
+) => _requireDocumentState(documentKey, stage: stage).debugMountedRowCount;
 
 Future<_BenchmarkSamplePair> _runSamplePair(
   IntegrationTestWidgetsFlutterBinding binding,
@@ -537,7 +535,8 @@ final class _CalibrationModeSample {
     double scrollOffset,
     int paragraphCacheEntries,
     int paragraphCacheTextCodeUnits,
-  }) initialState;
+  })
+  initialState;
   final HomericParagraphLayoutReport? layout;
 }
 
@@ -556,12 +555,14 @@ final class _CalibrationSamplePair {
     double scrollOffset,
     int paragraphCacheEntries,
     int paragraphCacheTextCodeUnits,
-  }) disabledInitialState;
+  })
+  disabledInitialState;
   final ({
     double scrollOffset,
     int paragraphCacheEntries,
     int paragraphCacheTextCodeUnits,
-  }) instrumentedInitialState;
+  })
+  instrumentedInitialState;
   final HomericParagraphLayoutReport layout;
 }
 
@@ -582,9 +583,7 @@ Map<String, Object> _aggregate(List<Map<String, Object>> samples) {
       (sum, sample) => sum + (sample['sample_count']! as int),
     ),
     for (final metric in metrics)
-      metric: _median([
-        for (final sample in samples) sample[metric]! as int,
-      ]),
+      metric: _median([for (final sample in samples) sample[metric]! as int]),
     'samples': samples,
   };
 }
@@ -602,59 +601,60 @@ Document _scenarioDocument(String markdown, String scenario) {
   return switch (scenario) {
     'generated' => generated,
     'one_huge_block' => Document([
-        Block(
-          id: 'benchmark-huge',
-          type: 'paragraph',
-          runs: [InlineRun(markdown)],
-        ),
-      ]),
+      Block(
+        id: 'benchmark-huge',
+        type: 'paragraph',
+        runs: [InlineRun(markdown)],
+      ),
+    ]),
     'many_small_blocks' => Document([
-        for (var index = 0; index < words.length; index += 4)
-          Block(
-            id: 'benchmark-small-$index',
-            type: 'paragraph',
-            runs: [
-              InlineRun(
-                words
-                    .sublist(index, (index + 4).clamp(0, words.length))
-                    .join(' '),
-              ),
-            ],
-          ),
-      ]),
+      for (var index = 0; index < words.length; index += 4)
+        Block(
+          id: 'benchmark-small-$index',
+          type: 'paragraph',
+          runs: [
+            InlineRun(
+              words
+                  .sublist(index, (index + 4).clamp(0, words.length))
+                  .join(' '),
+            ),
+          ],
+        ),
+    ]),
     'alternating_heights' => Document([
-        for (var index = 0; index < generated.blockCount; index++)
-          Block(
-            id: 'benchmark-alternating-$index',
-            type: 'paragraph',
-            runs: [
-              InlineRun(index.isEven
+      for (var index = 0; index < generated.blockCount; index++)
+        Block(
+          id: 'benchmark-alternating-$index',
+          type: 'paragraph',
+          runs: [
+            InlineRun(
+              index.isEven
                   ? 'short block'
-                  : List.filled(4, generated.blocks[index].text).join(' ')),
-            ],
-          ),
-      ]),
+                  : List.filled(4, generated.blocks[index].text).join(' '),
+            ),
+          ],
+        ),
+    ]),
     'biased_estimates' => Document([
-        for (var index = 0; index < generated.blockCount; index++)
-          Block(
-            id: 'benchmark-biased-$index',
-            type: 'paragraph',
-            runs: [
-              InlineRun(index < generated.blockCount ~/ 2
+      for (var index = 0; index < generated.blockCount; index++)
+        Block(
+          id: 'benchmark-biased-$index',
+          type: 'paragraph',
+          runs: [
+            InlineRun(
+              index < generated.blockCount ~/ 2
                   ? 'short block'
-                  : List.filled(12, generated.blocks[index].text).join(' ')),
-            ],
-          ),
-      ]),
+                  : List.filled(12, generated.blocks[index].text).join(' '),
+            ),
+          ],
+        ),
+    ]),
     'height_churn' => generated,
     _ => throw ArgumentError.value(scenario, 'scenario'),
   };
 }
 
-Future<void> _warmUp(
-  WidgetTester tester,
-  ScrollController controller,
-) async {
+Future<void> _warmUp(WidgetTester tester, ScrollController controller) async {
   final max = controller.position.maxScrollExtent;
   for (var step = 0; step < 50; step++) {
     controller.jumpTo(max * step / 49);
@@ -684,18 +684,13 @@ Future<void> _trace(
         (step == 25 || step == 50 || step == 75)) {
       final slider = tester.widget<Slider>(find.byType(Slider));
       final delta = step == 50 ? -1.0 : 1.0;
-      slider.onChanged!(
-        (slider.value + delta).clamp(slider.min, slider.max),
-      );
+      slider.onChanged!((slider.value + delta).clamp(slider.min, slider.max));
     }
     controller.jumpTo(max * progress);
     await tester.pump(stepDuration);
     if (cancel?.isCancelled ?? false) return;
     onMountedRows(
-      _mountedRows(
-        documentKey,
-        'sample $sampleIndex $mode step $step',
-      ),
+      _mountedRows(documentKey, 'sample $sampleIndex $mode step $step'),
     );
   }
 }
@@ -769,9 +764,7 @@ Future<Map<String, Object>> _watchFrames(
     );
   }
   if (timings.isEmpty) {
-    throw StateError(
-      'Benchmark $stage produced no FrameTiming samples.',
-    );
+    throw StateError('Benchmark $stage produced no FrameTiming samples.');
   }
   final build = [
     for (final timing in timings) timing.buildDuration.inMicroseconds,
@@ -779,9 +772,8 @@ Future<Map<String, Object>> _watchFrames(
   final raster = [
     for (final timing in timings) timing.rasterDuration.inMicroseconds,
   ]..sort();
-  final total = [
-    for (final timing in timings) timing.totalSpan.inMicroseconds,
-  ]..sort();
+  final total = [for (final timing in timings) timing.totalSpan.inMicroseconds]
+    ..sort();
   return <String, Object>{
     'sample_count': timings.length,
     'build_p50_us': _percentile(build, 0.50),

@@ -24,6 +24,19 @@ const _traceActionTimeout = Duration(seconds: 60);
 /// Time to wait for [FrameTiming] delivery after the pumps complete.
 const _frameDeliveryTimeout = Duration(seconds: 15);
 
+/// Cooperative cancel for [_watchFrames] actions (e.g. [_trace]).
+///
+/// [Future.timeout] does not stop the underlying future; on timeout the harness
+/// requests cancel and awaits settlement before teardown so `_trace` cannot
+/// call `jumpTo` / `_mountedRows` against an unmounted document.
+final class _ActionCancel {
+  bool _cancelled = false;
+
+  bool get isCancelled => _cancelled;
+
+  void cancel() => _cancelled = true;
+}
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -270,7 +283,7 @@ Future<_BenchmarkSamplePair> _runSamplePair(
   final controlController = ScrollController();
   final controlColdFrames = await _watchFrames(
     binding,
-    () => tester.pumpWidget(
+    (_) => tester.pumpWidget(
       _surface(viewModel, controlController, documentKey: documentKey),
     ),
     expectedFrameCount: benchmarkColdMountFrameCount,
@@ -283,7 +296,7 @@ Future<_BenchmarkSamplePair> _runSamplePair(
   final controller = ScrollController();
   final pairedColdFrames = await _watchFrames(
     binding,
-    () => tester.pumpWidget(
+    (_) => tester.pumpWidget(
       _surface(viewModel, controller, documentKey: documentKey),
     ),
     expectedFrameCount: benchmarkColdMountFrameCount,
@@ -300,13 +313,14 @@ Future<_BenchmarkSamplePair> _runSamplePair(
     Future<void> runDisabled() async {
       disabledFrames = await _watchFrames(
         binding,
-        () => _trace(
+        (cancel) => _trace(
           tester,
           controller,
           documentKey,
           sampleIndex: sampleIndex,
           mode: 'disabled',
           onMountedRows: onMountedRows,
+          cancel: cancel,
         ),
         expectedFrameCount: benchmarkTraceFrameCount,
         stage: 'sample $sampleIndex warmed scroll disabled',
@@ -318,13 +332,14 @@ Future<_BenchmarkSamplePair> _runSamplePair(
       try {
         instrumentedFrames = await _watchFrames(
           binding,
-          () => _trace(
+          (cancel) => _trace(
             tester,
             controller,
             documentKey,
             sampleIndex: sampleIndex,
             mode: 'instrumented',
             onMountedRows: onMountedRows,
+            cancel: cancel,
           ),
           expectedFrameCount: benchmarkTraceFrameCount,
           stage: 'sample $sampleIndex warmed scroll instrumented',
@@ -473,7 +488,7 @@ Future<_CalibrationModeSample> _runCalibrationMode(
       final probe = HomericParagraphLayoutProbe.start();
       frames = await _watchFrames(
         binding,
-        () async {
+        (cancel) async {
           try {
             await _trace(
               tester,
@@ -482,6 +497,7 @@ Future<_CalibrationModeSample> _runCalibrationMode(
               sampleIndex: sampleIndex,
               mode: 'calibration $mode',
               onMountedRows: onMountedRows,
+              cancel: cancel,
             );
           } finally {
             layout = probe.stop();
@@ -493,13 +509,14 @@ Future<_CalibrationModeSample> _runCalibrationMode(
     } else {
       frames = await _watchFrames(
         binding,
-        () => _trace(
+        (cancel) => _trace(
           tester,
           controller,
           documentKey,
           sampleIndex: sampleIndex,
           mode: 'calibration $mode',
           onMountedRows: onMountedRows,
+          cancel: cancel,
         ),
         expectedFrameCount: benchmarkTraceFrameCount,
         stage: 'sample $sampleIndex calibration $mode',
@@ -654,11 +671,13 @@ Future<void> _trace(
   required int sampleIndex,
   required String mode,
   required ValueChanged<int> onMountedRows,
+  _ActionCancel? cancel,
   Duration stepDuration = const Duration(milliseconds: 50),
   bool applyScenarioChanges = true,
 }) async {
   final max = controller.position.maxScrollExtent;
   for (var step = 0; step < 100; step++) {
+    if (cancel?.isCancelled ?? false) return;
     final progress = step < 50 ? step / 49 : (99 - step) / 49;
     if (applyScenarioChanges &&
         _scenario == 'height_churn' &&
@@ -671,6 +690,7 @@ Future<void> _trace(
     }
     controller.jumpTo(max * progress);
     await tester.pump(stepDuration);
+    if (cancel?.isCancelled ?? false) return;
     onMountedRows(
       _mountedRows(
         documentKey,
@@ -682,7 +702,7 @@ Future<void> _trace(
 
 Future<Map<String, Object>> _watchFrames(
   IntegrationTestWidgetsFlutterBinding binding,
-  Future<void> Function() action, {
+  Future<void> Function(_ActionCancel cancel) action, {
   int? expectedFrameCount,
   required String stage,
 }) async {
@@ -699,15 +719,34 @@ Future<Map<String, Object>> _watchFrames(
     if (enough && !enoughTimings.isCompleted) enoughTimings.complete();
   }
 
+  final cancel = _ActionCancel();
+  final actionFuture = action(cancel);
+  var actionSettled = false;
+  Future<void> settleAction() async {
+    if (actionSettled) return;
+    try {
+      await actionFuture;
+    } catch (_) {
+      // Surface timeout / stage errors from the outer path; ignore late
+      // action failures after cancel so teardown can finish cleanly.
+    } finally {
+      actionSettled = true;
+    }
+  }
+
   binding.addTimingsCallback(watcher);
   try {
-    await action().timeout(
-      _traceActionTimeout,
-      onTimeout: () => throw StateError(
+    try {
+      await actionFuture.timeout(_traceActionTimeout);
+      actionSettled = true;
+    } on TimeoutException {
+      cancel.cancel();
+      await settleAction();
+      throw StateError(
         'Benchmark $stage timed out after '
         '${_traceActionTimeout.inSeconds}s before completing its pumps.',
-      ),
-    );
+      );
+    }
     if (!enoughTimings.isCompleted) {
       await enoughTimings.future.timeout(
         _frameDeliveryTimeout,
@@ -719,6 +758,8 @@ Future<Map<String, Object>> _watchFrames(
       );
     }
   } finally {
+    cancel.cancel();
+    await settleAction();
     binding.removeTimingsCallback(watcher);
   }
   if (expectedFrameCount != null) {

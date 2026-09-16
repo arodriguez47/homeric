@@ -1,5 +1,15 @@
 # Learnings
 
+## editor-architect — 2026-09-16 — Profile traces must not Finder-walk reorderable slivers
+
+Walking `find.byType(...).evaluate()` on every scroll step of a HOM-6 profile
+trace walks the `SliverReorderableList` element tree while rows recycle. That
+can stall the harness (hit-test finder diagnostic) and leave the driver
+attached on repeat runs. Expose O(1) mounted-row bookkeeping on editable
+document state and read it through a `GlobalKey` instead. Keep stage-labeled
+timeouts, and on timeout cancel the in-flight trace and await settlement
+before unmounting so `jumpTo` / mounted-row reads cannot hit disposed state.
+
 ## editor-architect — 2026-09-09 — Selection deletion need not join privacy boundaries
 
 An ordinary-to-private selection must not join the surviving private suffix

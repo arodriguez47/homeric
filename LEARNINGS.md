@@ -1,5 +1,26 @@
 # Learnings
 
+## editor-architect — 2026-09-16 — Typewriter focus scrolls from global caret geometry
+
+**What:** Opt-in `typewriterFocus` keeps the collapsed caret line in the middle
+third of the document viewport by scrolling the page. Block-level
+`Scrollable.ensureVisible` (used for `scrollToBlock` / focus settlement) centers
+the **block row**, not the caret line, so it is insufficient as the typing
+scroll source of truth. Homeric schedules from flattened global caret geometry,
+forces reschedule when the capability, controller, scroll controller, padding,
+or layout revision changes, and waits for scroll idle before re-applying.
+
+**Why it mattered:** Missing caret-tracking scroll lets typing drift out of the
+comfortable band. A selection/content-only witness also leaves the caret
+misplaced after re-enable without edits, controller swap with equal
+selection/revision, live `scrollPadding` changes, or viewport resize until the
+next edit.
+
+**Rule going forward:** Treat global caret rectangles as the typewriter scroll
+witness. Force-schedule on enable and on viewport/layout invalidation, not only
+on selection or content revision. Mirror selection-geometry / editor-architecture
+learnings in Homeric and Nexus in the same change.
+
 ## editor-architect — 2026-09-09 — Selection deletion need not join privacy boundaries
 
 An ordinary-to-private selection must not join the surviving private suffix

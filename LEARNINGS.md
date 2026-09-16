@@ -10,6 +10,27 @@ document state and read it through a `GlobalKey` instead. Keep stage-labeled
 timeouts, and on timeout cancel the in-flight trace and await settlement
 before unmounting so `jumpTo` / mounted-row reads cannot hit disposed state.
 
+## editor-architect — 2026-09-16 — Italic live-preview reuses the mark-agnostic hide path
+
+**What:** Journal live-preview for `*italic*` / `_italic_` is the same host
+contract as bold, links, lists, and inline code: keep literal source, emit
+`markdownMarkHideReplacement` on the delimiters and an inline style decoration
+on the inner range via live `deriveDecorations`, and paint italic through a
+`paintStyler` side channel while `resolveStyle` stays layout-only.
+`ParagraphSource.build` folds any zero-length markdown hide regardless of
+delimiter width; selection reveal uses half-open `_touches` so a trailing-space
+caret after leave does not re-reveal (HOM-35 class). HOM-38's tests pin this
+without library changes.
+
+**Why it mattered:** Treating italic as a special case would invent a second
+emphasis path. The library already hides and paints; the remaining work is host
+wiring (bold-safe `*`/`_` regex and `'italic'` → `FontStyle.italic` in the paint
+map), not a new Homeric mark engine.
+
+**Rule going forward:** Prove new markdown marks against the existing
+hide/reveal/paint contract before adding library surface. Mirror editor-
+architecture learnings in Homeric and Nexus in the same change.
+
 ## editor-architect — 2026-09-09 — Selection deletion need not join privacy boundaries
 
 An ordinary-to-private selection must not join the surviving private suffix

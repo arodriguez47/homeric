@@ -159,12 +159,10 @@ void main() {
       instrumentedSamples,
     );
     binding.reportData!['cold_mount'] = _aggregate(coldMountSamples);
-    final calibrationControl = calibratesProbe
-        ? calibrationDisabledSamples
-        : disabledSamples;
-    final calibrationInstrumented = calibratesProbe
-        ? calibrationInstrumentedSamples
-        : instrumentedSamples;
+    final calibrationControl =
+        calibratesProbe ? calibrationDisabledSamples : disabledSamples;
+    final calibrationInstrumented =
+        calibratesProbe ? calibrationInstrumentedSamples : instrumentedSamples;
     final overheadBps = benchmarkPairedDeltaBasisPoints(
       controlP95Us: [
         for (final sample in calibrationControl) sample['total_p95_us']! as int,
@@ -238,17 +236,18 @@ Widget _surface(
   DocumentViewModel viewModel,
   ScrollController controller, {
   required GlobalKey<HomericEditableDocumentState> documentKey,
-}) => MaterialApp(
-  theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
-  home: Scaffold(
-    body: EditorPage(
-      viewModel: viewModel,
-      cacheExtent: 250,
-      scrollController: controller,
-      documentKey: documentKey,
-    ),
-  ),
-);
+}) =>
+    MaterialApp(
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+      home: Scaffold(
+        body: EditorPage(
+          viewModel: viewModel,
+          cacheExtent: 250,
+          scrollController: controller,
+          documentKey: documentKey,
+        ),
+      ),
+    );
 
 HomericEditableDocumentState _requireDocumentState(
   GlobalKey<HomericEditableDocumentState> documentKey, {
@@ -267,7 +266,8 @@ HomericEditableDocumentState _requireDocumentState(
 int _mountedRows(
   GlobalKey<HomericEditableDocumentState> documentKey,
   String stage,
-) => _requireDocumentState(documentKey, stage: stage).debugMountedRowCount;
+) =>
+    _requireDocumentState(documentKey, stage: stage).debugMountedRowCount;
 
 Future<_BenchmarkSamplePair> _runSamplePair(
   IntegrationTestWidgetsFlutterBinding binding,
@@ -535,8 +535,7 @@ final class _CalibrationModeSample {
     double scrollOffset,
     int paragraphCacheEntries,
     int paragraphCacheTextCodeUnits,
-  })
-  initialState;
+  }) initialState;
   final HomericParagraphLayoutReport? layout;
 }
 
@@ -555,14 +554,12 @@ final class _CalibrationSamplePair {
     double scrollOffset,
     int paragraphCacheEntries,
     int paragraphCacheTextCodeUnits,
-  })
-  disabledInitialState;
+  }) disabledInitialState;
   final ({
     double scrollOffset,
     int paragraphCacheEntries,
     int paragraphCacheTextCodeUnits,
-  })
-  instrumentedInitialState;
+  }) instrumentedInitialState;
   final HomericParagraphLayoutReport layout;
 }
 
@@ -601,54 +598,54 @@ Document _scenarioDocument(String markdown, String scenario) {
   return switch (scenario) {
     'generated' => generated,
     'one_huge_block' => Document([
-      Block(
-        id: 'benchmark-huge',
-        type: 'paragraph',
-        runs: [InlineRun(markdown)],
-      ),
-    ]),
+        Block(
+          id: 'benchmark-huge',
+          type: 'paragraph',
+          runs: [InlineRun(markdown)],
+        ),
+      ]),
     'many_small_blocks' => Document([
-      for (var index = 0; index < words.length; index += 4)
-        Block(
-          id: 'benchmark-small-$index',
-          type: 'paragraph',
-          runs: [
-            InlineRun(
-              words
-                  .sublist(index, (index + 4).clamp(0, words.length))
-                  .join(' '),
-            ),
-          ],
-        ),
-    ]),
+        for (var index = 0; index < words.length; index += 4)
+          Block(
+            id: 'benchmark-small-$index',
+            type: 'paragraph',
+            runs: [
+              InlineRun(
+                words
+                    .sublist(index, (index + 4).clamp(0, words.length))
+                    .join(' '),
+              ),
+            ],
+          ),
+      ]),
     'alternating_heights' => Document([
-      for (var index = 0; index < generated.blockCount; index++)
-        Block(
-          id: 'benchmark-alternating-$index',
-          type: 'paragraph',
-          runs: [
-            InlineRun(
-              index.isEven
-                  ? 'short block'
-                  : List.filled(4, generated.blocks[index].text).join(' '),
-            ),
-          ],
-        ),
-    ]),
+        for (var index = 0; index < generated.blockCount; index++)
+          Block(
+            id: 'benchmark-alternating-$index',
+            type: 'paragraph',
+            runs: [
+              InlineRun(
+                index.isEven
+                    ? 'short block'
+                    : List.filled(4, generated.blocks[index].text).join(' '),
+              ),
+            ],
+          ),
+      ]),
     'biased_estimates' => Document([
-      for (var index = 0; index < generated.blockCount; index++)
-        Block(
-          id: 'benchmark-biased-$index',
-          type: 'paragraph',
-          runs: [
-            InlineRun(
-              index < generated.blockCount ~/ 2
-                  ? 'short block'
-                  : List.filled(12, generated.blocks[index].text).join(' '),
-            ),
-          ],
-        ),
-    ]),
+        for (var index = 0; index < generated.blockCount; index++)
+          Block(
+            id: 'benchmark-biased-$index',
+            type: 'paragraph',
+            runs: [
+              InlineRun(
+                index < generated.blockCount ~/ 2
+                    ? 'short block'
+                    : List.filled(12, generated.blocks[index].text).join(' '),
+              ),
+            ],
+          ),
+      ]),
     'height_churn' => generated,
     _ => throw ArgumentError.value(scenario, 'scenario'),
   };

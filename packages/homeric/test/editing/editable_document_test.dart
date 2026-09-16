@@ -1964,11 +1964,14 @@ void main() {
     )));
     await tester.pump();
 
-    int visibleBlockRows() {
+    int mountedBlockRows() {
       var count = 0;
       for (var index = 0; index < document.blockCount; index++) {
         if (find
-            .byKey(ValueKey('content-block-$index'))
+            .byKey(
+              ValueKey('content-block-$index'),
+              skipOffstage: false,
+            )
             .evaluate()
             .isNotEmpty) {
           count++;
@@ -1978,13 +1981,14 @@ void main() {
     }
 
     expect(key.currentState!.debugMountedRowCount, lessThan(50));
-    expect(key.currentState!.debugMountedRowCount, visibleBlockRows());
+    expect(key.currentState!.debugMountedRowCount, mountedBlockRows());
 
     final scrollable = tester.widget<Scrollable>(find.byType(Scrollable));
-    scrollable.controller!.jumpTo(scrollable.controller!.position.maxScrollExtent);
+    scrollable.controller!
+        .jumpTo(scrollable.controller!.position.maxScrollExtent);
     await tester.pump();
     expect(key.currentState!.debugMountedRowCount, lessThan(50));
-    expect(key.currentState!.debugMountedRowCount, visibleBlockRows());
+    expect(key.currentState!.debugMountedRowCount, mountedBlockRows());
   });
 
   testWidgets('newer and cancelled block scrolls invalidate older requests',

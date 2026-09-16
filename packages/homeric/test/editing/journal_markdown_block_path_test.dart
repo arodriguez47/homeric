@@ -1,7 +1,6 @@
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
-import 'package:homeric/src/render/homeric_paragraph.dart';
 
 import '../transform/transform_test_utils.dart';
 
@@ -12,6 +11,7 @@ final class _JournalPaintMap {
 
   final Map<int, TextStyle> resolved = <int, TextStyle>{};
   int paintCalls = 0;
+  TextStyle boldStyle = markStyles['bold']!;
 
   static const layoutOnly = TextStyle(fontSize: 14, color: Color(0xFF000000));
 
@@ -19,10 +19,7 @@ final class _JournalPaintMap {
     'bold': TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
     'italic': TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
     'code': TextStyle(fontSize: 14, fontFamily: 'monospace'),
-    'strike': TextStyle(
-      fontSize: 14,
-      decoration: TextDecoration.lineThrough,
-    ),
+    'strike': TextStyle(fontSize: 14, decoration: TextDecoration.lineThrough),
     'link': TextStyle(fontSize: 14, color: Color(0xFF0000FF)),
   };
 
@@ -31,7 +28,8 @@ final class _JournalPaintMap {
   TextStyle resolve(RunStyleContext run) {
     var style = layoutOnly;
     for (final decoration in run.decorations) {
-      final mark = markStyles[decoration.spec];
+      final mark =
+          decoration.spec == 'bold' ? boldStyle : markStyles[decoration.spec];
       if (mark != null) style = mark;
     }
     resolved[run.viewStart] = style;
@@ -43,11 +41,13 @@ final class _JournalPaintMap {
     final style = resolved[segment.viewStart] ?? segment.style;
     lastPaintedWeight = style.fontWeight;
     lastPaintedStyle = style.fontStyle;
+    lastPaintedColor = style.color;
     return style;
   }
 
   FontWeight? lastPaintedWeight;
   FontStyle? lastPaintedStyle;
+  Color? lastPaintedColor;
 }
 
 /// Journal markdown decorations: hide `**`/`*` delimiters, style all five marks.
@@ -56,13 +56,15 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   final result = <Decoration>[];
 
   void hideDelimiter(int start, int end) {
-    result.add(Decoration.replace(
-      block.id,
-      start,
-      end,
-      replacementLength: 0,
-      spec: 'hide',
-    ));
+    result.add(
+      Decoration.replace(
+        block.id,
+        start,
+        end,
+        replacementLength: 0,
+        spec: 'hide',
+      ),
+    );
   }
 
   void styleRange(int start, int end, String spec) {
@@ -77,8 +79,9 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
     styleRange(match.start + 2, match.end - 2, 'bold');
   }
 
-  for (final match
-      in RegExp(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)').allMatches(text)) {
+  for (final match in RegExp(
+    r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)',
+  ).allMatches(text)) {
     hideDelimiter(match.start, match.start + 1);
     hideDelimiter(match.end - 1, match.end);
     styleRange(match.start + 1, match.end - 1, 'italic');
@@ -141,9 +144,7 @@ Widget _withOverlay(Widget child) => Directionality(
           DefaultWidgetsLocalizations.delegate,
         ],
         child: Overlay(
-          initialEntries: <OverlayEntry>[
-            OverlayEntry(builder: (_) => child),
-          ],
+          initialEntries: <OverlayEntry>[OverlayEntry(builder: (_) => child)],
         ),
       ),
     );
@@ -163,26 +164,27 @@ Future<void> _pumpDocument(
   required _JournalPaintMap paintMap,
 }) async {
   paintMap.beginBuild();
-  await tester.pumpWidget(_documentHarness(
-    controller: controller,
-    session: session,
-    paintMap: paintMap,
-  ));
+  await tester.pumpWidget(
+    _documentHarness(
+      controller: controller,
+      session: session,
+      paintMap: paintMap,
+    ),
+  );
   await tester.pump();
 }
 
 ParagraphSource<TextStyle> _boldSource(_JournalPaintMap paintMap) =>
     ParagraphSource.build(
       block: para('b', '**bold**'),
-      decorations: journalMarkdownDecorationsForBlock(
-        para('b', '**bold**'),
-      ),
+      decorations: journalMarkdownDecorationsForBlock(para('b', '**bold**')),
       resolveStyle: paintMap.resolve,
     );
 
 void main() {
-  testWidgets('deriveDecorations hides bold/italic delimiters in view text',
-      (tester) async {
+  testWidgets('deriveDecorations hides bold/italic delimiters in view text', (
+    tester,
+  ) async {
     final controller = HomericEditorController(
       document: _document('**bold** and *italic*'),
     );
@@ -201,8 +203,9 @@ void main() {
     expect(_paragraphRender(tester).source.viewText, 'bold and italic');
   });
 
-  testWidgets('deriveDecorations keeps code/strike/link delimiters visible',
-      (tester) async {
+  testWidgets('deriveDecorations keeps code/strike/link delimiters visible', (
+    tester,
+  ) async {
     final controller = HomericEditorController(
       document: _document('`code` ~~strike~~ [label](https://x.test)'),
     );
@@ -225,67 +228,187 @@ void main() {
   });
 
   testWidgets(
-      'layout-equal source update reshapes paintStyler glyphs on the render object',
-      (tester) async {
-    final paintMap = _JournalPaintMap();
-  paintMap.beginBuild();
-    final source = _boldSource(paintMap);
-    await tester.pumpWidget(Directionality(
-      textDirection: TextDirection.ltr,
-      child: SizedBox(
-        width: 200,
-        child: HomericParagraph(source: source, paintStyler: paintMap.paint),
-      ),
-    ));
-    await tester.pump();
-    expect(paintMap.lastPaintedWeight, FontWeight.w700);
+    'layout-equal source samples unchanged paintStyler without relayout',
+    (tester) async {
+      final paintMap = _JournalPaintMap();
+      paintMap.beginBuild();
+      final source = _boldSource(paintMap);
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            child: HomericParagraph(
+              source: source,
+              paintStyler: paintMap.paint,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(paintMap.lastPaintedWeight, FontWeight.w700);
 
-    final render = tester.renderObject<RenderHomericParagraph>(
-      find.byType(HomericParagraph),
-    );
-    paintMap.beginBuild();
-    paintMap.paintCalls = 0;
-    paintMap.lastPaintedWeight = null;
-    render.source = _boldSource(paintMap);
-    await tester.pump();
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph),
+      );
+      final generation = render.layoutGeneration;
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.lastPaintedWeight = null;
+      render.source = _boldSource(paintMap);
+      await tester.pump();
 
-    expect(paintMap.paintCalls, greaterThan(0));
-    expect(paintMap.lastPaintedWeight, FontWeight.w700);
-  });
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(paintMap.lastPaintedWeight, FontWeight.w700);
+      expect(
+        render.layoutGeneration,
+        generation,
+        reason: 'an unchanged style refresh must not schedule layout',
+      );
+
+      await tester.pump();
+      expect(
+        render.layoutGeneration,
+        generation,
+        reason: 'the unchanged style refresh must not leave a layout loop',
+      );
+    },
+  );
 
   testWidgets(
-      'layout-equal controller notify still paints journal mark styles via paintStyler',
-      (tester) async {
-    final controller = HomericEditorController(
-      document: _document('**bold**'),
-    );
-    final session = HomericTextInputSession(controller: controller);
-    final paintMap = _JournalPaintMap();
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+    'layout-equal source relayouts once when side-channel metrics change',
+    (tester) async {
+      final paintMap = _JournalPaintMap();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            child: HomericParagraph(
+              source: _boldSource(paintMap),
+              paintStyler: paintMap.paint,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
 
-    await _pumpDocument(
-      tester,
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    );
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph),
+      );
+      final generation = render.layoutGeneration;
+      final height = render.layoutParagraph.height;
 
-    expect(_paragraphRender(tester).source.viewText, 'bold');
-    expect(paintMap.lastPaintedWeight, FontWeight.w700);
+      paintMap.boldStyle = const TextStyle(
+        fontSize: 28,
+        fontWeight: FontWeight.w700,
+      );
+      paintMap.beginBuild();
+      render.source = _boldSource(paintMap);
+      await tester.pump();
 
-    paintMap.paintCalls = 0;
-    paintMap.lastPaintedWeight = null;
-    paintMap.beginBuild();
-    controller.notifyListeners();
-    await tester.pump();
+      expect(render.layoutGeneration, generation + 1);
+      expect(render.layoutParagraph.height, greaterThan(height));
 
-    expect(paintMap.paintCalls, greaterThan(0),
-        reason: 'paintStyler must run when the resolve map is refilled');
-    expect(
-      paintMap.lastPaintedWeight,
-      FontWeight.w700,
-      reason: 'bold weight must paint after a layout-equal source update',
-    );
-  });
+      await tester.pump();
+      expect(
+        render.layoutGeneration,
+        generation + 1,
+        reason:
+            'the refreshed style snapshot must stop the layout feedback loop',
+      );
+    },
+  );
+
+  testWidgets(
+    'layout-equal source rebuilds paint only when side-channel color changes',
+    (tester) async {
+      final paintMap = _JournalPaintMap();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            child: HomericParagraph(
+              source: _boldSource(paintMap),
+              paintStyler: paintMap.paint,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final render = tester.renderObject<RenderHomericParagraph>(
+        find.byType(HomericParagraph),
+      );
+      final generation = render.layoutGeneration;
+      paintMap.boldStyle = const TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFFFF0000),
+      );
+      paintMap.beginBuild();
+      final probe = HomericParagraphLayoutProbe.start();
+      render.source = _boldSource(paintMap);
+      await tester.pump();
+
+      expect(
+        probe.stop().countFor(HomericParagraphLayoutCategory.paintRebuild),
+        greaterThan(0),
+      );
+      expect(paintMap.lastPaintedColor, const Color(0xFFFF0000));
+      expect(render.layoutGeneration, generation);
+    },
+  );
+
+  testWidgets(
+    'layout-equal controller notify still paints journal mark styles via paintStyler',
+    (tester) async {
+      final controller = HomericEditorController(
+        document: _document('**bold**'),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+
+      await _pumpDocument(
+        tester,
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+      );
+
+      expect(_paragraphRender(tester).source.viewText, 'bold');
+      expect(paintMap.lastPaintedWeight, FontWeight.w700);
+      final generation = _paragraphRender(tester).layoutGeneration;
+
+      paintMap.paintCalls = 0;
+      paintMap.lastPaintedWeight = null;
+      paintMap.beginBuild();
+      controller.notifyListeners();
+      await tester.pump();
+
+      expect(
+        paintMap.paintCalls,
+        greaterThan(0),
+        reason: 'paintStyler must run when the resolve map is refilled',
+      );
+      expect(
+        paintMap.lastPaintedWeight,
+        FontWeight.w700,
+        reason: 'bold weight must paint after a layout-equal source update',
+      );
+      expect(_paragraphRender(tester).layoutGeneration, generation);
+
+      await tester.pump();
+      expect(
+        _paragraphRender(tester).layoutGeneration,
+        generation,
+        reason: 'the document geometry callback must not restart layout',
+      );
+    },
+  );
 }

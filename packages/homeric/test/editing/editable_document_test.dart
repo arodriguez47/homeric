@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart';
@@ -13,7 +13,226 @@ import 'package:homeric/homeric.dart';
 
 const _style = TextStyle(fontSize: 14);
 
+final class _CutClipboard implements HomericClipboardAdapter {
+  final writes = <String>[];
+
+  @override
+  Future<String?> readText() async => null;
+
+  @override
+  Future<void> writeText(String text) async => writes.add(text);
+}
+
+final class _DocumentCommandDispatcher extends ActionDispatcher {
+  final keyResults = <KeyEventResult>[];
+
+  @override
+  (bool, Object?) invokeActionIfEnabled(Action<Intent> action, Intent intent,
+      [BuildContext? context]) {
+    final result = super.invokeActionIfEnabled(action, intent, context);
+    if (result.$1 &&
+        intent.runtimeType.toString() == '_DocumentCommandIntent') {
+      keyResults.add(action.toKeyEventResult(intent, result.$2));
+    }
+    return result;
+  }
+}
+
 void main() {
+  for (final composing in <bool>[false, true]) {
+    for (final shortcut in const [
+      SingleActivator(LogicalKeyboardKey.arrowUp),
+      SingleActivator(LogicalKeyboardKey.arrowDown),
+      SingleActivator(LogicalKeyboardKey.arrowUp, shift: true),
+      SingleActivator(LogicalKeyboardKey.arrowDown, shift: true),
+    ]) {
+      testWidgets(
+          'ignored arrow binding preserves fallback enabled state composing=$composing shortcut=$shortcut',
+          (tester) async {
+        final controller =
+            HomericEditorController(document: _document(['alpha', 'beta']));
+        final session = HomericTextInputSession(controller: controller);
+        addTearDown(session.dispose);
+        addTearDown(controller.dispose);
+        var bindingCalls = 0;
+        final dispatcher = _DocumentCommandDispatcher();
+        await tester.pumpWidget(Actions(
+            dispatcher: dispatcher,
+            actions: const {},
+            child: _editableDocument(controller, session, commandBindings: [
+              HomericDocumentCommandBinding(
+                shortcut: shortcut,
+                onInvoke: (context) {
+                  bindingCalls++;
+                  return HomericDocumentCommandResult.ignored;
+                },
+              ),
+            ])));
+        await tester.pump();
+        final startIndex =
+            shortcut.trigger == LogicalKeyboardKey.arrowDown ? 0 : 1;
+        tester
+            .widget<HomericEditableParagraph>(
+                find.byType(HomericEditableParagraph).at(startIndex))
+            .focusNode!
+            .requestFocus();
+        await tester.pump();
+        controller.setSelection(HomericSelection.collapsed(
+            controller.document.positionAt(startIndex, 1)));
+        if (composing) {
+          expect(
+              controller.applyBlockEditBatch(
+                blockId: 'block-$startIndex',
+                edits: const [CanonicalTextEdit(0, 0, 'X')],
+                selection: const BlockTextSelection.collapsed(1),
+                composing: const BlockTextRange(0, 1),
+              ),
+              isTrue);
+        }
+        await tester.pump();
+        final selectionBefore = controller.selection;
+        final documentBefore = controller.document;
+        if (shortcut.shift) {
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        }
+        await tester.sendKeyEvent(shortcut.trigger);
+        if (shortcut.shift) {
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        }
+        await tester.pump();
+        expect(bindingCalls, 1);
+        expect(dispatcher.keyResults,
+            [composing ? KeyEventResult.ignored : KeyEventResult.handled],
+            reason:
+                'disabled IME fallback must return ignored; enabled movement consumes the key');
+        expect(controller.document, same(documentBefore));
+        if (composing) {
+          expect(controller.selection, selectionBefore);
+          expect(controller.composing, isNotNull);
+        } else {
+          expect(controller.activeBlockId, 'block-${1 - startIndex}');
+          expect(controller.selection!.isCollapsed, !shortcut.shift);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
+  testWidgets('Shift Delete preserves the platform cut clipboard',
+      (tester) async {
+    final clipboard = _CutClipboard();
+    final document = _document(['left', 'right']);
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    FocusNode? firstFocus;
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        blockBuilder: (context, block, focusNode) {
+          if (block.id == 'block-0') firstFocus = focusNode;
+          return HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            blockId: block.id,
+            focusNode: focusNode,
+            clipboard: clipboard,
+            resolveStyle: (_) => _style,
+          );
+        },
+      ),
+    )));
+    firstFocus!.requestFocus();
+    await tester.pump();
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 4),
+    ));
+    await tester.pump();
+    expect(controller.activeBlockId, 'block-0');
+    expect(controller.selection?.isCollapsed, isFalse);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(clipboard.writes, ['left'],
+        reason: 'Shift Delete must copy before removing selected text');
+    expect(controller.document.blocks.first.text, '');
+    expect(controller.undo(), isTrue);
+    expect(controller.document.blocks.first.text, 'left');
+    await tester.pumpWidget(const SizedBox.shrink());
+  },
+      variant: const TargetPlatformVariant(
+          {TargetPlatform.windows, TargetPlatform.linux}));
+  for (final forward in [false, true]) {
+    testWidgets('deletion waits for pointer selection drag forward=$forward',
+        (tester) async {
+      final document = _document(['left', 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      final key = GlobalKey<HomericEditableDocumentState>();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session, key: key));
+      final focus = tester
+          .widget<HomericEditableParagraph>(
+              find.byType(HomericEditableParagraph).first)
+          .focusNode!;
+      focus.requestFocus();
+      await tester.pump();
+      key.currentState!.beginPointerSelectionDrag(document.positionAt(0, 0));
+      controller.setSelection(HomericSelection(
+        anchor: document.positionAt(0, 0),
+        head: document.positionAt(0, 4),
+      ));
+      await tester.pump();
+      final revision = controller.documentRevision;
+      expect(focus.hasFocus, isTrue);
+      expect(controller.activeBlockId, 'block-0');
+      final deleteKey =
+          forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace;
+      await tester.sendKeyEvent(deleteKey);
+      await tester.pump();
+      expect(controller.documentRevision, revision,
+          reason: 'keyboard deletion must not mutate an active selection drag');
+      expect(controller.document.blocks.first.text, 'left');
+      expect(key.currentState!.pointerSelectionDragActive, isTrue);
+      expect(controller.undo(), isFalse);
+      key.currentState!.endPointerSelectionDrag();
+      await tester.pump();
+      await tester.sendKeyEvent(deleteKey);
+      await tester.pump();
+      expect(controller.document.blocks.first.text, '');
+      expect(controller.undo(), isTrue);
+      expect(controller.document.blocks.first.text, 'left');
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+    testWidgets('platform Delete removes an empty block forward=$forward',
+        (tester) async {
+      final document = _document(['left', '', 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+      await tester.pump();
+      await tester.sendKeyEvent(
+          forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.document.blocks.map((b) => b.text), ['left', 'right'],
+          reason: 'an empty native text field must not swallow block deletion');
+      expect(controller.undo(), isTrue);
+      expect(
+          controller.document.blocks.map((b) => b.text), ['left', '', 'right']);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
   test('touch configuration resolves mobile defaults and explicit policy', () {
     const adaptive = HomericTouchSelectionConfiguration.adaptive();
 
@@ -772,7 +991,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('platform close revokes document-owned touch handle drag',
+  testWidgets('platform close revokes document drag while reattaching input',
       (tester) async {
     TextInputConnection.debugResetId();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -838,7 +1057,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(session.isAttached, isFalse);
+    expect(session.isAttached, isTrue);
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMovingEndpoint, isNull);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
@@ -947,7 +1166,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('platform close revokes paragraph-owned long press drag',
+  testWidgets('platform close revokes paragraph drag while reattaching input',
       (tester) async {
     TextInputConnection.debugResetId();
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -1011,7 +1230,7 @@ void main() {
       (_) {},
     );
     await tester.pump();
-    expect(session.isAttached, isFalse);
+    expect(session.isAttached, isTrue);
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
 
@@ -1515,6 +1734,75 @@ void main() {
         70);
     expect(find.byKey(const ValueKey('content-block-3499')), findsNothing);
     expect(find.byType(SizedBox).evaluate().length, lessThan(40));
+  });
+
+  testWidgets('grabber resolver changes invalidate off-screen row heights',
+      (tester) async {
+    final document =
+        _document(List<String>.generate(40, (index) => 'row $index'));
+    final controller = HomericEditorController(document: document);
+    final session = HomericTextInputSession(controller: controller);
+    final scrollController = ScrollController();
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(scrollController.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    double initialCenter(BuildContext context, Block block) => 66;
+    double changedCenter(BuildContext context, Block block) => 88;
+    var resolver = initialCenter;
+    late StateSetter rebuild;
+    Widget build(double Function(BuildContext, Block) resolver) => SizedBox(
+          width: 500,
+          height: 180,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: controller,
+            inputSession: session,
+            scrollController: scrollController,
+            cacheExtent: 0,
+            estimatedBlockHeight: 44,
+            blockGrabberCenterY: resolver,
+            blockBuilder: (_, block, __) => SizedBox(
+              key: ValueKey('height-content-${block.id}'),
+              height: 30,
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (_, setState) {
+        rebuild = setState;
+        return build(resolver);
+      },
+    )));
+    await tester.pump();
+    expect(key.currentState!.debugCachedBlockHeight(0), 88);
+    expect(key.currentState!.debugCachedBlockHeight(1), 88);
+    scrollController.jumpTo(1000);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('height-content-block-0')), findsNothing);
+    rebuild(() {});
+    await tester.pump();
+    expect(key.currentState!.debugCachedBlockHeight(0), 88,
+        reason: 'the same resolver must retain off-screen measurements');
+    rebuild(() => resolver = changedCenter);
+    await tester.pump();
+    expect(key.currentState!.debugCachedBlockHeight(0), 44,
+        reason: 'a changed resolver must discard stale off-screen heights');
+    expect(key.currentState!.debugCachedBlockHeight(1), 44);
+    final mountedContent = find.byWidgetPredicate((widget) =>
+        widget is SizedBox &&
+        widget.key is ValueKey<String> &&
+        (widget.key! as ValueKey<String>).value.startsWith('height-content-'));
+    expect(mountedContent, findsWidgets);
+    for (final element in mountedContent.evaluate()) {
+      final blockId = (element.widget.key! as ValueKey<String>)
+          .value
+          .replaceFirst('height-content-', '');
+      final index = document.indexOfBlockId(blockId)!;
+      expect(key.currentState!.debugCachedBlockHeight(index), 110,
+          reason: 'mounted rows must record the new resolver geometry');
+    }
   });
 
   testWidgets(
@@ -2226,32 +2514,143 @@ void main() {
     _expectSelectionHead(controller, blockId: 'block-1', offset: 1);
   });
 
-  testWidgets('vertical arrows cross single-line blocks and retain preferred x',
+  for (final extend in [false, true]) {
+    testWidgets(
+        'vertical arrows cross single-line blocks and retain preferred x (extend=$extend)',
+        (tester) async {
+      final document = _document(<String>['ab', 'cd']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(_editableDocument(controller, session));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+      controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 1)),
+      );
+      await tester.pump();
+
+      final anchor = controller.selection!.anchor;
+      if (extend) {
+        await _sendShiftArrow(tester, LogicalKeyboardKey.arrowDown);
+      } else {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      }
+      await tester.pump();
+      _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
+      expect(controller.selection!.isCollapsed, !extend);
+      if (extend) expect(controller.selection!.anchor, anchor);
+      final preferredX = controller.preferredX;
+      expect(preferredX, isNotNull);
+
+      if (extend) {
+        await _sendShiftArrow(tester, LogicalKeyboardKey.arrowUp);
+      } else {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      }
+      await tester.pump();
+      _expectSelectionHead(controller, blockId: 'block-0', offset: 2);
+      expect(controller.preferredX, preferredX);
+      if (extend) expect(controller.selection!.anchor, anchor);
+    });
+  }
+
+  for (final extend in [false, true]) {
+    testWidgets(
+        'vertical arrows traverse consecutive empty blocks (extend=$extend)',
+        (tester) async {
+      final controller = HomericEditorController(
+        document: _document(<String>['ab', '', '', 'cd']),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session,
+          baseStyle: const TextStyle(fontSize: 16, height: 1.7),
+          paragraphSpec: const BlockParagraphSpec(lineHeight: 1.7)));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+      controller.setSelection(HomericSelection.collapsed(
+        controller.document.positionAt(0, 1),
+      ));
+      await tester.pump();
+      final anchor = controller.selection!.anchor;
+      for (final index in [1, 2, 3, 2, 1, 0]) {
+        final current = controller.document.resolve(controller.selection!.head)
+            as InlinePosition;
+        final down =
+            controller.document.indexOfBlockId(current.block.id)! < index;
+        final key =
+            down ? LogicalKeyboardKey.arrowDown : LogicalKeyboardKey.arrowUp;
+        if (extend) {
+          await _sendShiftArrow(tester, key);
+        } else {
+          await tester.sendKeyEvent(key);
+        }
+        await tester.pump();
+        _expectSelectionHead(controller,
+            blockId: 'block-$index', offset: index == 0 ? 2 : 0);
+        if (extend) expect(controller.selection!.anchor, anchor);
+      }
+    });
+  }
+
+  testWidgets('Down leaves a fully hidden paragraph from its canonical end',
       (tester) async {
-    final document = _document(<String>['ab', 'cd']);
-    final controller = HomericEditorController(document: document);
+    final document = _document(<String>['hidden', 'after']);
+    final controller = HomericEditorController(
+      document: document,
+      decorations: DecorationSet.of([
+        Decoration.replace('block-0', 0, 6, replacementLength: 0),
+      ]),
+    );
     final session = HomericTextInputSession(controller: controller);
     addTearDown(session.dispose);
     addTearDown(controller.dispose);
-
-    await tester.pumpWidget(_editableDocument(controller, session));
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 500,
+      height: 300,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        blockBuilder: (context, block, focusNode) => ConstrainedBox(
+          // A minimum row height reproduces the caret/layout mismatch without
+          // relying on platform font metrics or a downloaded font fixture.
+          constraints: const BoxConstraints(minHeight: 40),
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            blockId: block.id,
+            focusNode: focusNode,
+            baseStyle: const TextStyle(fontSize: 8, height: 1),
+            paragraphSpec: const BlockParagraphSpec(lineHeight: 1.7),
+            resolveStyle: (_) => _style,
+          ),
+        ),
+      ),
+    )));
     await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-0')));
+    await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
     controller.setSelection(
-      HomericSelection.collapsed(controller.document.positionAt(0, 1)),
+      HomericSelection.collapsed(document.positionAt(1, 0)),
     );
     await tester.pump();
-
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    _expectSelectionHead(controller, blockId: 'block-0', offset: 6);
+    final render = tester.renderObject<RenderHomericParagraph>(
+      find.byType(HomericParagraph).first,
+    );
+    expect(render.source.viewText, isEmpty);
+    expect(render.layoutParagraph.numberOfLines, 0);
+    expect(render.size.height, greaterThan(render.preferredLineHeight));
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     _expectSelectionHead(controller, blockId: 'block-1', offset: 0);
-    final preferredX = controller.preferredX;
-    expect(preferredX, isNotNull);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    _expectSelectionHead(controller, blockId: 'block-0', offset: 2);
-    expect(controller.preferredX, preferredX);
+    expect(controller.document, same(document));
+    expect(controller.canUndo, isFalse);
   });
 
   testWidgets('document Select All and boundary commands own global positions',
@@ -2656,6 +3055,37 @@ void main() {
       'beXta',
     );
   });
+
+  for (final centerY in <double?>[null, 14, 66]) {
+    testWidgets('consumer positions grabber center at $centerY',
+        (tester) async {
+      final document = _document(<String>['alpha']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(
+        controller,
+        session,
+        blockGrabberCenterY: centerY == null ? null : (_, __) => centerY,
+      ));
+      final glyph = find.text('⋮');
+      final row = find.ancestor(of: glyph, matching: find.byType(Row)).first;
+      final target = find.ancestor(
+        of: glyph,
+        matching: find.byWidgetPredicate((widget) =>
+            widget is SizedBox && widget.width == 44 && widget.height == 44),
+      );
+      expect(target, findsOneWidget);
+      expect(tester.getSize(target), const Size(44, 44));
+      expect(tester.getCenter(glyph).dy - tester.getTopLeft(row).dy,
+          closeTo(centerY ?? 22, 0.001));
+      expect(tester.getRect(target).contains(tester.getCenter(glyph)), isTrue);
+    });
+  }
 
   testWidgets('consumer can hide the grabber until its row is hovered',
       (tester) async {
@@ -3727,6 +4157,24 @@ void main() {
     expect(padded!.globalRect.top, closeTo(initial!.globalRect.top + 48, 0.01));
     expect(identical(session.controller, controller), isTrue);
 
+    final render = tester.renderObject<RenderHomericParagraph>(
+      find.byKey(const ValueKey('homeric-editable-block-0')),
+    );
+    final generationBeforeRenderOnlyLayout = render.layoutGeneration;
+    render.markNeedsLayout();
+    await tester.pump();
+    expect(
+      render.layoutGeneration,
+      greaterThan(generationBeforeRenderOnlyLayout),
+    );
+    expect(firstGeometry!.isCurrent, isFalse);
+    expect(
+      key.currentState!.activeCaretGeometry,
+      isNotNull,
+      reason: 'selection-host callbacks must resolve the current render '
+          'generation even when the paragraph widget did not rebuild',
+    );
+
     expect(controller.replaceSelection('X'), isTrue);
     expect(firstGeometry!.isCurrent, isFalse,
         reason: 'document revision invalidates geometry before the next frame');
@@ -3865,6 +4313,266 @@ void main() {
       HomericFocusSettlementResult.missing,
     );
   });
+
+  testWidgets(
+      'typewriter focus keeps the caret line in the middle third while typing',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(60, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    final scrollController = ScrollController();
+    final livePadding = ValueNotifier<EdgeInsetsGeometry>(
+      const EdgeInsets.symmetric(vertical: 200),
+    );
+    var activeController = controller;
+    var activeSession = session;
+    var typewriterFocusEnabled = true;
+    addTearDown(scrollController.dispose);
+    addTearDown(livePadding.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    Widget documentWidget(ScrollController activeScrollController) => SizedBox(
+          width: 500,
+          height: 300,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: activeController,
+            inputSession: activeSession,
+            scrollController: activeScrollController,
+            typewriterFocus: typewriterFocusEnabled,
+            // Room to center near edges without fighting scroll extent.
+            scrollPadding: livePadding,
+            cacheExtent: 250,
+            estimatedBlockHeight: 44,
+            blockBuilder: (context, block, focusNode) =>
+                HomericEditableParagraph(
+              controller: activeController,
+              inputSession: activeSession,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+            ),
+          ),
+        );
+
+    var activeScrollController = scrollController;
+    late StateSetter rebuildDocument;
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (context, setState) {
+        rebuildDocument = setState;
+        return documentWidget(activeScrollController);
+      },
+    )));
+    await tester.pump();
+
+    Future<void> expectCaretInMiddleThird() async {
+      double? lastRelativeY;
+      double? lastViewportHeight;
+      for (var frame = 0; frame < 12; frame++) {
+        await tester.pump();
+        final caret = key.currentState!.activeCaretGeometry;
+        if (caret == null) continue;
+        final documentBox = tester.renderObject(
+          find.byType(HomericEditableDocument),
+        ) as RenderBox;
+        final viewportTop = documentBox.localToGlobal(Offset.zero).dy;
+        final viewportHeight = documentBox.size.height;
+        final relativeY = caret.globalRect.center.dy - viewportTop;
+        lastRelativeY = relativeY;
+        lastViewportHeight = viewportHeight;
+        if ((relativeY - viewportHeight / 2).abs() < 0.5) {
+          return;
+        }
+      }
+      fail(
+        'caret Y=$lastRelativeY must reach the viewport center for '
+        'viewportHeight=$lastViewportHeight within 12 frames',
+      );
+    }
+
+    // Mount a mid-document block, then let typewriter pin the caret line.
+    final focusPending = key.currentState!.settleFocusOnBlock('block-20');
+    await tester.pumpAndSettle();
+    expect(await focusPending, HomericFocusSettlementResult.focused);
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(
+        controller.document.indexOfBlockId('block-20')!,
+        5,
+      )),
+    );
+    await expectCaretInMiddleThird();
+    final caretYBefore =
+        key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+    final scrollBefore = scrollController.offset;
+
+    final scrollAway = scrollController.animateTo(
+      (scrollController.offset + 80).clamp(
+        scrollController.position.minScrollExtent,
+        scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.linear,
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(scrollController.position.isScrollingNotifier.value, isTrue);
+    expect(controller.replaceSelection('Y'), isTrue);
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await scrollAway;
+    await expectCaretInMiddleThird();
+
+    expect(controller.replaceSelection('X'), isTrue);
+    await expectCaretInMiddleThird();
+
+    // Paragraph breaks push the logical caret down; the page should move so
+    // the caret line remains in the middle third.
+    for (var i = 0; i < 8; i++) {
+      expect(controller.insertParagraphBreak(), isTrue);
+      await expectCaretInMiddleThird();
+    }
+
+    final caretYAfter =
+        key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+    expect(
+      caretYAfter,
+      closeTo(caretYBefore, 24),
+      reason: 'typewriter keeps caret Y stable; the page moves instead',
+    );
+    expect(scrollController.offset, greaterThan(scrollBefore));
+
+    // A consumer can replace its external controller while typewriter is
+    // waiting for the old position to become idle. The pending listener must
+    // be detached and centering must resume against the replacement.
+    final oldScroll = scrollController.animateTo(
+      (scrollController.offset + 80).clamp(
+        scrollController.position.minScrollExtent,
+        scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.linear,
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(scrollController.position.isScrollingNotifier.value, isTrue);
+    expect(controller.replaceSelection('Z'), isTrue);
+    await tester.pump();
+
+    final replacementScrollController = ScrollController();
+    addTearDown(replacementScrollController.dispose);
+    rebuildDocument(() {
+      activeScrollController = replacementScrollController;
+    });
+    await tester.pumpAndSettle();
+    await expectCaretInMiddleThird();
+    expect(replacementScrollController.hasClients, isTrue);
+
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await oldScroll;
+    await expectCaretInMiddleThird();
+
+    // Re-enabling the feature must center the unchanged logical caret.
+    rebuildDocument(() {
+      typewriterFocusEnabled = false;
+    });
+    await tester.pump();
+    replacementScrollController.jumpTo(
+      (replacementScrollController.offset + 80).clamp(
+        replacementScrollController.position.minScrollExtent,
+        replacementScrollController.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    rebuildDocument(() {
+      typewriterFocusEnabled = true;
+    });
+    await expectCaretInMiddleThird();
+
+    // A replacement editor controller can have the same selection and
+    // revision values; its identity change must still force centering.
+    replacementScrollController.jumpTo(
+      (replacementScrollController.offset + 80).clamp(
+        replacementScrollController.position.minScrollExtent,
+        replacementScrollController.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    final replacementController = HomericEditorController(
+      document: controller.document,
+      selection: controller.selection,
+    );
+    final replacementSession =
+        HomericTextInputSession(controller: replacementController);
+    addTearDown(replacementSession.dispose);
+    addTearDown(replacementController.dispose);
+    rebuildDocument(() {
+      activeController = replacementController;
+      activeSession = replacementSession;
+    });
+    await expectCaretInMiddleThird();
+
+    // Live viewport inset changes must re-center an unchanged logical caret.
+    replacementScrollController.jumpTo(
+      (replacementScrollController.offset + 80).clamp(
+        replacementScrollController.position.minScrollExtent,
+        replacementScrollController.position.maxScrollExtent,
+      ),
+    );
+    await tester.pump();
+    livePadding.value = const EdgeInsets.symmetric(vertical: 240);
+    await expectCaretInMiddleThird();
+  });
+
+  testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewportTop = documentBox.localToGlobal(Offset.zero).dy;
+    final before = key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+
+    for (var i = 0; i < 12; i++) {
+      expect(controller.insertParagraphBreak(), isTrue);
+      await tester.pump();
+      await tester.pump();
+    }
+
+    final after = key.currentState!.activeCaretGeometry!.globalRect.center.dy;
+    final relativeY = after - viewportTop;
+    expect(after, greaterThan(before));
+    expect(
+      relativeY > documentBox.size.height * 2 / 3 ||
+          relativeY < documentBox.size.height / 3,
+      isTrue,
+      reason: 'default path must not pin caret into the middle third',
+    );
+  });
 }
 
 Widget _editableDocument(
@@ -3877,6 +4585,9 @@ Widget _editableDocument(
   ValueChanged<HomericBlockMoveRejection>? onMoveRejected,
   ValueChanged<HomericDocumentCommandRejection>? onCommandRejected,
   HomericBlockGrabberStyle blockGrabberStyle = const HomericBlockGrabberStyle(),
+  double Function(BuildContext, Block)? blockGrabberCenterY,
+  TextStyle? baseStyle,
+  BlockParagraphSpec paragraphSpec = const BlockParagraphSpec(),
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -3890,6 +4601,7 @@ Widget _editableDocument(
         onMoveRejected: onMoveRejected,
         onCommandRejected: onCommandRejected,
         blockGrabberStyle: blockGrabberStyle,
+        blockGrabberCenterY: blockGrabberCenterY,
         cacheExtent: 0,
         estimatedBlockHeight: 44,
         blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
@@ -3897,6 +4609,8 @@ Widget _editableDocument(
           inputSession: session,
           blockId: block.id,
           focusNode: focusNode,
+          baseStyle: baseStyle,
+          paragraphSpec: paragraphSpec,
           resolveStyle: (_) => _style,
         ),
       ),

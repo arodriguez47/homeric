@@ -22,6 +22,10 @@ export 'src/editing/editor_clipboard.dart'
         HomericPasteRejected,
         SystemHomericClipboard;
 export 'src/editing/editable_paragraph.dart';
+export 'src/editing/markdown_inline.dart';
+export 'src/editing/markdown_image_slot.dart';
+export 'src/editing/markdown_list_indent.dart';
+
 export 'src/input/macos_history_bridge.dart';
 export 'src/input/text_input_session.dart';
 export 'src/model/attributes.dart';

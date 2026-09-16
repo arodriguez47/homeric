@@ -82,6 +82,49 @@ void main() {
     expect(controller.document.blocks.single.text, 'ac');
   });
 
+  testWidgets('mouse tap resolves geometry after a render-only relayout',
+      (tester) async {
+    final document = _document('alpha beta gamma delta');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    await tester.pump();
+
+    final paragraph = find.byType(HomericParagraph);
+    final render = tester.renderObject<RenderHomericParagraph>(paragraph);
+    final originalGeneration = render.layoutGeneration;
+    render.markNeedsLayout();
+    await tester.pump();
+    expect(render.layoutGeneration, greaterThan(originalGeneration));
+
+    await tester.tapAt(
+      tester.getTopLeft(paragraph) + const Offset(92, 7),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+
+    expect(
+      controller.selection,
+      isNot(HomericSelection.collapsed(document.positionAt(0, 0))),
+      reason: 'a render-only layout must not leave pointer callbacks holding '
+          'a stale geometry generation',
+    );
+    expect(controller.selection!.head, greaterThan(5),
+        reason: 'the click must land near the requested middle-of-line glyph, '
+            'not merely restore focus at the beginning');
+  });
+
   testWidgets('standalone touch selection uses paragraph-local chrome',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -1047,6 +1090,114 @@ void main() {
     expect(session.isAttached, isTrue,
         reason: 'the still-focused host binds one fresh input epoch');
     handle.dispose();
+  });
+
+  testWidgets(
+      'connection loss without composition reattaches and accepts the next delta',
+      (tester) async {
+    final document = _document('ab');
+    final controller = HomericEditorController(
+      document: document,
+      selection: const HomericSelection.collapsed(2),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_harness(HomericEditableParagraph(
+      controller: controller,
+      inputSession: session,
+      focusNode: focusNode,
+      blockId: 'b',
+      resolveStyle: (_) => _style,
+    )));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    expect(controller.composing, isNull);
+    final staleDelta = session.debugDeltaCallback!;
+
+    await _sendConnectionClosed(binding, 1);
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+    expect(session.isAttached, isTrue,
+        reason: 'the still-focused host must reopen one input epoch');
+    expect(session.debugDeltaCallback, isNot(same(staleDelta)));
+
+    staleDelta(<TextEditingDelta>[
+      const TextEditingDeltaInsertion(
+        oldText: 'ab',
+        textInserted: 'X',
+        insertionOffset: 1,
+        selection: TextSelection.collapsed(offset: 2),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'ab');
+
+    await _sendDeltas(binding, 2, [
+      _delta(
+        oldText: 'ab',
+        deltaText: 'Y',
+        start: 1,
+        end: 1,
+        selection: 2,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'aYb');
+    expect(controller.canUndo, isTrue);
+  });
+
+  testWidgets(
+      'replacement paragraph reattaches an already-focused external node',
+      (tester) async {
+    final controller = HomericEditorController(
+      document: _document(''),
+      selection: const HomericSelection.collapsed(1),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    HomericEditableParagraph paragraph() => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          focusNode: focusNode,
+          blockId: 'b',
+          resolveStyle: (_) => _style,
+        );
+
+    await tester.pumpWidget(_harness(paragraph()));
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+
+    // Reparenting through a new presentation wrapper disposes the outgoing
+    // editable paragraph while preserving the external document focus node.
+    await tester.pumpWidget(
+      _harness(Row(children: <Widget>[Expanded(child: paragraph())])),
+    );
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+    expect(session.isAttached, isTrue);
+    session.debugDeltaCallback!(const <TextEditingDelta>[
+      TextEditingDeltaInsertion(
+        oldText: '',
+        textInserted: 'x',
+        insertionOffset: 0,
+        selection: TextSelection.collapsed(offset: 1),
+        composing: TextRange.empty,
+      ),
+    ]);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'x');
   });
 
   testWidgets('paste started before blur stays stale after refocus',
@@ -2994,6 +3145,76 @@ void main() {
     expect(before.hasFocus, isTrue);
     expect(controller.document.blocks.single.text, 'abc');
   });
+
+  testWidgets('Tab nests a list item; Shift-Tab outdents or traverses',
+      (tester) async {
+    final document = _document('- item');
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 6)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final before = FocusNode();
+    final editor = FocusNode();
+    final after = FocusNode();
+    addTearDown(before.dispose);
+    addTearDown(editor.dispose);
+    addTearDown(after.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: Column(children: [
+        Focus(focusNode: before, child: const SizedBox(width: 1, height: 1)),
+        SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: editor,
+            blockId: 'b',
+            resolveStyle: (_) => _style,
+          ),
+        ),
+        Focus(focusNode: after, child: const SizedBox(width: 1, height: 1)),
+      ]),
+    ));
+    await tester.pump();
+    editor.requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  - item');
+    expect(after.hasFocus, isFalse);
+    expect(
+      controller.blockOffsetForGlobalPosition('b', controller.selection!.head),
+      8,
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '    - item');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  - item');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '- item');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '- item');
+    expect(before.hasFocus, isTrue);
+  });
 }
 
 Document _document(String text) => Document([
@@ -3040,6 +3261,21 @@ Map<String, Object?> _delta({
       'composingBase': -1,
       'composingExtent': -1,
     };
+
+Future<void> _sendConnectionClosed(
+  TestWidgetsFlutterBinding binding,
+  int clientId,
+) async {
+  final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+    'method': 'TextInputClient.onConnectionClosed',
+    'args': <Object?>[clientId],
+  });
+  await binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/textinput',
+    message,
+    (_) {},
+  );
+}
 
 Future<void> _sendDeltas(
   TestWidgetsFlutterBinding binding,

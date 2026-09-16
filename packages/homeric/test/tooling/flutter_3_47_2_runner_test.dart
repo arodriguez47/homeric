@@ -5,10 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   final repositoryRoot = Directory.current.parent.parent;
   final runner = File(
-    '${repositoryRoot.path}/scripts/verify_flutter_3_24.sh',
+    '${repositoryRoot.path}/scripts/verify_flutter_3_47_2.sh',
   );
 
-  test('Flutter 3.24 runner owns a current, self-validating manifest',
+  test('Flutter 3.47.2 runner owns a current, self-validating manifest',
       () async {
     expect(
       runner.existsSync(),
@@ -33,7 +33,7 @@ void main() {
     expect(result.stdout, contains('manifest valid'));
   });
 
-  test('Flutter 3.24 runner rejects a different SDK before running work',
+  test('Flutter 3.47.2 runner rejects a different SDK before running work',
       () async {
     final temporaryDirectory = await Directory.systemTemp.createTemp(
       'homeric-flutter-version-',
@@ -54,6 +54,12 @@ void main() {
     );
 
     expect(result.exitCode, 2);
-    expect(result.stderr, contains('Expected Flutter 3.24.x'));
+    expect(result.stderr, contains('Expected Flutter 3.47.2'));
+  });
+
+  test('GitHub Actions pins Flutter 3.47.2 exactly', () {
+    final workflow = File('${repositoryRoot.path}/.github/workflows/ci.yaml');
+
+    expect(workflow.readAsStringSync(), contains("flutter-version: '3.47.2'"));
   });
 }

@@ -55,13 +55,15 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   final result = <Decoration>[];
 
   void hideDelimiter(int start, int end) {
-    result.add(Decoration.replace(
-      block.id,
-      start,
-      end,
-      replacementLength: 0,
-      spec: 'hide',
-    ));
+    result.add(
+      Decoration.replace(
+        block.id,
+        start,
+        end,
+        replacementLength: 0,
+        spec: 'hide',
+      ),
+    );
   }
 
   void styleRange(int start, int end, String spec) {
@@ -101,9 +103,7 @@ List<PaintLayer> journalMarkdownPaintLayersForBlock(
         if (decoration.spec == 'highlight')
           PaintLayer(
             range: DocRange(
-              DocOffset(decoration.start),
-              DocOffset(decoration.end),
-            ),
+                DocOffset(decoration.start), DocOffset(decoration.end)),
             band: PaintBand.underlay,
             painter: solidWashPainter,
             spec: _JournalPaintMap.highlightWash,
@@ -169,25 +169,30 @@ RenderHomericParagraph _paragraphRender(WidgetTester tester) =>
 
 void main() {
   test(
-      'substituting <comment> via ReplacementContent paints the tag — wrong host path',
-      () {
-    final block = para('b', '++comment++');
-    final wrong = deriveViewText(block, [
-      Decoration.replace(
-        'b',
-        0,
-        11,
-        replacementLength: 9,
-        spec: const ReplacementText('<comment>'),
-      ),
-    ]);
-    expect(wrong.viewText, '<comment>',
+    'substituting <comment> via ReplacementContent paints the tag — wrong host path',
+    () {
+      final block = para('b', '++comment++');
+      final wrong = deriveViewText(block, [
+        Decoration.replace(
+          'b',
+          0,
+          11,
+          replacementLength: 9,
+          spec: const ReplacementText('<comment>'),
+        ),
+      ]);
+      expect(
+        wrong.viewText,
+        '<comment>',
         reason: 'a host that replaces the span with ReplacementText paints '
-            'the tag — Homeric does not rewrite ++ to <comment> on its own');
-  });
+            'the tag — Homeric does not rewrite ++ to <comment> on its own',
+      );
+    },
+  );
 
-  testWidgets('after space, hidden ATX # still paints heading weight/size',
-      (tester) async {
+  testWidgets('after space, hidden ATX # still paints heading weight/size', (
+    tester,
+  ) async {
     final controller = HomericEditorController(
       document: _document('# Heading '),
     );
@@ -197,11 +202,13 @@ void main() {
     addTearDown(controller.dispose);
 
     paintMap.beginBuild();
-    await tester.pumpWidget(_documentHarness(
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    ));
+    await tester.pumpWidget(
+      _documentHarness(
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+      ),
+    );
     await tester.pump();
 
     expect(_paragraphRender(tester).source.viewText, 'Heading ');
@@ -214,65 +221,81 @@ void main() {
     controller.notifyListeners();
     await tester.pump();
 
-    expect(paintMap.paintCalls, greaterThan(0),
-        reason: 'paintStyler must run when the resolve map is refilled');
-    expect(paintMap.styleAtViewOffset(0)?.fontWeight, FontWeight.w700,
-        reason: 'heading weight must survive hide-on-space host rebuilds');
+    expect(
+      paintMap.paintCalls,
+      greaterThan(0),
+      reason: 'paintStyler must run when the resolve map is refilled',
+    );
+    expect(
+      paintMap.styleAtViewOffset(0)?.fontWeight,
+      FontWeight.w700,
+      reason: 'heading weight must survive hide-on-space host rebuilds',
+    );
     expect(paintMap.styleAtViewOffset(0)?.fontSize, 28);
   });
 
   testWidgets(
-      'after hide-on-leave, hidden ATX # still paints heading weight/size',
-      (tester) async {
-    final document = _document('## Subheading ');
-    final controller = HomericEditorController(
-      document: document,
-      selection: HomericSelection.collapsed(document.positionAt(0, 12)),
-    );
-    final session = HomericTextInputSession(controller: controller);
-    final paintMap = _JournalPaintMap();
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+    'after hide-on-leave, hidden ATX # still paints heading weight/size',
+    (tester) async {
+      final document = _document('## Subheading ');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 12)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
 
-    paintMap.beginBuild();
-    await tester.pumpWidget(_documentHarness(
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    ));
-    await tester.pump();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        _documentHarness(
+          controller: controller,
+          session: session,
+          paintMap: paintMap,
+        ),
+      );
+      await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'Subheading ');
-    expect(paintMap.styleAtViewOffset(0)?.fontWeight, FontWeight.w700);
-    expect(paintMap.styleAtViewOffset(0)?.fontSize, 24);
+      expect(_paragraphRender(tester).source.viewText, 'Subheading ');
+      expect(paintMap.styleAtViewOffset(0)?.fontWeight, FontWeight.w700);
+      expect(paintMap.styleAtViewOffset(0)?.fontSize, 24);
 
-    // Caret enters the mark: reveal-on-touch shows the touched delimiter.
-    controller.setSelection(
-      HomericSelection.collapsed(document.positionAt(0, 1)),
-    );
-    paintMap.beginBuild();
-    await tester.pump();
-    expect(_paragraphRender(tester).source.viewText, isNot('Subheading '),
-        reason: 'caret on a hidden delimiter must reveal it');
+      // Caret enters the mark: reveal-on-touch shows the touched delimiter.
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(
+        _paragraphRender(tester).source.viewText,
+        isNot('Subheading '),
+        reason: 'caret on a hidden delimiter must reveal it',
+      );
 
-    // Caret leaves the mark: hide-on-leave folds delimiters again.
-    controller.setSelection(
-      HomericSelection.collapsed(document.positionAt(0, 12)),
-    );
-    paintMap.beginBuild();
-    paintMap.paintCalls = 0;
-    paintMap.paintedStyles.clear();
-    await tester.pump();
+      // Caret leaves the mark: hide-on-leave folds delimiters again.
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 12)),
+      );
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.paintedStyles.clear();
+      await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'Subheading ',
-        reason: 'hide-on-leave must fold delimiters back out of view text');
-    expect(paintMap.paintCalls, greaterThan(0));
-    expect(paintMap.styleAtViewOffset(0)?.fontWeight, FontWeight.w700);
-    expect(paintMap.styleAtViewOffset(0)?.fontSize, 24);
-  });
+      expect(
+        _paragraphRender(tester).source.viewText,
+        'Subheading ',
+        reason: 'hide-on-leave must fold delimiters back out of view text',
+      );
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(paintMap.styleAtViewOffset(0)?.fontWeight, FontWeight.w700);
+      expect(paintMap.styleAtViewOffset(0)?.fontSize, 24);
+    },
+  );
 
-  testWidgets('after space, hidden == still paints highlight underlay',
-      (tester) async {
+  testWidgets('after space, hidden == still paints highlight underlay', (
+    tester,
+  ) async {
     final controller = HomericEditorController(
       document: _document('==marked== '),
     );
@@ -282,11 +305,13 @@ void main() {
     addTearDown(controller.dispose);
 
     paintMap.beginBuild();
-    await tester.pumpWidget(_documentHarness(
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    ));
+    await tester.pumpWidget(
+      _documentHarness(
+        controller: controller,
+        session: session,
+        paintMap: paintMap,
+      ),
+    );
     await tester.pump();
 
     final render = _paragraphRender(tester);
@@ -310,134 +335,166 @@ void main() {
     );
   });
 
-  testWidgets('after hide-on-leave, hidden == still paints highlight underlay',
-      (tester) async {
-    final document = _document('==marked== ');
-    final controller = HomericEditorController(
-      document: document,
-      selection: HomericSelection.collapsed(document.positionAt(0, 11)),
-    );
-    final session = HomericTextInputSession(controller: controller);
-    final paintMap = _JournalPaintMap();
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+  testWidgets(
+    'after hide-on-leave, hidden == still paints highlight underlay',
+    (tester) async {
+      final document = _document('==marked== ');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 11)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
 
-    paintMap.beginBuild();
-    await tester.pumpWidget(_documentHarness(
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    ));
-    await tester.pump();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        _documentHarness(
+          controller: controller,
+          session: session,
+          paintMap: paintMap,
+        ),
+      );
+      await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'marked ');
+      expect(_paragraphRender(tester).source.viewText, 'marked ');
 
-    controller.setSelection(
-      HomericSelection.collapsed(document.positionAt(0, 1)),
-    );
-    paintMap.beginBuild();
-    await tester.pump();
-    expect(_paragraphRender(tester).source.viewText, isNot('marked '),
-        reason: 'caret on a hidden delimiter must reveal it');
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(
+        _paragraphRender(tester).source.viewText,
+        isNot('marked '),
+        reason: 'caret on a hidden delimiter must reveal it',
+      );
 
-    // Caret leaves the mark: hide-on-leave folds delimiters again.
-    controller.setSelection(
-      HomericSelection.collapsed(document.positionAt(0, 11)),
-    );
-    paintMap.beginBuild();
-    await tester.pump();
+      // Caret leaves the mark: hide-on-leave folds delimiters again.
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 11)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'marked ');
-    expect(_paragraphRender(tester).paintLayers, hasLength(1));
-    expect(
-      (_paragraphRender(tester).paintLayers.single.spec as SolidWashSpec).color,
-      const Color(0x33FFFF00),
-      reason: 'highlight underlay must survive hide-on-leave',
-    );
-  });
+      expect(_paragraphRender(tester).source.viewText, 'marked ');
+      expect(_paragraphRender(tester).paintLayers, hasLength(1));
+      expect(
+        (_paragraphRender(tester).paintLayers.single.spec as SolidWashSpec)
+            .color,
+        const Color(0x33FFFF00),
+        reason: 'highlight underlay must survive hide-on-leave',
+      );
+    },
+  );
 
   testWidgets(
-      'after space, hidden ++ still paints comment style and keeps source',
-      (tester) async {
-    const literal = '++comment++ ';
-    final controller = HomericEditorController(document: _document(literal));
-    final session = HomericTextInputSession(controller: controller);
-    final paintMap = _JournalPaintMap();
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+    'after space, hidden ++ still paints comment style and keeps source',
+    (tester) async {
+      const literal = '++comment++ ';
+      final controller = HomericEditorController(document: _document(literal));
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
 
-    paintMap.beginBuild();
-    await tester.pumpWidget(_documentHarness(
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    ));
-    await tester.pump();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        _documentHarness(
+          controller: controller,
+          session: session,
+          paintMap: paintMap,
+        ),
+      );
+      await tester.pump();
 
-    final render = _paragraphRender(tester);
-    expect(controller.document.blocks.single.text, literal,
-        reason: 'stored source must remain ++comment++, never rewritten');
-    expect(render.source.viewText, 'comment ');
-    expect(render.source.viewText, isNot(contains('<comment>')),
-        reason: 'hide-delimiter live preview must never paint XML-like tags');
-    expect(paintMap.styleAtViewOffset(0)?.color, const Color(0xFF888888));
+      final render = _paragraphRender(tester);
+      expect(
+        controller.document.blocks.single.text,
+        literal,
+        reason: 'stored source must remain ++comment++, never rewritten',
+      );
+      expect(render.source.viewText, 'comment ');
+      expect(
+        render.source.viewText,
+        isNot(contains('<comment>')),
+        reason: 'hide-delimiter live preview must never paint XML-like tags',
+      );
+      expect(paintMap.styleAtViewOffset(0)?.color, const Color(0xFF888888));
 
-    paintMap.beginBuild();
-    paintMap.paintCalls = 0;
-    paintMap.paintedStyles.clear();
-    controller.notifyListeners();
-    await tester.pump();
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.paintedStyles.clear();
+      controller.notifyListeners();
+      await tester.pump();
 
-    expect(paintMap.paintCalls, greaterThan(0));
-    expect(paintMap.styleAtViewOffset(0)?.color, const Color(0xFF888888),
-        reason: 'comment style must survive hide-on-space host rebuilds');
-  });
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(
+        paintMap.styleAtViewOffset(0)?.color,
+        const Color(0xFF888888),
+        reason: 'comment style must survive hide-on-space host rebuilds',
+      );
+    },
+  );
 
   testWidgets(
-      'after hide-on-leave, hidden ++ still paints comment style and reveals on caret',
-      (tester) async {
-    const literal = '++comment++ ';
-    final document = _document(literal);
-    final controller = HomericEditorController(
-      document: document,
-      selection: HomericSelection.collapsed(document.positionAt(0, 12)),
-    );
-    final session = HomericTextInputSession(controller: controller);
-    final paintMap = _JournalPaintMap();
-    addTearDown(session.dispose);
-    addTearDown(controller.dispose);
+    'after hide-on-leave, hidden ++ still paints comment style and reveals on caret',
+    (tester) async {
+      const literal = '++comment++ ';
+      final document = _document(literal);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 12)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final paintMap = _JournalPaintMap();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
 
-    paintMap.beginBuild();
-    await tester.pumpWidget(_documentHarness(
-      controller: controller,
-      session: session,
-      paintMap: paintMap,
-    ));
-    await tester.pump();
+      paintMap.beginBuild();
+      await tester.pumpWidget(
+        _documentHarness(
+          controller: controller,
+          session: session,
+          paintMap: paintMap,
+        ),
+      );
+      await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'comment ');
-    expect(controller.document.blocks.single.text, literal);
+      expect(_paragraphRender(tester).source.viewText, 'comment ');
+      expect(controller.document.blocks.single.text, literal);
 
-    controller.setSelection(
-      HomericSelection.collapsed(document.positionAt(0, 1)),
-    );
-    paintMap.beginBuild();
-    await tester.pump();
-    expect(_paragraphRender(tester).source.viewText, isNot('comment '),
-        reason: 'caret on a hidden ++ delimiter must reveal it');
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      paintMap.beginBuild();
+      await tester.pump();
+      expect(
+        _paragraphRender(tester).source.viewText,
+        isNot('comment '),
+        reason: 'caret on a hidden ++ delimiter must reveal it',
+      );
 
-    controller.setSelection(
-      HomericSelection.collapsed(document.positionAt(0, 12)),
-    );
-    paintMap.beginBuild();
-    paintMap.paintCalls = 0;
-    paintMap.paintedStyles.clear();
-    await tester.pump();
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(0, 12)),
+      );
+      paintMap.beginBuild();
+      paintMap.paintCalls = 0;
+      paintMap.paintedStyles.clear();
+      await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'comment ',
-        reason: 'hide-on-leave must fold ++ delimiters back out of view text');
-    expect(_paragraphRender(tester).source.viewText, isNot(contains('<comment>')));
-    expect(paintMap.paintCalls, greaterThan(0));
-    expect(paintMap.styleAtViewOffset(0)?.color, const Color(0xFF888888));
-  });
+      expect(
+        _paragraphRender(tester).source.viewText,
+        'comment ',
+        reason: 'hide-on-leave must fold ++ delimiters back out of view text',
+      );
+      expect(
+        _paragraphRender(tester).source.viewText,
+        isNot(contains('<comment>')),
+      );
+      expect(paintMap.paintCalls, greaterThan(0));
+      expect(paintMap.styleAtViewOffset(0)?.color, const Color(0xFF888888));
+    },
+  );
 }

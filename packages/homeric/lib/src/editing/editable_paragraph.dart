@@ -25,6 +25,7 @@ import '../view/view_map.dart';
 import 'editable_document.dart';
 import 'editor_clipboard.dart';
 import 'editor_controller.dart';
+import 'markdown_list_indent.dart';
 import 'selection_overlay.dart';
 import 'spell_check.dart';
 
@@ -452,6 +453,23 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
     widget.inputSession.addListener(_inputSessionChanged);
     WidgetsBinding.instance.addObserver(this);
+    // A host may rebuild the same block under a different presentation
+    // wrapper while retaining its document-owned FocusNode. The outgoing
+    // paragraph closes its input epoch during disposal, but the replacement
+    // receives an already-focused node, so Focus emits no new callback that
+    // would normally attach input. Reconcile once after the replacement has
+    // mounted and the outgoing host has finished disposing.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _disposing ||
+          !_focusNode.hasFocus ||
+          _controller.isReadOnly ||
+          _controller.activeBlockId != widget.blockId ||
+          widget.inputSession.isAttached) {
+        return;
+      }
+      _attachInput();
+    });
   }
 
   @override
@@ -879,15 +897,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         _overlayContext = overlayContext;
         final geometryDocumentRevision = _controller.documentRevision;
         _geometryDocumentRevision = geometryDocumentRevision;
-        final consumerGeometry = HomericEditableBlockGeometry._(
-          blockId: widget.blockId,
-          documentRevision: geometryDocumentRevision,
-          layoutGeneration: geometry.generation,
-          geometry: geometry,
-          isCurrent: () =>
-              geometryDocumentRevision == _controller.documentRevision &&
-              _isCurrentGeometry(geometry),
-        );
+        final consumerGeometry =
+            _consumerGeometry(geometry, geometryDocumentRevision);
         _documentHost?.registerSelectionHost(
           widget.blockId,
           owner: this,
@@ -899,15 +910,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             return render.localToGlobal(Offset.zero) & render.size;
           },
           hitTest: (globalPoint) {
-            if (!_isCurrentGeometry(geometry)) return null;
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
             final render = overlayContext.findRenderObject();
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
             final localPoint = render.globalToLocal(globalPoint);
-            final rect = geometry.blockRect.value;
+            final paragraphGeometry = current._geometry;
+            final rect = paragraphGeometry.blockRect.value;
             final hit = _caretForPoint(
-              geometry,
+              paragraphGeometry,
               Offset(
                 localPoint.dx.clamp(rect.left, rect.right),
                 localPoint.dy.clamp(rect.top, rect.bottom),
@@ -916,15 +929,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             return (offset: hit.position, affinity: hit.affinity);
           },
           wordRangeAt: (globalPoint) {
-            if (!_isCurrentGeometry(geometry)) return null;
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
             final render = overlayContext.findRenderObject();
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
             final localPoint = render.globalToLocal(globalPoint);
-            final rect = geometry.blockRect.value;
+            final paragraphGeometry = current._geometry;
+            final rect = paragraphGeometry.blockRect.value;
             return _wordForPoint(
-              geometry,
+              paragraphGeometry,
               Offset(
                 localPoint.dx.clamp(rect.left, rect.right),
                 localPoint.dy.clamp(rect.top, rect.bottom),
@@ -932,15 +947,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             );
           },
           globalRangeRects: (range) {
-            if (geometryDocumentRevision != _controller.documentRevision ||
-                !_isCurrentGeometry(geometry)) {
-              return null;
-            }
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
             final render = overlayContext.findRenderObject();
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
-            final localRects = consumerGeometry.rectsForRange(range);
+            final localRects = current.rectsForRange(range);
             if (localRects == null) return null;
             return <Rect>[
               for (final rect in localRects)
@@ -948,8 +961,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             ];
           },
           activeCaretGeometry: () {
-            if (geometryDocumentRevision != _controller.documentRevision ||
-                !_isCurrentGeometry(geometry) ||
+            final current = _currentConsumerGeometry();
+            if (current == null ||
                 _controller.activeBlockId != widget.blockId) {
               return null;
             }
@@ -962,7 +975,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                 !render.hasSize) {
               return null;
             }
-            final localRect = consumerGeometry.caretRect(
+            final localRect = current.caretRect(
               selection.head,
               affinity: selection.affinity,
             );
@@ -970,20 +983,24 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             final globalOrigin = render.localToGlobal(localRect.topLeft);
             return HomericActiveCaretGeometry(
               blockId: widget.blockId,
-              documentRevision: geometryDocumentRevision,
-              layoutGeneration: geometry.generation,
+              documentRevision: current.documentRevision,
+              layoutGeneration: current.layoutGeneration,
               globalRect: globalOrigin & localRect.size,
             );
           },
-          magnifierInfo: (globalPoint) => _magnifierInfoForPoint(
-            geometry,
-            overlayContext,
-            globalPoint,
-          ),
+          magnifierInfo: (globalPoint) {
+            final current = _currentConsumerGeometry();
+            if (current == null) return null;
+            return _magnifierInfoForPoint(
+              current._geometry,
+              overlayContext,
+              globalPoint,
+            );
+          },
           selectionEndpointGeometry: (endpoint, blockOffset, affinity) {
+            final current = _currentConsumerGeometry();
             if (_resolvedTouchSelectionConfiguration == null ||
-                geometryDocumentRevision != _controller.documentRevision ||
-                !_isCurrentGeometry(geometry)) {
+                current == null) {
               return null;
             }
             final localEndpoint = _localSelectionEndpoint(endpoint);
@@ -996,7 +1013,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
-            final localRect = consumerGeometry.caretRect(
+            final localRect = current.caretRect(
               blockOffset,
               affinity: affinity,
             );
@@ -1004,7 +1021,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             return (
               globalRect:
                   render.localToGlobal(localRect.topLeft) & localRect.size,
-              layoutGeneration: geometry.generation,
+              layoutGeneration: current.layoutGeneration,
               layerLink: _selectionLayerLink(endpoint),
               textDirection:
                   widget.paragraphSpec.direction == ParagraphDirection.rtl
@@ -1029,32 +1046,56 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           onPointerCancel: (_) => _cancelGestureSequence(),
           child: TextSelectionGestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTapDown: (details) => _tapDown(geometry, details),
+            onTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) _tapDown(current, details);
+            },
             onSingleTapUp: (details) {
-              if (!consumerGeometry.isCurrent) return;
+              final current = _currentConsumerGeometry();
+              if (current == null) return;
               _completeSingleTap(details.kind);
               widget.onSingleTap?.call(
-                consumerGeometry,
+                current,
                 details.localPosition,
                 details.globalPosition,
               );
             },
-            onDoubleTapDown: (details) => _doubleTapDown(geometry, details),
-            onTripleTapDown: (details) => _tripleTapDown(geometry, details),
-            onSingleLongTapStart: (details) =>
-                _longPressStart(geometry, details),
-            onSingleLongTapMoveUpdate: (details) =>
-                _longPressMoveUpdate(geometry, details),
+            onDoubleTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) _doubleTapDown(current, details);
+            },
+            onTripleTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) _tripleTapDown(current, details);
+            },
+            onSingleLongTapStart: (details) {
+              final current = _currentGeometry();
+              if (current != null) _longPressStart(current, details);
+            },
+            onSingleLongTapMoveUpdate: (details) {
+              final current = _currentGeometry();
+              if (current != null) _longPressMoveUpdate(current, details);
+            },
             onSingleLongTapEnd: (_) => _longPressEnd(),
-            onDragSelectionStart: (details) =>
-                _startSelectionDrag(geometry, details),
-            onDragSelectionUpdate: (details) =>
-                _updateSelectionDrag(geometry, details.localPosition),
+            onDragSelectionStart: (details) {
+              final current = _currentGeometry();
+              if (current != null) _startSelectionDrag(current, details);
+            },
+            onDragSelectionUpdate: (details) {
+              final current = _currentGeometry();
+              if (current != null) {
+                _updateSelectionDrag(current, details.localPosition);
+              }
+            },
             onDragSelectionEnd: (_) => _endSelectionPointer(),
             onSingleTapCancel: _cancelGestureSequence,
             onTapTrackReset: _cancelGestureSequence,
-            onSecondaryTapDown: (details) =>
-                _secondaryTapDown(geometry, details.localPosition),
+            onSecondaryTapDown: (details) {
+              final current = _currentGeometry();
+              if (current != null) {
+                _secondaryTapDown(current, details.localPosition);
+              }
+            },
             onSecondaryTap: () => _showContextMenu(useSecondaryAnchor: true),
             child: const SizedBox.expand(),
           ),
@@ -1064,14 +1105,19 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             : MouseRegion(
                 opaque: false,
                 onHover: (event) {
-                  if (!consumerGeometry.isCurrent) return;
+                  final current = _currentConsumerGeometry();
+                  if (current == null) return;
                   widget.onHover?.call(
-                    consumerGeometry,
+                    current,
                     event.localPosition,
                     event.position,
                   );
                 },
-                onExit: (_) => widget.onHoverExit?.call(consumerGeometry),
+                onExit: (_) {
+                  widget.onHoverExit?.call(
+                    _currentConsumerGeometry() ?? consumerGeometry,
+                  );
+                },
                 child: selectionPlane,
               );
         return <Widget>[
@@ -1160,6 +1206,30 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
 
     final shortcuts = <ShortcutActivator, Intent>{
+      // Browser text input knows only one paragraph, so document navigation
+      // must reach our existing guarded movement action rather than the DOM.
+      if (_documentHost != null) ...{
+        const SingleActivator(LogicalKeyboardKey.arrowUp):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: false, collapseSelection: true),
+        const SingleActivator(LogicalKeyboardKey.arrowDown):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: true, collapseSelection: true),
+        const SingleActivator(LogicalKeyboardKey.arrowUp, shift: true):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: false, collapseSelection: false),
+        const SingleActivator(LogicalKeyboardKey.arrowDown, shift: true):
+            const ExtendSelectionVerticallyToAdjacentLineIntent(
+                forward: true, collapseSelection: false),
+      },
+      // Native input owns only this paragraph's text. At its edge (or with
+      // a document selection), it cannot delete a block boundary and may
+      // emit no text delta at all. Keep those keys in the document controller.
+      for (final forward in <bool>[false, true])
+        if (_documentHost != null)
+          SingleActivator(
+            forward ? LogicalKeyboardKey.delete : LogicalKeyboardKey.backspace,
+          ): DeleteCharacterIntent(forward: forward),
       if (_documentHost != null)
         const SingleActivator(LogicalKeyboardKey.enter):
             const HomericInsertParagraphBreakIntent(),
@@ -1210,9 +1280,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         invoke: _moveCaret,
       ),
       _TraverseIntent: _HostAction<_TraverseIntent>(
-        invoke: (intent) => intent.backward
-            ? _focusNode.previousFocus()
-            : _focusNode.nextFocus(),
+        invoke: _handleTraverseIntent,
       ),
       _MoveDocumentBlockIntent: _HostAction<_MoveDocumentBlockIntent>(
         // Keep the exact chord at this nearest command boundary even when
@@ -1241,11 +1309,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         // trailing row mounts, so the still-focused leading row must keep
         // boundary Backspace/Delete live through pending-row settlement.
         enabled: (_) =>
-            _canMutateActions ||
-            (_ownsEditingFocus &&
-                !_controller.isReadOnly &&
-                _controller.composing == null &&
-                (_documentHost?.acceptsPendingRowStructuralKey ?? false)),
+            (_documentHost?.acceptsPendingRowStructuralKey ?? true) &&
+            (_canMutateActions ||
+                (_ownsEditingFocus &&
+                    !_controller.isReadOnly &&
+                    _controller.composing == null &&
+                    (_documentHost?.acceptsPendingRowStructuralKey ?? false))),
         invoke: (intent) => intent.forward
             ? _controller.deleteForward()
             : _controller.deleteBackward(),
@@ -1442,6 +1511,38 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         : Actions.maybeInvoke(commandContext, intent);
   }
 
+  /// Tab nests a markdown list item; Shift+Tab outdents. Otherwise focus
+  /// traversal (desktop foundation R8 for non-list text).
+  Object? _handleTraverseIntent(_TraverseIntent intent) {
+    if (_tryMarkdownListIndent(outdent: intent.backward)) {
+      return null;
+    }
+    return intent.backward
+        ? _focusNode.previousFocus()
+        : _focusNode.nextFocus();
+  }
+
+  bool _tryMarkdownListIndent({required bool outdent}) {
+    if (!_canMutateActions) return false;
+    final local = _localSelection();
+    if (local == null || !local.isCollapsed) return false;
+    final block = _block;
+    if (block == null) return false;
+    final edit = outdent
+        ? HomericMarkdownListIndent.outdent(block.text)
+        : HomericMarkdownListIndent.nest(block.text);
+    if (edit == null) return false;
+    final nextCaret = (local.head + edit.caretDelta)
+        .clamp(0, block.contentLength + edit.caretDelta);
+    return _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[
+        CanonicalTextEdit(edit.start, edit.end, edit.replacement),
+      ],
+      selection: BlockTextSelection.collapsed(nextCaret),
+    );
+  }
+
   _DocumentCommandDisposition _invokeDocumentCommand(
     _DocumentCommandIntent intent,
     int epoch,
@@ -1503,9 +1604,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       }
     }
     final fallback = intent.fallback;
-    if (fallback != null && context.isCurrent) {
-      _dispatchIntent(fallback);
-      return _DocumentCommandDisposition.handled;
+    final commandContext = _commandContext;
+    if (fallback != null && context.isCurrent && commandContext != null) {
+      final action =
+          Actions.maybeFind<Intent>(commandContext, intent: fallback);
+      if (action == null || !action.isEnabled(fallback)) {
+        return _DocumentCommandDisposition.ignored;
+      }
+      final result = _dispatchIntent(fallback);
+      return switch (action.toKeyEventResult(fallback, result)) {
+        KeyEventResult.handled => _DocumentCommandDisposition.handled,
+        KeyEventResult.ignored => _DocumentCommandDisposition.ignored,
+        KeyEventResult.skipRemainingHandlers =>
+          _DocumentCommandDisposition.skipRemainingHandlers,
+      };
     }
     return _DocumentCommandDisposition.ignored;
   }
@@ -1680,7 +1792,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   static bool _touches(int start, int end, int? rangeStart, int? rangeEnd) {
     if (rangeStart == null || rangeEnd == null) return false;
-    if (rangeStart == rangeEnd) return rangeStart >= start && rangeStart <= end;
+    // Decoration ranges are half-open [start, end); a collapsed caret exactly
+    // at end must not reveal (e.g. trailing space after `[label](url)`).
+    if (rangeStart == rangeEnd) return rangeStart >= start && rangeStart < end;
     return rangeStart < end && rangeEnd > start;
   }
 
@@ -1948,7 +2062,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           movingEndpoint: _localTouchMovingEndpoint,
         ) ==
         HomericSelectionEndpoint.end) {
-      (start, end) = (end, start);
+      final previousStart = start;
+      start = end;
+      end = previousStart;
     }
     if (start == null || end == null) {
       _disposeLocalTouchSelectionOverlay();
@@ -2870,10 +2986,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         )
         .value;
     final blockRect = geometry.blockRect.value;
+    // Glyphless projections have no visual line to traverse, even when their
+    // canonical text is hidden by decorations. Their fallback caret height can
+    // differ from the layout height. The current geometry check above ensures
+    // this live paragraph still belongs to the same document/layout generation.
+    final hasNoVisualLines =
+        _renderParagraph!.layoutParagraph.numberOfLines == 0;
     final crossesVerticalBoundary = switch (intent.direction) {
-      CaretMovementDirection.up => currentCaret.top <= blockRect.top + 0.5,
+      CaretMovementDirection.up =>
+        hasNoVisualLines || currentCaret.top <= blockRect.top + 0.5,
       CaretMovementDirection.down =>
-        currentCaret.bottom >= blockRect.bottom - 0.5,
+        hasNoVisualLines || currentCaret.bottom >= blockRect.bottom - 0.5,
       _ => false,
     };
     if (documentHost != null &&
@@ -3007,6 +3130,26 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       return geometry;
     }
     return _paragraphGeometry = ParagraphGeometry(render);
+  }
+
+  HomericEditableBlockGeometry _consumerGeometry(
+    ParagraphGeometry geometry,
+    int documentRevision,
+  ) =>
+      HomericEditableBlockGeometry._(
+        blockId: widget.blockId,
+        documentRevision: documentRevision,
+        layoutGeneration: geometry.generation,
+        geometry: geometry,
+        isCurrent: () =>
+            documentRevision == _controller.documentRevision &&
+            _isCurrentGeometry(geometry),
+      );
+
+  HomericEditableBlockGeometry? _currentConsumerGeometry() {
+    final geometry = _currentGeometry();
+    if (geometry == null) return null;
+    return _consumerGeometry(geometry, _controller.documentRevision);
   }
 
   bool _isCurrentGeometry(ParagraphGeometry geometry) {
@@ -3355,7 +3498,7 @@ String? _appKitSelectorForShortcut(ShortcutActivator shortcut) {
   return null;
 }
 
-enum _DocumentCommandDisposition { ignored, handled }
+enum _DocumentCommandDisposition { ignored, handled, skipRemainingHandlers }
 
 final class _DocumentCommandAction extends Action<_DocumentCommandIntent> {
   _DocumentCommandAction(this.state, this.epoch);
@@ -3376,9 +3519,12 @@ final class _DocumentCommandAction extends Action<_DocumentCommandIntent> {
     _DocumentCommandIntent intent,
     _DocumentCommandDisposition invokeResult,
   ) =>
-      invokeResult == _DocumentCommandDisposition.handled
-          ? KeyEventResult.handled
-          : KeyEventResult.ignored;
+      switch (invokeResult) {
+        _DocumentCommandDisposition.handled => KeyEventResult.handled,
+        _DocumentCommandDisposition.ignored => KeyEventResult.ignored,
+        _DocumentCommandDisposition.skipRemainingHandlers =>
+          KeyEventResult.skipRemainingHandlers,
+      };
 }
 
 final class _HostAction<T extends Intent> extends Action<T> {

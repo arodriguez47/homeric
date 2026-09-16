@@ -355,6 +355,109 @@ void main() {
     expect(controller.canUndo, isFalse);
     expect(notifications, 0);
   });
+
+  test('paragraph break on a bullet list item continues the list prefix', () {
+    final document = _document(['- item']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 6)),
+    );
+
+    expect(
+      controller.insertParagraphBreak(trailingBlockId: 'next'),
+      isTrue,
+    );
+    expect(controller.document.blocks.map((block) => block.text), [
+      '- item',
+      '- ',
+    ]);
+    expect(controller.document.blocks.map((block) => block.id), ['a', 'next']);
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+  });
+
+  test('paragraph break on an ordered list item bumps the marker', () {
+    final document = _document(['  1. item']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 9)),
+    );
+
+    expect(
+      controller.insertParagraphBreak(trailingBlockId: 'next'),
+      isTrue,
+    );
+    expect(controller.document.blocks.map((block) => block.text), [
+      '  1. item',
+      '  2. ',
+    ]);
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(1, 5)),
+    );
+  });
+
+  test('paragraph break mid list item keeps trailing body after the new prefix',
+      () {
+    final document = _document(['- hello world']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 7)),
+    );
+
+    expect(
+      controller.insertParagraphBreak(trailingBlockId: 'next'),
+      isTrue,
+    );
+    expect(controller.document.blocks.map((block) => block.text), [
+      '- hello',
+      '-  world',
+    ]);
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+  });
+
+  test('paragraph break on an empty list item exits to a plain paragraph', () {
+    final document = _document(['- ']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+
+    expect(controller.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+    expect(controller.document.blocks, hasLength(1));
+    expect(controller.document.blocks.single.text, isEmpty);
+    expect(controller.document.blocks.single.id, 'a');
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(0, 0)),
+    );
+  });
+
+  test('paragraph break on plain text stays a bare split', () {
+    final document = _document(['plain']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 5)),
+    );
+
+    expect(
+      controller.insertParagraphBreak(trailingBlockId: 'next'),
+      isTrue,
+    );
+    expect(controller.document.blocks.map((block) => block.text), [
+      'plain',
+      '',
+    ]);
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(1, 0)),
+    );
+  });
 }
 
 Document _document(List<String> texts) => Document([

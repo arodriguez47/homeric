@@ -1,5 +1,67 @@
 # Learnings
 
+## editor-architect — 2026-09-09 — Selection deletion need not join privacy boundaries
+
+An ordinary-to-private selection must not join the surviving private suffix
+into public prose, but rejecting the entire deletion is not the only safe
+choice. Trim the selected endpoint text separately and remove fully selected
+middle blocks in one transaction, preserving endpoint ownership and metadata.
+Test real upward mouse drags, both Delete keys, partial and complete endpoints,
+and exact one-step Undo/Redo; downward-only coverage misses this boundary.
+
+## editor-architect — 2026-09-08 — Browser vertical keys need document routing
+
+Browser default shortcuts delegate plain Up/Down to a paragraph-local native
+field, bypassing the document movement action. Bind document-hosted vertical
+keys explicitly to the existing guarded intent; preserve modified chords and
+standalone paragraph behavior. Run physical-key navigation tests in Chrome,
+not only native widget tests, and retain Shift-selection anchor assertions.
+Use canonical const shortcut activators so consumer bindings can override the
+same keys. An ignored consumer command must preserve the fallback action's
+enabled state and key disposition, especially during text composition.
+
+## editor-layout — 2026-09-08 — Grabber geometry is not hit-target geometry
+
+Keep the reorder hit target at 44px without centering its dots at 22px for
+every consumer. Journal first-line height and top padding differ by block and
+text scale. Share the paragraph's style/spacing calculation with the grabber
+center resolver; wrapped blocks stay aligned to their first line. Move the
+target down for centers beyond 22px so enlarged heading grabbers remain inside
+their hit area. Geometry tests compare against the rendered first caret line,
+not the resolver's own formula. Optical alignment still needs a real-font check.
+Resolver changes must invalidate off-screen row heights as well as mounted
+measurements. Use stable consumer callbacks and the existing layout revision
+for captured font/scale changes, so ordinary rebuilds retain useful heights.
+
+## editor-architect — 2026-09-08 — First-comment deletion needs a public survivor
+
+Test private-comment deletion with the comment at document index zero, not only
+after an ordinary paragraph. Generic range replacement retains the first block,
+which leaves an empty private wrapper when its visible text is fully selected.
+For a complete initial private group selected into public prose, retain the
+public endpoint and remove selected preceding blocks atomically. Preserve its
+unselected suffix and attributes; never migrate deleted private sidecars into
+public prose. Assert exact wire types and one-step Undo/Redo, not only empty text.
+Physical browser shortcuts need separate coverage from direct history calls.
+
+## editor-architect — 2026-09-08 — Native text fields cannot delete document boundaries
+
+Flutter's browser text-input shortcuts delegate deletion to a native field that
+contains only the active paragraph. Backspace on an empty paragraph emits no
+delta, so document-level unwrapping and joining never run. Explicit document-host
+Backspace/Delete bindings must use the existing composition/read-only-gated
+controller actions, including pending-row handling. Desktop widget tests alone
+miss this: run the regression under `flutter test --platform chrome`.
+
+Reflection: the focused keyboard change retains canonical ownership and undo;
+Histos additionally permits discarding fully consumed private wrappers, never
+moving surviving private suffixes. Ordinary-survivor normalization must apply
+only to selections ending in ordinary text. Test preceding ordinary paragraphs,
+legacy blocks without saved IDs, and unselected children in the final wrapper.
+Independent review found no blocking issue; real AppKit one-key/one-edit
+validation remains required before release. Two unrelated browser arrow-key
+tests also fail with the keyboard fix disabled; do not call that suite green.
+
 Editor-layer learnings, mirrored with Nexus per the compounding rule in [`AGENTS.md`](AGENTS.md): a learning about text layout, offset mapping, selection geometry, or editor architecture is written to **both** repos in the same change.
 
 ## editor-architect — 2026-08-25 — Pending-row hosts must keep boundary Backspace live
@@ -459,3 +521,98 @@ that does not exist.
 best-effort, require a checked-in host, a clean release build, and a repeatable
 launch command. Keep host readiness, automated adapter evidence, browser or
 device interaction, and certification as separate claims.
+
+## render-engineer — 2026-09-02 — Snapshot side-channel styles before invalidating layout
+
+**What:** A Journal host clears and refills a style map while rebuilding a
+content-equal `ParagraphSource`. Relayout on every equal source created a
+geometry-notification feedback loop on Flutter 3.47, but treating every refresh
+as paint-only was also unsafe because the map can contain font metrics. The
+render object now snapshots the exact styles used by its live paragraph,
+ignores an unchanged refill, repaints paint-only differences, and relayouts once
+when resolved metrics change.
+
+**Why it mattered:** Source equality cannot prove that a stable callback returns
+the same values. Unconditional invalidation loops when layout feeds host state,
+while unconditional paint invalidation can retain stale wrapping, selection
+geometry, and inline-child offsets after a metric change.
+
+**Rule going forward:** When a stable callback reads mutable side-channel state,
+compare a snapshot of its last consumed output at the render boundary. Skip
+invalidation when the output is equal, repaint paint-only differences, and
+relayout once for metric differences. Pin the unchanged notification loop plus
+paint-only and metric-changing refreshes.
+
+## editor-architect — 2026-08-31 — Pointer callbacks resolve geometry at event time
+
+**What:** A paragraph can complete a render-only relayout without rebuilding
+the widget closures installed by its overlay. Those closures retained the old
+`ParagraphGeometry`, so the generation guard correctly rejected mouse taps,
+selection-host hit tests, caret queries, hover, and touch geometry even though
+the render object already had valid current geometry.
+
+**Why it mattered:** A Nexus-side render-tree fallback appeared to repair the
+first click after blur, but duplicated private hit-testing and still missed
+later focused clicks. Enabling typewriter focus made the same stale active
+caret query visible as inconsistent centering. Both symptoms came from the
+editor's geometry-capability boundary, not from host focus policy.
+
+**Rule going forward:** Closures may retain generation-stamped geometry for
+painting and consumer overlays, but every pointer or selection-host callback
+must ask the paragraph state for a fresh current geometry capability when the
+event occurs. Keep stale generations fail-closed; refresh the witness instead
+of bypassing the guard in a host application.
+
+## editor-architect — 2026-09-01 — Cross-wrapper deletion follows surviving content
+
+A mouse drag that visually begins at a private-comment row can resolve one
+character inside that row. Treating only offset zero as a complete-wrapper
+delete left the real selection inert. Homeric’s join descriptor provides the
+safe distinction: a private-leading selection may cross into an ordinary
+endpoint only when `removedOffset == removed.contentLength`, proving that no
+ordinary suffix survives or is pulled into the private wrapper.
+
+**Rule going forward:** Pin structural selection behavior at both the visual
+boundary and the nearest interior caret. Permit removal of selected siblings
+inside the leading private wrapper, but allow the final private-to-ordinary
+join only when the ordinary endpoint is fully consumed. Test Delete and
+Backspace, and keep a partial ordinary suffix as the fail-closed control.
+
+## editor-architect — 2026-09-01 — View-only sigils join document selection explicitly
+
+The private-comment `%%` is a separate view-only row cell, not canonical
+paragraph text, so a mouse drag beginning on it never reaches Homeric's
+paragraph selection host. The host must begin a document-owned pointer drag at
+the corresponding block offset zero, forward move/up events in global
+coordinates, and then end that same drag generation.
+
+**Rule going forward:** Any selectable-looking chrome outside canonical text
+must bridge into the editor's public document-selection API rather than
+inventing local range math. Keep the drag owner in session state: selection
+updates rebuild widgets between pointer-down and pointer-up, so a widget-owned
+identity leaves input suspended and makes the next Delete appear inert.
+## orchestrator — 2026-09-09 — Empty paragraph arrow navigation
+
+Empty paragraphs have one insertion position. Do not require its caret rectangle
+to touch the paragraph layout bounds before crossing Up/Down: Inter's empty
+caret metrics differ from those bounds, while the Ahem test font masked the
+failure. Keep the empty-block boundary case inside the existing selection,
+geometry, and composition guards; preserve nonempty paragraph movement.
+
+Regression: real-font native journal tests plus consecutive-empty traversal and
+Shift-anchor tests. The consumer test first failed when the second Down stayed
+in the first empty block. Comment deletion and undo remain independent guards.
+## orchestrator — 2026-09-09 — Consumer privacy boundaries
+
+Histos handles Backspace at offset zero of nonempty public prose following an
+editable private comment as selection-only movement to the comment end. Generic
+joining would change content ownership and is correctly rejected by its codec.
+Keep this consumer policy outside Homeric; verify actual focus as well as global
+selection, unchanged history, and subsequent editing in the destination block.
+## orchestrator — 2026-09-09 — Glyphless projection boundaries
+
+Use the current rendered paragraph's zero-line geometry, not canonical content
+length, to identify the empty-caret fallback. Fully hidden nonempty text also
+has no visual line. A constrained-height regression reproduces the mismatch
+without relying on a particular font: ArrowLeft enters the hidden endpoint and
+one ArrowDown leaves it without revealing text or changing history.

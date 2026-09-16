@@ -591,6 +591,7 @@ final class HomericTextInputSession extends ChangeNotifier {
   void _platformClosed(int epoch) {
     if (_disposed || epoch != _currentEpoch) return;
     _commandDelegate?.cancelTransientInput();
+    final closedBlockId = _blockId;
     _invalidateEpoch();
     _connection?.connectionClosedReceived();
     _connection = null;
@@ -601,7 +602,18 @@ final class HomericTextInputSession extends ChangeNotifier {
     _geometryLease = null;
     _geometryOwner = null;
     _commandDelegate = null;
-    controller.interruptComposition(CompositionInterruption.platformClose);
+    final compositionChanged =
+        controller.interruptComposition(CompositionInterruption.platformClose);
+    // When no composition was open, interruptComposition is a no-op and hosts
+    // never hear about the closed epoch. Ping the controller so a still-focused
+    // paragraph can reopen input without treating host-initiated blur the same.
+    if (!compositionChanged &&
+        !_disposed &&
+        closedBlockId != null &&
+        controller.activeBlockId == closedBlockId &&
+        !controller.isReadOnly) {
+      controller.notifyListeners();
+    }
     notifyListeners();
   }
 

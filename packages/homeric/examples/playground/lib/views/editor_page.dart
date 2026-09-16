@@ -26,6 +26,7 @@ class EditorPage extends StatefulWidget {
     required this.viewModel,
     this.cacheExtent = 250,
     this.scrollController,
+    this.documentKey,
   });
 
   /// The document view-model this page renders and edits.
@@ -39,6 +40,10 @@ class EditorPage extends StatefulWidget {
 
   /// Optional controller used by deterministic benchmark traces.
   final ScrollController? scrollController;
+
+  /// Optional key for benchmark harnesses that must read document state
+  /// without walking the reorderable sliver with a test [Finder].
+  final GlobalKey<HomericEditableDocumentState>? documentKey;
 
   @override
   State<EditorPage> createState() => _EditorPageState();
@@ -70,6 +75,7 @@ class _EditorPageState extends State<EditorPage> {
           const Divider(height: 1),
           Expanded(
             child: HomericEditableDocument.builder(
+              key: widget.documentKey,
               controller: widget.viewModel.editorController,
               inputSession: widget.viewModel.inputSession,
               scrollController: widget.scrollController,

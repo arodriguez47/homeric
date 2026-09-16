@@ -16,6 +16,27 @@ const _scenario = String.fromEnvironment(
   defaultValue: 'generated',
 );
 
+/// Upper bound for one profile trace. One hundred 50 ms pumps finish in ~5 s;
+/// this catches reorderable-sliver hit-test finder stalls before the driver
+/// stays attached indefinitely.
+const _traceActionTimeout = Duration(seconds: 60);
+
+/// Time to wait for [FrameTiming] delivery after the pumps complete.
+const _frameDeliveryTimeout = Duration(seconds: 15);
+
+/// Cooperative cancel for [_watchFrames] actions (e.g. [_trace]).
+///
+/// [Future.timeout] does not stop the underlying future; on timeout the harness
+/// requests cancel and awaits settlement before teardown so `_trace` cannot
+/// call `jumpTo` / `_mountedRows` against an unmounted document.
+final class _ActionCancel {
+  bool _cancelled = false;
+
+  bool get isCancelled => _cancelled;
+
+  void cancel() => _cancelled = true;
+}
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -28,6 +49,7 @@ void main() {
       ..devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
+    final documentKey = GlobalKey<HomericEditableDocumentState>();
     final coldLoad = Stopwatch()..start();
     final markdown = await rootBundle.loadString('benchmark_assets/current.md');
     final fixtureIdentity = benchmarkFixtureIdentity(markdown);
@@ -37,18 +59,23 @@ void main() {
 
     final firstController = ScrollController();
     final firstMount = Stopwatch()..start();
-    await tester.pumpWidget(_surface(viewModel, firstController));
+    await tester.pumpWidget(
+      _surface(viewModel, firstController, documentKey: documentKey),
+    );
     firstMount.stop();
     coldLoad.stop();
 
-    var maxMounted = _mountedRows();
+    var maxMounted = _mountedRows(documentKey, 'initial mount');
     var maxParagraphCacheEntries = 0;
     var maxParagraphCacheTextCodeUnits = 0;
     final initialMounted = maxMounted;
     expect(initialMounted, lessThan(500));
     if (document.blockCount > 1) {
-      expect(initialMounted, lessThan(document.blockCount),
-          reason: 'the current control must stay lazy');
+      expect(
+        initialMounted,
+        lessThan(document.blockCount),
+        reason: 'the current control must stay lazy',
+      );
     }
     await tester.pumpWidget(const SizedBox.shrink());
     firstController.dispose();
@@ -69,6 +96,8 @@ void main() {
         binding,
         tester,
         viewModel,
+        documentKey: documentKey,
+        sampleIndex: sample,
         instrumentedFirst: benchmarkInstrumentedFirst(sample),
         onMountedRows: (count) {
           if (count > maxMounted) maxMounted = count;
@@ -83,9 +112,7 @@ void main() {
       if (pair.paragraphCacheTextCodeUnits > maxParagraphCacheTextCodeUnits) {
         maxParagraphCacheTextCodeUnits = pair.paragraphCacheTextCodeUnits;
       }
-      layoutSampleTotalsUs.add(
-        pair.layout.totalElapsed.inMicroseconds,
-      );
+      layoutSampleTotalsUs.add(pair.layout.totalElapsed.inMicroseconds);
       for (final category in HomericParagraphLayoutCategory.values) {
         layoutCounts.update(
           category,
@@ -103,6 +130,8 @@ void main() {
           binding,
           tester,
           viewModel,
+          documentKey: documentKey,
+          sampleIndex: sample,
           instrumentedFirst: benchmarkInstrumentedFirst(sample),
           onMountedRows: (count) {
             if (count > maxMounted) maxMounted = count;
@@ -126,8 +155,9 @@ void main() {
 
     binding.reportData ??= <String, dynamic>{};
     binding.reportData!['scroll_disabled'] = _aggregate(disabledSamples);
-    binding.reportData!['scroll_instrumented'] =
-        _aggregate(instrumentedSamples);
+    binding.reportData!['scroll_instrumented'] = _aggregate(
+      instrumentedSamples,
+    );
     binding.reportData!['cold_mount'] = _aggregate(coldMountSamples);
     final calibrationControl =
         calibratesProbe ? calibrationDisabledSamples : disabledSamples;
@@ -171,8 +201,10 @@ void main() {
       'max_mounted_rows': maxMounted,
       'paragraph_cache_entries': maxParagraphCacheEntries,
       'paragraph_cache_text_code_units': maxParagraphCacheTextCodeUnits,
-      'layout_total_count':
-          layoutCounts.values.fold(0, (sum, value) => sum + value),
+      'layout_total_count': layoutCounts.values.fold(
+        0,
+        (sum, value) => sum + value,
+      ),
       'layout_total_us': layoutElapsed.values.fold(
         0,
         (sum, value) => sum + value.inMicroseconds,
@@ -197,10 +229,14 @@ void main() {
         'height_churn_changes': _scenario == 'height_churn' ? 3 : 0,
       },
     };
-  });
+  }, timeout: const Timeout(Duration(minutes: 20)));
 }
 
-Widget _surface(DocumentViewModel viewModel, ScrollController controller) =>
+Widget _surface(
+  DocumentViewModel viewModel,
+  ScrollController controller, {
+  required GlobalKey<HomericEditableDocumentState> documentKey,
+}) =>
     MaterialApp(
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
       home: Scaffold(
@@ -208,34 +244,63 @@ Widget _surface(DocumentViewModel viewModel, ScrollController controller) =>
           viewModel: viewModel,
           cacheExtent: 250,
           scrollController: controller,
+          documentKey: documentKey,
         ),
       ),
     );
+
+HomericEditableDocumentState _requireDocumentState(
+  GlobalKey<HomericEditableDocumentState> documentKey, {
+  required String stage,
+}) {
+  final state = documentKey.currentState;
+  if (state == null || !state.mounted) {
+    throw StateError(
+      'Benchmark $stage expected a mounted HomericEditableDocument; '
+      'currentState is ${state == null ? 'null' : 'unmounted'}.',
+    );
+  }
+  return state;
+}
+
+int _mountedRows(
+  GlobalKey<HomericEditableDocumentState> documentKey,
+  String stage,
+) =>
+    _requireDocumentState(documentKey, stage: stage).debugMountedRowCount;
 
 Future<_BenchmarkSamplePair> _runSamplePair(
   IntegrationTestWidgetsFlutterBinding binding,
   WidgetTester tester,
   DocumentViewModel viewModel, {
+  required GlobalKey<HomericEditableDocumentState> documentKey,
+  required int sampleIndex,
   required bool instrumentedFirst,
   required ValueChanged<int> onMountedRows,
 }) async {
   final controlController = ScrollController();
   final controlColdFrames = await _watchFrames(
     binding,
-    () => tester.pumpWidget(_surface(viewModel, controlController)),
+    (_) => tester.pumpWidget(
+      _surface(viewModel, controlController, documentKey: documentKey),
+    ),
     expectedFrameCount: benchmarkColdMountFrameCount,
+    stage: 'sample $sampleIndex control cold mount',
   );
-  onMountedRows(_mountedRows());
+  onMountedRows(_mountedRows(documentKey, 'sample $sampleIndex control cold'));
   await tester.pumpWidget(const SizedBox.shrink());
   controlController.dispose();
 
   final controller = ScrollController();
   final pairedColdFrames = await _watchFrames(
     binding,
-    () => tester.pumpWidget(_surface(viewModel, controller)),
+    (_) => tester.pumpWidget(
+      _surface(viewModel, controller, documentKey: documentKey),
+    ),
     expectedFrameCount: benchmarkColdMountFrameCount,
+    stage: 'sample $sampleIndex paired cold mount',
   );
-  onMountedRows(_mountedRows());
+  onMountedRows(_mountedRows(documentKey, 'sample $sampleIndex paired cold'));
   await _warmUp(tester, controller);
   late final Map<String, Object> disabledFrames;
   late final Map<String, Object> instrumentedFrames;
@@ -246,8 +311,17 @@ Future<_BenchmarkSamplePair> _runSamplePair(
     Future<void> runDisabled() async {
       disabledFrames = await _watchFrames(
         binding,
-        () => _trace(tester, controller, onMountedRows),
+        (cancel) => _trace(
+          tester,
+          controller,
+          documentKey,
+          sampleIndex: sampleIndex,
+          mode: 'disabled',
+          onMountedRows: onMountedRows,
+          cancel: cancel,
+        ),
         expectedFrameCount: benchmarkTraceFrameCount,
+        stage: 'sample $sampleIndex warmed scroll disabled',
       );
     }
 
@@ -256,8 +330,17 @@ Future<_BenchmarkSamplePair> _runSamplePair(
       try {
         instrumentedFrames = await _watchFrames(
           binding,
-          () => _trace(tester, controller, onMountedRows),
+          (cancel) => _trace(
+            tester,
+            controller,
+            documentKey,
+            sampleIndex: sampleIndex,
+            mode: 'instrumented',
+            onMountedRows: onMountedRows,
+            cancel: cancel,
+          ),
           expectedFrameCount: benchmarkTraceFrameCount,
+          stage: 'sample $sampleIndex warmed scroll instrumented',
         );
       } finally {
         layout = probe.stop();
@@ -271,8 +354,9 @@ Future<_BenchmarkSamplePair> _runSamplePair(
       await runDisabled();
       await runInstrumented();
     }
-    final documentState = tester.state<HomericEditableDocumentState>(
-      find.byType(HomericEditableDocument),
+    final documentState = _requireDocumentState(
+      documentKey,
+      stage: 'sample $sampleIndex cache probe',
     );
     paragraphCacheEntries = documentState.debugParagraphLayoutCacheEntries;
     paragraphCacheTextCodeUnits =
@@ -313,6 +397,8 @@ Future<_CalibrationSamplePair> _runCalibrationPair(
   IntegrationTestWidgetsFlutterBinding binding,
   WidgetTester tester,
   DocumentViewModel viewModel, {
+  required GlobalKey<HomericEditableDocumentState> documentKey,
+  required int sampleIndex,
   required bool instrumentedFirst,
   required ValueChanged<int> onMountedRows,
 }) async {
@@ -323,6 +409,8 @@ Future<_CalibrationSamplePair> _runCalibrationPair(
       binding,
       tester,
       viewModel,
+      documentKey: documentKey,
+      sampleIndex: sampleIndex,
       instrumented: true,
       onMountedRows: onMountedRows,
     );
@@ -330,6 +418,8 @@ Future<_CalibrationSamplePair> _runCalibrationPair(
       binding,
       tester,
       viewModel,
+      documentKey: documentKey,
+      sampleIndex: sampleIndex,
       instrumented: false,
       onMountedRows: onMountedRows,
     );
@@ -338,6 +428,8 @@ Future<_CalibrationSamplePair> _runCalibrationPair(
       binding,
       tester,
       viewModel,
+      documentKey: documentKey,
+      sampleIndex: sampleIndex,
       instrumented: false,
       onMountedRows: onMountedRows,
     );
@@ -345,6 +437,8 @@ Future<_CalibrationSamplePair> _runCalibrationPair(
       binding,
       tester,
       viewModel,
+      documentKey: documentKey,
+      sampleIndex: sampleIndex,
       instrumented: true,
       onMountedRows: onMountedRows,
     );
@@ -362,14 +456,21 @@ Future<_CalibrationModeSample> _runCalibrationMode(
   IntegrationTestWidgetsFlutterBinding binding,
   WidgetTester tester,
   DocumentViewModel viewModel, {
+  required GlobalKey<HomericEditableDocumentState> documentKey,
+  required int sampleIndex,
   required bool instrumented,
   required ValueChanged<int> onMountedRows,
 }) async {
   final controller = ScrollController();
-  await tester.pumpWidget(_surface(viewModel, controller));
-  onMountedRows(_mountedRows());
-  final documentState = tester.state<HomericEditableDocumentState>(
-    find.byType(HomericEditableDocument),
+  await tester.pumpWidget(
+    _surface(viewModel, controller, documentKey: documentKey),
+  );
+  onMountedRows(
+    _mountedRows(documentKey, 'sample $sampleIndex calibration mount'),
+  );
+  final documentState = _requireDocumentState(
+    documentKey,
+    stage: 'sample $sampleIndex calibration initial state',
   );
   final initialState = (
     scrollOffset: controller.offset,
@@ -379,25 +480,44 @@ Future<_CalibrationModeSample> _runCalibrationMode(
   );
   HomericParagraphLayoutReport? layout;
   late final Map<String, Object> frames;
+  final mode = instrumented ? 'instrumented' : 'disabled';
   try {
     if (instrumented) {
       final probe = HomericParagraphLayoutProbe.start();
       frames = await _watchFrames(
         binding,
-        () async {
+        (cancel) async {
           try {
-            await _trace(tester, controller, onMountedRows);
+            await _trace(
+              tester,
+              controller,
+              documentKey,
+              sampleIndex: sampleIndex,
+              mode: 'calibration $mode',
+              onMountedRows: onMountedRows,
+              cancel: cancel,
+            );
           } finally {
             layout = probe.stop();
           }
         },
         expectedFrameCount: benchmarkTraceFrameCount,
+        stage: 'sample $sampleIndex calibration $mode',
       );
     } else {
       frames = await _watchFrames(
         binding,
-        () => _trace(tester, controller, onMountedRows),
+        (cancel) => _trace(
+          tester,
+          controller,
+          documentKey,
+          sampleIndex: sampleIndex,
+          mode: 'calibration $mode',
+          onMountedRows: onMountedRows,
+          cancel: cancel,
+        ),
         expectedFrameCount: benchmarkTraceFrameCount,
+        stage: 'sample $sampleIndex calibration $mode',
       );
     }
   } finally {
@@ -460,9 +580,7 @@ Map<String, Object> _aggregate(List<Map<String, Object>> samples) {
       (sum, sample) => sum + (sample['sample_count']! as int),
     ),
     for (final metric in metrics)
-      metric: _median([
-        for (final sample in samples) sample[metric]! as int,
-      ]),
+      metric: _median([for (final sample in samples) sample[metric]! as int]),
     'samples': samples,
   };
 }
@@ -506,9 +624,11 @@ Document _scenarioDocument(String markdown, String scenario) {
             id: 'benchmark-alternating-$index',
             type: 'paragraph',
             runs: [
-              InlineRun(index.isEven
-                  ? 'short block'
-                  : List.filled(4, generated.blocks[index].text).join(' ')),
+              InlineRun(
+                index.isEven
+                    ? 'short block'
+                    : List.filled(4, generated.blocks[index].text).join(' '),
+              ),
             ],
           ),
       ]),
@@ -518,9 +638,11 @@ Document _scenarioDocument(String markdown, String scenario) {
             id: 'benchmark-biased-$index',
             type: 'paragraph',
             runs: [
-              InlineRun(index < generated.blockCount ~/ 2
-                  ? 'short block'
-                  : List.filled(12, generated.blocks[index].text).join(' ')),
+              InlineRun(
+                index < generated.blockCount ~/ 2
+                    ? 'short block'
+                    : List.filled(12, generated.blocks[index].text).join(' '),
+              ),
             ],
           ),
       ]),
@@ -529,12 +651,7 @@ Document _scenarioDocument(String markdown, String scenario) {
   };
 }
 
-int _mountedRows() => find.byType(HomericEditableParagraph).evaluate().length;
-
-Future<void> _warmUp(
-  WidgetTester tester,
-  ScrollController controller,
-) async {
+Future<void> _warmUp(WidgetTester tester, ScrollController controller) async {
   final max = controller.position.maxScrollExtent;
   for (var step = 0; step < 50; step++) {
     controller.jumpTo(max * step / 49);
@@ -547,32 +664,39 @@ Future<void> _warmUp(
 Future<void> _trace(
   WidgetTester tester,
   ScrollController controller,
-  ValueChanged<int> onMountedRows, {
+  GlobalKey<HomericEditableDocumentState> documentKey, {
+  required int sampleIndex,
+  required String mode,
+  required ValueChanged<int> onMountedRows,
+  _ActionCancel? cancel,
   Duration stepDuration = const Duration(milliseconds: 50),
   bool applyScenarioChanges = true,
 }) async {
   final max = controller.position.maxScrollExtent;
   for (var step = 0; step < 100; step++) {
+    if (cancel?.isCancelled ?? false) return;
     final progress = step < 50 ? step / 49 : (99 - step) / 49;
     if (applyScenarioChanges &&
         _scenario == 'height_churn' &&
         (step == 25 || step == 50 || step == 75)) {
       final slider = tester.widget<Slider>(find.byType(Slider));
       final delta = step == 50 ? -1.0 : 1.0;
-      slider.onChanged!(
-        (slider.value + delta).clamp(slider.min, slider.max),
-      );
+      slider.onChanged!((slider.value + delta).clamp(slider.min, slider.max));
     }
     controller.jumpTo(max * progress);
     await tester.pump(stepDuration);
-    onMountedRows(_mountedRows());
+    if (cancel?.isCancelled ?? false) return;
+    onMountedRows(
+      _mountedRows(documentKey, 'sample $sampleIndex $mode step $step'),
+    );
   }
 }
 
 Future<Map<String, Object>> _watchFrames(
   IntegrationTestWidgetsFlutterBinding binding,
-  Future<void> Function() action, {
+  Future<void> Function(_ActionCancel cancel) action, {
   int? expectedFrameCount,
+  required String stage,
 }) async {
   if (expectedFrameCount != null) {
     await Future<void>.delayed(const Duration(seconds: 2));
@@ -587,13 +711,47 @@ Future<Map<String, Object>> _watchFrames(
     if (enough && !enoughTimings.isCompleted) enoughTimings.complete();
   }
 
+  final cancel = _ActionCancel();
+  final actionFuture = action(cancel);
+  var actionSettled = false;
+  Future<void> settleAction() async {
+    if (actionSettled) return;
+    try {
+      await actionFuture;
+    } catch (_) {
+      // Surface timeout / stage errors from the outer path; ignore late
+      // action failures after cancel so teardown can finish cleanly.
+    } finally {
+      actionSettled = true;
+    }
+  }
+
   binding.addTimingsCallback(watcher);
   try {
-    await action();
+    try {
+      await actionFuture.timeout(_traceActionTimeout);
+      actionSettled = true;
+    } on TimeoutException {
+      cancel.cancel();
+      await settleAction();
+      throw StateError(
+        'Benchmark $stage timed out after '
+        '${_traceActionTimeout.inSeconds}s before completing its pumps.',
+      );
+    }
     if (!enoughTimings.isCompleted) {
-      await enoughTimings.future.timeout(const Duration(seconds: 2));
+      await enoughTimings.future.timeout(
+        _frameDeliveryTimeout,
+        onTimeout: () => throw StateError(
+          'Benchmark $stage recorded ${timings.length} of '
+          '${expectedFrameCount ?? 'unknown'} FrameTiming samples after '
+          'its pumps finished.',
+        ),
+      );
     }
   } finally {
+    cancel.cancel();
+    await settleAction();
     binding.removeTimingsCallback(watcher);
   }
   if (expectedFrameCount != null) {
@@ -603,7 +761,7 @@ Future<Map<String, Object>> _watchFrames(
     );
   }
   if (timings.isEmpty) {
-    throw StateError('The benchmark trace produced no FrameTiming samples.');
+    throw StateError('Benchmark $stage produced no FrameTiming samples.');
   }
   final build = [
     for (final timing in timings) timing.buildDuration.inMicroseconds,
@@ -611,9 +769,8 @@ Future<Map<String, Object>> _watchFrames(
   final raster = [
     for (final timing in timings) timing.rasterDuration.inMicroseconds,
   ]..sort();
-  final total = [
-    for (final timing in timings) timing.totalSpan.inMicroseconds,
-  ]..sort();
+  final total = [for (final timing in timings) timing.totalSpan.inMicroseconds]
+    ..sort();
   return <String, Object>{
     'sample_count': timings.length,
     'build_p50_us': _percentile(build, 0.50),

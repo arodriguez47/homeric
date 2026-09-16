@@ -728,6 +728,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   /// must not advance it.
   int get debugHeightOrderRebuildCount => _heightOrderRebuildCount;
 
+  /// Number of block rows currently mounted in the reorderable sliver.
+  ///
+  /// Exposed for performance-contract tests and profile harnesses. Prefer this
+  /// over walking the element tree with a test [Finder] while scrolling.
+  int get debugMountedRowCount => _mountedRows.length;
+
   /// Measured row height, or its estimate when no current measurement exists.
   @visibleForTesting
   double debugCachedBlockHeight(int index) =>

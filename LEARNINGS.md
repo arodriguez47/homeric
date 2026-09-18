@@ -1,5 +1,25 @@
 # Learnings
 
+## editor-architect — 2026-09-16 — Typewriter focus scrolls from global caret geometry
+
+**What:** Homeric's opt-in `typewriterFocus` centers the collapsed caret line
+when the available scroll extent allows it. Near document edges, clamping can
+leave the caret outside the middle third. Block-level `Scrollable.ensureVisible`
+centers the block row, so it is not the typewriter scroll source of truth.
+Homeric uses global caret geometry, reschedules on capability, controller,
+scroll-controller, padding, or layout-revision changes, and waits for scroll idle.
+
+**Current limitation:** A height-only viewport resize with unchanged selection
+and content revision does not itself reschedule typewriter focus. The caret can
+remain at its old screen position until another scheduling trigger occurs;
+viewport-resize support is not established by this learning.
+
+**Rule going forward:** Prefer Homeric's global caret geometry over a second
+host scroll owner. Preserve the existing force-scheduling triggers, and require
+an explicit resize trigger plus regression coverage before claiming viewport
+resize support. Mirror selection-geometry and editor-architecture learnings in
+Homeric and Nexus in the same change.
+
 ## editor-architect — 2026-09-16 — Profile traces must not Finder-walk reorderable slivers
 
 Walking `find.byType(...).evaluate()` on every scroll step of a HOM-6 profile

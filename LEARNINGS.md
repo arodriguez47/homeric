@@ -2,24 +2,23 @@
 
 ## editor-architect — 2026-09-16 — Typewriter focus scrolls from global caret geometry
 
-**What:** Opt-in `typewriterFocus` keeps the collapsed caret line in the middle
-third of the document viewport by scrolling the page. Block-level
-`Scrollable.ensureVisible` (used for `scrollToBlock` / focus settlement) centers
-the **block row**, not the caret line, so it is insufficient as the typing
-scroll source of truth. Homeric schedules from flattened global caret geometry,
-forces reschedule when the capability, controller, scroll controller, padding,
-or layout revision changes, and waits for scroll idle before re-applying.
+**What:** Homeric's opt-in `typewriterFocus` centers the collapsed caret line
+when the available scroll extent allows it. Near document edges, clamping can
+leave the caret outside the middle third. Block-level `Scrollable.ensureVisible`
+centers the block row, so it is not the typewriter scroll source of truth.
+Homeric uses global caret geometry, reschedules on capability, controller,
+scroll-controller, padding, or layout-revision changes, and waits for scroll idle.
 
-**Why it mattered:** Missing caret-tracking scroll lets typing drift out of the
-comfortable band. A selection/content-only witness also leaves the caret
-misplaced after re-enable without edits, controller swap with equal
-selection/revision, live `scrollPadding` changes, or viewport resize until the
-next edit.
+**Current limitation:** A height-only viewport resize with unchanged selection
+and content revision does not itself reschedule typewriter focus. The caret can
+remain at its old screen position until another scheduling trigger occurs;
+viewport-resize support is not established by this learning.
 
-**Rule going forward:** Treat global caret rectangles as the typewriter scroll
-witness. Force-schedule on enable and on viewport/layout invalidation, not only
-on selection or content revision. Mirror selection-geometry / editor-architecture
-learnings in Homeric and Nexus in the same change.
+**Rule going forward:** Prefer Homeric's global caret geometry over a second
+host scroll owner. Preserve the existing force-scheduling triggers, and require
+an explicit resize trigger plus regression coverage before claiming viewport
+resize support. Mirror selection-geometry and editor-architecture learnings in
+Homeric and Nexus in the same change.
 
 ## editor-architect — 2026-09-16 — Profile traces must not Finder-walk reorderable slivers
 

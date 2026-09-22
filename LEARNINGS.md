@@ -682,3 +682,13 @@ identity and deliver size via rebuild, not remount.
 **Rule going forward:** Facade-before-notify for call-time style metrics;
 mirror text-layout / editor-architecture learnings in both repos in the same
 change. Evidence: Nexus `JournalSizeProvider` / `NexusTypeScale`.
+
+## editor-layout — 2026-09-22 — Appearance Size/Width are continuous sliders over px stores
+
+*Mirrored from Nexus `LEARNINGS.md` per AGENTS.md Homeric compounding.*
+
+Nexus Appearance rail and Settings Journal pane use continuous (fine-step)
+sliders for body size (12–24) and column width (400–1000). Providers still store
+the applied pixel value — not a preset id — so the control swap needed no
+migration. Homeric remains a presentation consumer: `maxWidth` and body style
+arrive via rebuild; controller identity is unchanged.

@@ -715,6 +715,16 @@ overlays after the geometry source lays out. A geometry callback that changes
 overlay state must `setState` itself; the plane is not rebuilt for a layout it
 already caught.
 
+**Follow-on (same change):** a steadily mounted overlay exposed two
+assumptions that the dropped frame had hidden.
+- `HomericEditableBlockGeometry.isCurrent` has to compare against the live
+  render generation, not the post-frame `_renderGeneration`. Otherwise
+  consumers treat same-frame geometry as stale and paint nothing.
+- The translucent selection plane must yield hit testing to inline slot
+  children that handle pointer input, such as Histos aside chips. Otherwise
+  it wins the tap arena. Histos chip taps only worked while the plane was
+  missing.
+
 ## engineer — 2026-09-29 — Consumer non-text blocks are glyphless paragraphs (Nexus journal, HOM-48)
 
 *Mirrored from Nexus `LEARNINGS.md` per AGENTS.md compounding.*

@@ -26,6 +26,15 @@ typedef ParagraphOverlayBuilder = List<Widget> Function(
 /// Interactive margin UI must stay inside the paragraph bounds or use an
 /// editor-level [OverlayPortal] with coordinate conversion.
 ///
+/// The overlay is built during layout, after the paragraph has laid out in
+/// the same frame, so an edit, resize, or style change re-places it without
+/// a frame in which the overlay is missing or built from stale geometry.
+/// The builder is never invoked with geometry that predates the paragraph's
+/// current inputs. The post-frame [HomericParagraph.onGeometryChanged]
+/// notice does not rebuild a plane already built from that layout, so a
+/// callback that changes state read by [overlayBuilder] must call `setState`
+/// itself.
+///
 /// Geometry results remain generation-stamped. An asynchronous consumer that
 /// holds one can check [GeometryResult.isStale] before applying its response.
 ///
@@ -95,6 +104,13 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
   })? _pendingSlotCatchUp;
   bool _publicCatchUpPending = false;
 
+  // What the overlay plane last built from, so the post-frame geometry
+  // notice for a layout the plane already caught does not rebuild it again.
+  RenderHomericParagraph? _builtParagraph;
+  int? _builtGeneration;
+  Key? _builtParagraphKey;
+  Object? _builtSlotLayoutRevision;
+
   @override
   void didUpdateWidget(ParagraphOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -111,53 +127,69 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final paragraph = _paragraph;
-        final generation = _generation;
-        final paragraphWidget = widget.paragraph;
-        final currentExceptForSlotRevision = paragraph != null &&
-            generation != null &&
-            _paragraphKey == paragraphWidget.key &&
-            _matchesCurrentLayout(
-                context, constraints, paragraph, paragraphWidget) &&
-            paragraph.layoutGeneration == generation;
-        if (currentExceptForSlotRevision &&
-            _slotLayoutRevision != widget.slotLayoutRevision) {
-          _scheduleSlotRevisionCatchUp(
-            paragraph,
-            generation,
-            paragraphWidget.key,
-            widget.slotLayoutRevision,
-          );
-        }
-        final geometry = currentExceptForSlotRevision &&
-                _slotLayoutRevision == widget.slotLayoutRevision
-            ? ParagraphGeometry(paragraph)
-            : null;
-
-        return Stack(
-          fit: StackFit.passthrough,
-          clipBehavior: widget.clipBehavior,
-          children: <Widget>[
-            if (widget.excludeParagraphSemantics)
-              ExcludeSemantics(
-                child: paragraphWidget._observedBy(_handleGeometryChanged),
-              )
-            else
-              paragraphWidget._observedBy(_handleGeometryChanged),
-            if (geometry != null)
-              Positioned.fill(
-                child: Stack(
-                  fit: StackFit.expand,
-                  clipBehavior: Clip.none,
-                  children: widget.overlayBuilder(context, geometry),
-                ),
-              ),
-          ],
-        );
-      },
+    final paragraphWidget =
+        widget.paragraph._observedBy(_handleGeometryChanged);
+    return Stack(
+      fit: StackFit.passthrough,
+      clipBehavior: widget.clipBehavior,
+      children: <Widget>[
+        if (widget.excludeParagraphSemantics)
+          ExcludeSemantics(child: paragraphWidget)
+        else
+          paragraphWidget,
+        // RenderStack lays out positioned children after the non-positioned
+        // paragraph, so this builder runs once the paragraph has adopted and
+        // laid out this frame's inputs. Building the overlay any earlier
+        // (from build) sees the previous layout and has to drop the plane
+        // for a frame, which reads as flicker on every keystroke (HOM-46).
+        Positioned.fill(
+          child: LayoutBuilder(
+            builder: (context, _) => Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: _buildOverlay(context),
+            ),
+          ),
+        ),
+      ],
     );
+  }
+
+  List<Widget> _buildOverlay(BuildContext context) {
+    final paragraph = _paragraph;
+    final generation = _generation;
+    final paragraphWidget = widget.paragraph;
+    // hasCurrentGeometry is false from markNeedsLayout until performLayout
+    // completes, so a paragraph that has not laid out yet this frame (it
+    // is its own relayout boundary and sorts after this plane) is
+    // suppressed here and caught up by its post-frame geometry notice.
+    if (paragraph == null ||
+        generation == null ||
+        _paragraphKey != paragraphWidget.key ||
+        !paragraph.hasCurrentGeometry ||
+        !_matchesCurrentLayout(
+            context, paragraph.constraints, paragraph, paragraphWidget)) {
+      return const <Widget>[];
+    }
+    final currentGeneration = paragraph.layoutGeneration;
+    // A relayout since the last notice has measured every slot child with
+    // this frame's inputs; otherwise a changed slot revision may still be
+    // waiting on a child that measures differently.
+    if (currentGeneration == generation &&
+        _slotLayoutRevision != widget.slotLayoutRevision) {
+      _scheduleSlotRevisionCatchUp(
+        paragraph,
+        generation,
+        paragraphWidget.key,
+        widget.slotLayoutRevision,
+      );
+      return const <Widget>[];
+    }
+    _builtParagraph = paragraph;
+    _builtGeneration = currentGeneration;
+    _builtParagraphKey = paragraphWidget.key;
+    _builtSlotLayoutRevision = widget.slotLayoutRevision;
+    return widget.overlayBuilder(context, ParagraphGeometry(paragraph));
   }
 
   bool _matchesCurrentLayout(
@@ -186,12 +218,22 @@ class _ParagraphOverlayState extends State<ParagraphOverlay> {
             _generation != generation ||
             _paragraphKey != widget.paragraph.key ||
             _slotLayoutRevision != widget.slotLayoutRevision)) {
-      setState(() {
+      void adopt() {
         _paragraph = paragraph;
         _generation = generation;
         _paragraphKey = widget.paragraph.key;
         _slotLayoutRevision = widget.slotLayoutRevision;
-      });
+      }
+
+      final planeIsCurrent = identical(_builtParagraph, paragraph) &&
+          _builtGeneration == generation &&
+          _builtParagraphKey == widget.paragraph.key &&
+          _builtSlotLayoutRevision == widget.slotLayoutRevision;
+      if (planeIsCurrent) {
+        adopt();
+      } else {
+        setState(adopt);
+      }
     }
     _notifyPublicCallback(paragraph, generation);
   }

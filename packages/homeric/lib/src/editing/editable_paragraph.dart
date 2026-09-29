@@ -3166,7 +3166,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         !identical(_renderParagraph, render) || _renderGeneration != generation;
     if (_floatingCursorHostEpoch != null &&
         _floatingCursorLayoutGeneration != generation) {
-      _cancelFloatingCursor(notify: false);
+      // Notify: the overlay plane may already have been built from this
+      // layout, in which case ParagraphOverlay does not rebuild it again.
+      _cancelFloatingCursor();
     }
     if (geometryChanged &&
         (_longPressActive || _localTouchMovingEndpoint != null)) {

@@ -692,3 +692,25 @@ sliders for body size (12–24) and column width (400–1000). Providers still s
 the applied pixel value — not a preset id — so the control swap needed no
 migration. Homeric remains a presentation consumer: `maxWidth` and body style
 arrive via rebuild; controller identity is unchanged.
+
+## engineer — 2026-09-29 — Build geometry overlays after the paragraph lays out (HOM-46)
+
+**What:** `ParagraphOverlay` used to build its overlay from a `LayoutBuilder`
+wrapped *around* the paragraph. That builder runs before the paragraph adopts
+the frame's new source, so every keystroke saw stale geometry, dropped the
+whole overlay plane (footnote markers, caret, placeholder) for one frame, and
+rebuilt it after the post-frame geometry notice. Histos read that as a
+flickering footnote marker.
+
+**Fix:** host the overlay in a `LayoutBuilder` inside `Positioned.fill`.
+`RenderStack` lays out positioned children after the non-positioned paragraph,
+so the builder runs with same-frame geometry. `hasCurrentGeometry` (reset by
+`markNeedsLayout`) still suppresses the rare paragraph that is its own relayout
+boundary and lays out after the plane.
+
+**Rule going forward:** never keep a stale overlay mounted as a flicker
+workaround. Carets, placeholders, and selections are state-driven, and a
+retained plane paints the placeholder over the first typed glyph. Derive
+overlays after the geometry source lays out. A geometry callback that changes
+overlay state must `setState` itself; the plane is not rebuilt for a layout it
+already caught.

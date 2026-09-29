@@ -93,6 +93,95 @@ void main() {
             'its new source; generation 1 must be suppressed in that gap');
   });
 
+  group('re-places the overlay in the frame the paragraph relays out', () {
+    testWidgets('across a source change', (tester) async {
+      const markerKey = Key('retained-marker');
+      final generations = <int>[];
+
+      Widget build(String text) => harness(ParagraphOverlay(
+            paragraph: HomericParagraph(source: sourceOf(text)),
+            slotLayoutRevision: null,
+            overlayBuilder: (context, geometry) {
+              generations.add(geometry.generation);
+              return <Widget>[
+                Positioned.fromRect(
+                  rect: geometry.caretRect(DocOffset(geometry.docLength)).value,
+                  child: const SizedBox(key: markerKey),
+                ),
+              ];
+            },
+          ));
+
+      await tester.pumpWidget(build('abc'));
+      await tester.pump();
+      expect(tester.getTopLeft(find.byKey(markerKey)), const Offset(42, 0));
+
+      await tester.pumpWidget(build('abcd'));
+
+      expect(tester.getTopLeft(find.byKey(markerKey)), const Offset(56, 0),
+          reason: 'a keystroke must neither blank the overlay nor leave it '
+              'on the previous layout for the frame the paragraph relays out');
+      expect(generations, <int>[1, 2]);
+
+      await tester.pump();
+
+      expect(generations, <int>[1, 2],
+          reason: 'the post-frame geometry notice for a layout the overlay '
+              'already caught must not rebuild it again');
+    });
+
+    testWidgets('without remounting overlay state', (tester) async {
+      const markerKey = Key('stateful-marker');
+
+      Widget build(String text) => harness(ParagraphOverlay(
+            paragraph: HomericParagraph(source: sourceOf(text)),
+            slotLayoutRevision: null,
+            overlayBuilder: (context, geometry) => const <Widget>[
+              _StatefulMarker(key: markerKey),
+            ],
+          ));
+
+      await tester.pumpWidget(build('abc'));
+      await tester.pump();
+      final before = tester.state(find.byKey(markerKey));
+
+      await tester.pumpWidget(build('abcd'));
+      expect(identical(tester.state(find.byKey(markerKey)), before), isTrue);
+
+      await tester.pump();
+      expect(identical(tester.state(find.byKey(markerKey)), before), isTrue,
+          reason: 'hover and gesture state in the overlay must survive a '
+              'keystroke');
+    });
+
+    testWidgets('but not over a replaced paragraph', (tester) async {
+      const markerKey = Key('replaced-marker');
+
+      Widget build(Key paragraphKey) => harness(ParagraphOverlay(
+            paragraph: HomericParagraph(
+              key: paragraphKey,
+              source: sourceOf('abc'),
+            ),
+            slotLayoutRevision: null,
+            overlayBuilder: (context, geometry) => const <Widget>[
+              SizedBox(key: markerKey),
+            ],
+          ));
+
+      await tester.pumpWidget(build(const ValueKey<String>('first')));
+      await tester.pump();
+      expect(find.byKey(markerKey), findsOneWidget);
+
+      await tester.pumpWidget(build(const ValueKey<String>('second')));
+      expect(find.byKey(markerKey), findsNothing,
+          reason: 'presentation built for a replaced render object must not '
+              'outlive it');
+
+      await tester.pump();
+      expect(find.byKey(markerKey), findsOneWidget);
+    });
+  });
+
   group('suppresses completed geometry while new layout inputs are pending',
       () {
     testWidgets('base style', (tester) async {
@@ -572,4 +661,16 @@ Future<void> expectOnlyFreshGenerations(
   await tester.pump();
 
   expect(generations, <int>[1, 2]);
+}
+
+class _StatefulMarker extends StatefulWidget {
+  const _StatefulMarker({super.key});
+
+  @override
+  State<_StatefulMarker> createState() => _StatefulMarkerState();
+}
+
+class _StatefulMarkerState extends State<_StatefulMarker> {
+  @override
+  Widget build(BuildContext context) => const SizedBox();
 }

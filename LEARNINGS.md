@@ -714,3 +714,16 @@ retained plane paints the placeholder over the first typed glyph. Derive
 overlays after the geometry source lays out. A geometry callback that changes
 overlay state must `setState` itself; the plane is not rebuilt for a layout it
 already caught.
+
+## engineer — 2026-09-29 — Consumer non-text blocks are glyphless paragraphs (Nexus journal, HOM-48)
+
+*Mirrored from Nexus `LEARNINGS.md` per AGENTS.md compounding.*
+
+Histos renders a `---` divider as a `Block(type: 'divider')` with no runs. It
+is still a `HomericEditableParagraph`, framed at 10px behind
+`IgnorePointer`/`ExcludeSemantics`, so arrow keys can reach it but taps
+cannot. It is created and removed by consumer `preInsert`/`preDelete`
+interceptors, which use `HomericPreparedCommand` with a literal
+`undoCheckpoint`. No new Homeric API was needed; a block-level
+"caret skips this block" predicate is the remaining gap if arrow keys should
+pass over it.

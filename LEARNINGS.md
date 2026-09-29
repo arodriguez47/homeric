@@ -667,3 +667,28 @@ length, to identify the empty-caret fallback. Fully hidden nonempty text also
 has no visual line. A constrained-height regression reproduces the mismatch
 without relying on a particular font: ArrowLeft enters the hidden endpoint and
 one ArrowDown leaves it without revealing text or changing history.
+
+## engineer — 2026-09-22 — Host type-scale facade before notify (Nexus journal)
+
+**What (Nexus host):** Journal body/heading styles rebuild through a mutable
+`NexusTypeScale` facade written by `JournalSizeProvider` *before* notify — same
+watch-delivery pattern as journal fonts/width. Heading ladder sizes scale with
+body size. Appearance chrome is shell-owned and exclusive with the context panel.
+
+**Why it matters for Homeric:** Homeric remains a presentation consumer (styles +
+`maxWidth` at rebuild). Hosts that change type metrics must keep controller
+identity and deliver size via rebuild, not remount.
+
+**Rule going forward:** Facade-before-notify for call-time style metrics;
+mirror text-layout / editor-architecture learnings in both repos in the same
+change. Evidence: Nexus `JournalSizeProvider` / `NexusTypeScale`.
+
+## editor-layout — 2026-09-22 — Appearance Size/Width are continuous sliders over px stores
+
+*Mirrored from Nexus `LEARNINGS.md` per AGENTS.md Homeric compounding.*
+
+Nexus Appearance rail and Settings Journal pane use continuous (fine-step)
+sliders for body size (12–24) and column width (400–1000). Providers still store
+the applied pixel value — not a preset id — so the control swap needed no
+migration. Homeric remains a presentation consumer: `maxWidth` and body style
+arrive via rebuild; controller identity is unchanged.

@@ -3154,11 +3154,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   bool _isCurrentGeometry(ParagraphGeometry geometry) {
     final render = _renderParagraph;
+    // Compare against the live render generation, not _renderGeneration:
+    // ParagraphOverlay builds in the same frame as the relayout, before the
+    // post-frame geometry notice advances _renderGeneration.
     return render != null &&
         _geometryDocumentRevision == _controller.documentRevision &&
         render.hasCurrentGeometry &&
-        render.layoutGeneration == _renderGeneration &&
-        geometry.generation == _renderGeneration;
+        geometry.generation == render.layoutGeneration;
   }
 
   void _geometryChanged(RenderHomericParagraph render, int generation) {

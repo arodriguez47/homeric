@@ -4219,14 +4219,15 @@ void main() {
           blockId: block.id,
           focusNode: focusNode,
           resolveStyle: (_) => _style,
-          overlayBuilder: (context, geometry) => const <Widget>[
-            Positioned(
-              left: 0,
-              top: 0,
-              width: 4,
-              height: 4,
-              child: SizedBox(key: markerKey),
-            ),
+          // Consumers like the Histos footnote marker only paint from
+          // current geometry; stale block geometry answers null.
+          overlayBuilder: (context, geometry) => <Widget>[
+            if (geometry.rectsForRange(const BlockTextRange(0, 1))
+                case final rects? when rects.isNotEmpty)
+              Positioned.fromRect(
+                rect: rects.first,
+                child: const SizedBox(key: markerKey),
+              ),
           ],
         ),
       ),
@@ -4240,7 +4241,9 @@ void main() {
         reason: 'the relayout frame must keep the consumer overlay painted');
 
     await tester.pump();
-    expect(find.byKey(markerKey), findsOneWidget);
+    await tester.pump();
+    expect(find.byKey(markerKey), findsOneWidget,
+        reason: 'the marker must survive once the geometry notice settles');
     expect(controller.document.blocks.single.text, 'alphaX');
   });
 

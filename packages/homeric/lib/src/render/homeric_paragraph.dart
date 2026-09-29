@@ -1351,6 +1351,19 @@ class RenderHomericParagraph extends RenderBox
   @override
   bool hitTestSelf(Offset position) => true;
 
+  /// Whether [position] (paragraph-local) lands on an inline slot child that
+  /// handles pointer input itself, such as a tappable chip.
+  ///
+  /// Editing gesture planes layered over the paragraph yield there, so the
+  /// slot's own recognizers win. Decorative slots do not claim the point.
+  @internal
+  bool hitsInteractiveSlot(Offset position) {
+    if (childCount == 0) return false;
+    final result = BoxHitTestResult();
+    return hitTestChildren(result, position: position) &&
+        result.path.any((entry) => entry.target is RenderPointerListener);
+  }
+
   @override
   bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
     // Children first, at their placeholder boxes; positions outside every

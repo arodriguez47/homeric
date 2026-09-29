@@ -1122,7 +1122,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
               );
         return <Widget>[
           Positioned.fill(
-            child: hoverPlane,
+            child: _YieldToInteractiveSlots(
+              paragraph: () => _renderParagraph,
+              child: hoverPlane,
+            ),
           ),
           ..._selectionEndpointTargets(geometry),
           if (fullySelectedEmptyBlock)
@@ -3315,6 +3318,48 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   static int _assoc(HomericCaretAffinity affinity) =>
       affinity == HomericCaretAffinity.upstream ? -1 : 1;
+}
+
+/// Lets pointer input fall through to interactive inline slot children.
+///
+/// The selection plane covers the whole paragraph and is translucent, so
+/// without this its recognizers join, and win, the arena for taps meant for
+/// a chip rendered inside the text.
+class _YieldToInteractiveSlots extends SingleChildRenderObjectWidget {
+  const _YieldToInteractiveSlots({
+    required this.paragraph,
+    required super.child,
+  });
+
+  final RenderHomericParagraph? Function() paragraph;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderYieldToInteractiveSlots(paragraph);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderYieldToInteractiveSlots renderObject,
+  ) {
+    renderObject.paragraph = paragraph;
+  }
+}
+
+class _RenderYieldToInteractiveSlots extends RenderProxyBox {
+  _RenderYieldToInteractiveSlots(this.paragraph);
+
+  RenderHomericParagraph? Function() paragraph;
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    final render = paragraph();
+    if (render != null && render.attached && render.hasSize) {
+      final local = render.globalToLocal(localToGlobal(position));
+      if (render.hitsInteractiveSlot(local)) return false;
+    }
+    return super.hitTest(result, position: position);
+  }
 }
 
 class _HomericContextMenuFocusScope extends StatefulWidget {

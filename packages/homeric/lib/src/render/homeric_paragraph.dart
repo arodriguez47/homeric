@@ -1355,13 +1355,19 @@ class RenderHomericParagraph extends RenderBox
   /// handles pointer input itself, such as a tappable chip.
   ///
   /// Editing gesture planes layered over the paragraph yield there, so the
-  /// slot's own recognizers win. Decorative slots do not claim the point.
+  /// slot's own recognizers win. Decorative and hover-only slots do not
+  /// claim the point: only a listener that handles pointer-down (as every
+  /// gesture detector does) can own a press.
   @internal
   bool hitsInteractiveSlot(Offset position) {
     if (childCount == 0) return false;
     final result = BoxHitTestResult();
     return hitTestChildren(result, position: position) &&
-        result.path.any((entry) => entry.target is RenderPointerListener);
+        result.path.any((entry) {
+          final target = entry.target;
+          return target is RenderPointerListener &&
+              target.onPointerDown != null;
+        });
   }
 
   @override

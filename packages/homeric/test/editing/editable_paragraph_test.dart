@@ -74,6 +74,24 @@ void main() {
               'though the editing plane is layered above it');
     });
 
+    testWidgets('still places the caret over a hover-only slot',
+        (tester) async {
+      final mounted = await pumpSlot(
+        tester,
+        () => Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerHover: (_) {},
+          child: const SizedBox(width: 30, height: 12),
+        ),
+      );
+
+      await tester.tap(mounted.slot);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(mounted.controller.selection, isNotNull,
+          reason: 'a slot that only tracks hover does not own taps');
+    });
+
     testWidgets('still places the caret over a decorative slot',
         (tester) async {
       final mounted = await pumpSlot(

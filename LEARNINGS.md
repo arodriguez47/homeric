@@ -692,3 +692,48 @@ sliders for body size (12–24) and column width (400–1000). Providers still s
 the applied pixel value — not a preset id — so the control swap needed no
 migration. Homeric remains a presentation consumer: `maxWidth` and body style
 arrive via rebuild; controller identity is unchanged.
+
+## engineer — 2026-09-29 — Build geometry overlays after the paragraph lays out (HOM-46)
+
+**What:** `ParagraphOverlay` used to build its overlay from a `LayoutBuilder`
+wrapped *around* the paragraph. That builder runs before the paragraph adopts
+the frame's new source, so every keystroke saw stale geometry, dropped the
+whole overlay plane (footnote markers, caret, placeholder) for one frame, and
+rebuilt it after the post-frame geometry notice. Histos read that as a
+flickering footnote marker.
+
+**Fix:** host the overlay in a `LayoutBuilder` inside `Positioned.fill`.
+`RenderStack` lays out positioned children after the non-positioned paragraph,
+so the builder runs with same-frame geometry. `hasCurrentGeometry` (reset by
+`markNeedsLayout`) still suppresses the rare paragraph that is its own relayout
+boundary and lays out after the plane.
+
+**Rule going forward:** never keep a stale overlay mounted as a flicker
+workaround. Carets, placeholders, and selections are state-driven, and a
+retained plane paints the placeholder over the first typed glyph. Derive
+overlays after the geometry source lays out. A geometry callback that changes
+overlay state must `setState` itself; the plane is not rebuilt for a layout it
+already caught.
+
+**Follow-on (same change):** a steadily mounted overlay exposed two
+assumptions that the dropped frame had hidden.
+- `HomericEditableBlockGeometry.isCurrent` has to compare against the live
+  render generation, not the post-frame `_renderGeneration`. Otherwise
+  consumers treat same-frame geometry as stale and paint nothing.
+- The translucent selection plane must yield hit testing to inline slot
+  children that handle pointer input, such as Histos aside chips. Otherwise
+  it wins the tap arena. Histos chip taps only worked while the plane was
+  missing.
+
+## engineer — 2026-09-29 — Consumer non-text blocks are glyphless paragraphs (Nexus journal, HOM-48)
+
+*Mirrored from Nexus `LEARNINGS.md` per AGENTS.md compounding.*
+
+Histos renders a `---` divider as a `Block(type: 'divider')` with no runs. It
+is still a `HomericEditableParagraph`, framed at 10px behind
+`IgnorePointer`/`ExcludeSemantics`, so arrow keys can reach it but taps
+cannot. It is created and removed by consumer `preInsert`/`preDelete`
+interceptors, which use `HomericPreparedCommand` with a literal
+`undoCheckpoint`. No new Homeric API was needed; a block-level
+"caret skips this block" predicate is the remaining gap if arrow keys should
+pass over it.

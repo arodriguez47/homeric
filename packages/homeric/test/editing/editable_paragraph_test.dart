@@ -25,6 +25,87 @@ void main() {
 
   tearDown(() => debugDefaultTargetPlatformOverride = null);
 
+  group('selection plane over inline slots', () {
+    Future<({HomericEditorController controller, Finder slot})> pumpSlot(
+      WidgetTester tester,
+      Widget Function() slot,
+    ) async {
+      final document = _document('abc');
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_harness(HomericEditableParagraph(
+        controller: controller,
+        inputSession: session,
+        blockId: 'b',
+        resolveStyle: (_) => _style,
+        deriveDecorations: (_) => <Decoration>[
+          Decoration.widget('b', 1, spec: 'slot'),
+        ],
+        slotBuilder: (_) => KeyedSubtree(
+          key: const ValueKey('slot-child'),
+          child: slot(),
+        ),
+      )));
+      await tester.pump();
+      return (
+        controller: controller,
+        slot: find.byKey(const ValueKey('slot-child')),
+      );
+    }
+
+    testWidgets('yields taps to an interactive slot child', (tester) async {
+      var taps = 0;
+      final mounted = await pumpSlot(
+        tester,
+        () => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => taps++,
+          child: const SizedBox(width: 30, height: 12),
+        ),
+      );
+
+      await tester.tap(mounted.slot);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(taps, 1,
+          reason: 'a chip inside the paragraph must receive its own tap even '
+              'though the editing plane is layered above it');
+    });
+
+    testWidgets('still places the caret over a hover-only slot',
+        (tester) async {
+      final mounted = await pumpSlot(
+        tester,
+        () => Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerHover: (_) {},
+          child: const SizedBox(width: 30, height: 12),
+        ),
+      );
+
+      await tester.tap(mounted.slot);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(mounted.controller.selection, isNotNull,
+          reason: 'a slot that only tracks hover does not own taps');
+    });
+
+    testWidgets('still places the caret over a decorative slot',
+        (tester) async {
+      final mounted = await pumpSlot(
+        tester,
+        () => const SizedBox(width: 30, height: 12),
+      );
+
+      await tester.tap(mounted.slot);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(mounted.controller.selection, isNotNull);
+    });
+  });
+
   testWidgets(
       'mounted smoke: focus, canonical input, click, replacement, Backspace',
       (tester) async {

@@ -4193,6 +4193,60 @@ void main() {
     expect(key.currentState!.activeCaretGeometry, isNotNull);
   });
 
+  testWidgets('consumer overlay stays mounted in the frame a keystroke lands',
+      (tester) async {
+    // HOM-46: footnote markers blinked on every keystroke because the
+    // overlay plane was dropped until the relayout's geometry notice.
+    const markerKey = ValueKey('consumer-marker-overlay');
+    final document = _document(<String>['alpha']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 5)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_withOverlay(SizedBox(
+      width: 320,
+      height: 240,
+      child: HomericEditableDocument.builder(
+        controller: controller,
+        inputSession: session,
+        blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: block.id,
+          focusNode: focusNode,
+          resolveStyle: (_) => _style,
+          // Consumers like the Histos footnote marker only paint from
+          // current geometry; stale block geometry answers null.
+          overlayBuilder: (context, geometry) => <Widget>[
+            if (geometry.rectsForRange(const BlockTextRange(0, 1))
+                case final rects? when rects.isNotEmpty)
+              Positioned.fromRect(
+                rect: rects.first,
+                child: const SizedBox(key: markerKey),
+              ),
+          ],
+        ),
+      ),
+    )));
+    await tester.pump();
+    expect(find.byKey(markerKey), findsOneWidget);
+
+    expect(controller.replaceSelection('X'), isTrue);
+    await tester.pump();
+    expect(find.byKey(markerKey), findsOneWidget,
+        reason: 'the relayout frame must keep the consumer overlay painted');
+
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(markerKey), findsOneWidget,
+        reason: 'the marker must survive once the geometry notice settles');
+    expect(controller.document.blocks.single.text, 'alphaX');
+  });
+
   testWidgets('document host exposes mounted global selection rectangles',
       (tester) async {
     final document = _document(const ['alpha beta', 'gamma delta']);

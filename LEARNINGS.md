@@ -737,3 +737,42 @@ interceptors, which use `HomericPreparedCommand` with a literal
 `undoCheckpoint`. No new Homeric API was needed; a block-level
 "caret skips this block" predicate is the remaining gap if arrow keys should
 pass over it.
+
+## engineer — 2026-10-01 — `scrollToBlockLatest`'s `reached` is not a stable reveal (Nexus focus panel)
+
+*Mirrored from Nexus `LEARNINGS.md` per AGENTS.md compounding (Nexus PR
+arodriguez47/nexus#258, "Open at a passage" entry).*
+
+**What (Nexus host):** Histos opens a journal entry with a passage selected and
+scrolled into view. `HomericJournalEditorSession.revealCanonicalRange` maps a
+canonical text range to a Homeric selection, then calls
+`HomericEditableDocumentState.scrollToBlockLatest`.
+
+**Why it matters for Homeric:**
+
+- **`reached` can be stale one frame later in a virtualized document.**
+  `_scrollToBlock` jumps by the height cache, waits for the row to mount,
+  centres it, and returns `reached`. On the next frame the newly mounted rows
+  have been measured. Every unmeasured row above is re-estimated, so the
+  target can move hundreds of pixels: unmounted, or kept alive off screen. In
+  a 200-paragraph document the row was on screen at frame 1 and gone at frame
+  2. A second call lands on the converged estimate and holds. Nexus works
+  around this by checking painted selection geometry two frames after each
+  attempt and retrying (three attempts).
+- **A kept-alive off-screen row reports NaN rects, not an empty list.** Its
+  paint transform is zero, so `localToGlobal` divides by a zero `w`. Any "is it
+  visible" check over Homeric selection geometry must test `Rect.isFinite`.
+  Otherwise NaN comparisons read as "not inside" in one place and flow into
+  arithmetic (`jumpTo(NaN)`) in another.
+- **Block granularity is not passage granularity.** `scrollToBlock` centres the
+  whole row, so a paragraph taller than the viewport can leave the target text
+  off screen. The consumer has to centre the selection's first rect after the
+  block is reached.
+
+**Rule going forward:** treat `HomericScrollToBlockResult.reached` as "the row
+was mounted once", not "the row is visible now". Verify painted geometry after
+the height cache settles. Candidate Homeric work: keep the target row anchored
+across height-cache revisions (or re-verify internally before returning
+`reached`), and add a range-granular reveal. Evidence: Nexus
+`lib/widgets/homeric_journal_editor_session.dart` (`revealCanonicalRange`),
+`test/widgets/homeric_journal_editor_session_reveal_test.dart`.

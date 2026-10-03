@@ -794,6 +794,45 @@ Swift change, verify with `flutter build macos --profile` from
 `packages/homeric/examples/playground`. Revert the tool's automatic
 `MACOSX_DEPLOYMENT_TARGET` bump in `project.pbxproj` unless the change needs it.
 
+## engineer — 2026-10-03 — iOS soft Backspace needs a character to delete at the block start
+
+**What:** On iPhone, Backspace on an empty paragraph (or at the start of a
+non-empty one) did nothing. HOM #38 fixed this for desktop and web by binding the
+physical Backspace/Delete keys to `controller.deleteBackward()`, but the iOS soft
+keyboard sends no key event. It calls UIKit `deleteBackward`, and Flutter's
+`FlutterTextInputPlugin.mm` only builds a deletion when the caret is past offset
+0. The platform value is the active block's raw text, so at the block start the
+engine sends nothing and the session never hears the press.
+
+**Fix:** on iOS (`!kIsWeb`, chosen per attachment epoch) the session's platform
+value leads with one U+200B sentinel. Every selection, composing range, and
+autocorrection range crossing the platform boundary shifts by one. A
+`TextEditingDeltaDeletion` of exactly `[0, 1)` is not a text edit: it dispatches
+`DeleteCharacterIntent(forward: false)` through the host command delegate (the
+same guarded path as the physical key) and resyncs so the next press has a
+fresh sentinel. Any other delta whose range swallows the sentinel still applies
+as a block edit; the session restores the sentinel and pushes the value back.
+
+- **Key bindings are not the only Backspace.** Any document-boundary command
+  bound to a physical key needs a soft-keyboard path on iOS. Check what the
+  engine sends for the edge case before assuming a delta arrives.
+- **Test with the engine's message, not a key event.** `TargetPlatformVariant.only(iOS)`
+  plus a `TextEditingDeltaDeletion` of the sentinel; key-event tests cannot
+  catch this. Evidence: `test/input/text_input_session_test.dart` (iOS group),
+  `test/editing/editable_document_test.dart` ("iOS soft Backspace crosses the
+  block start"). Verified on the iOS 27 simulator through Nexus `mock_main`:
+  empty-block removal and non-empty join, one action per press.
+- **Auto-capitalisation is unaffected today** because the session's default
+  configuration uses `TextCapitalization.none`. If a consumer turns on
+  sentence capitalisation, re-check UIKit's behaviour after the sentinel.
+- **Android is unverified.** Some IMEs send a DEL key event on an empty field
+  and others call `deleteSurroundingText`, which also sends nothing at offset 0.
+  Extend the sentinel to Android only after checking on a device.
+- **A caret before the sentinel inserts at offset 0.** UIKit can place the
+  caret ahead of U+200B; the insertion then displaces it. The session applies
+  such insertions after the sentinel (`_insertAfterSentinel`) so the
+  displaced character never becomes document text.
+
 ## engineer — 2026-10-03 — Keep the editing caret inside the viewport without typewriter mode
 
 **What:** On iPhone with the keyboard up, the Nexus Journal's writing viewport

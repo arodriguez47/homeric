@@ -1970,7 +1970,15 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       }
       _retargetActiveHost();
       _scheduleTypewriterFocus(force: true);
+      // Outside typewriter mode the forced call above is ignored, and
+      // scrollToBlock centres the row: a tall row can leave the caret out of
+      // view, so reveal the caret itself.
+      if (!widget.typewriterFocus && widget.inputSession.isAttached) {
+        _queueCaretReveal();
+      }
     });
+    // A post-frame callback does not request a frame on its own.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   bool _captureSemanticsState() {

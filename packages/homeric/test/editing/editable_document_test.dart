@@ -4801,6 +4801,49 @@ void main() {
             'padding or height update must not undo the user\'s scroll');
   });
 
+  testWidgets('moving the caret into a tall unmounted row lands it in view',
+      (tester) async {
+    final tall = List<String>.filled(400, 'word').join(' ');
+    final document = _document(<String>[
+      ...List<String>.generate(30, (index) => 'line-$index'),
+      tall,
+      'after',
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewport = documentBox.localToGlobal(Offset.zero) & documentBox.size;
+
+    // Pending-row settlement centres the tall row, which alone can leave a
+    // caret near its end outside the viewport.
+    controller.setSelection(HomericSelection.collapsed(
+      controller.document.positionAt(30, tall.length - 3),
+    ));
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump();
+    }
+
+    final caret = key.currentState!.activeCaretGeometry?.globalRect;
+    expect(caret, isNotNull);
+    expect(caret!.isFinite, isTrue);
+    expect(viewport.contains(caret.center), isTrue,
+        reason: 'the caret, not just its row, must end up visible');
+  });
+
   testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',
       (tester) async {
     final document = _document(

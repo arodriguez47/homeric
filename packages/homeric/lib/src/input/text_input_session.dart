@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -49,6 +50,12 @@ final class HomericTextInputGeometryLease {
 /// This surface is experimental until a real Nexus consumer validates it. The
 /// platform value always contains raw block text; projected view offsets never
 /// cross this boundary.
+///
+/// On iOS the platform value also leads with one zero-width boundary sentinel.
+/// UIKit's soft-keyboard Backspace sends no key event, and the engine's
+/// `deleteBackward` sends no delta when the caret is at offset 0, so without a
+/// character to delete the document could never join or remove the block.
+/// Deleting the sentinel dispatches the host's document-level Backspace.
 final class HomericTextInputSession extends ChangeNotifier {
   /// Creates a session that observes [controller].
   HomericTextInputSession({
@@ -85,6 +92,8 @@ final class HomericTextInputSession extends ChangeNotifier {
   HomericTextInputCommandDelegate? _commandDelegate;
   bool _applyingRemote = false;
   bool _deltasSuspended = false;
+  // Fixed per attachment epoch so one platform value never changes shape.
+  bool _boundarySentinel = false;
   bool _disposed = false;
   String? _suppressedSelector;
   Timer? _suppressedSelectorTimer;
@@ -168,6 +177,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     }
 
     _close(CompositionInterruption.activeBlockSwitch, notify: false);
+    _boundarySentinel = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     final value = _canonicalValue(blockId);
     if (value == null) return false;
 
@@ -357,11 +367,13 @@ final class HomericTextInputSession extends ChangeNotifier {
         return null;
       }
     }
+    final prefix = _sentinelLength;
     return TextEditingValue(
-      text: controller.document.blocks[index].text,
+      text: '${prefix == 0 ? '' : _boundarySentinelText}'
+          '${controller.document.blocks[index].text}',
       selection: TextSelection(
-        baseOffset: anchor,
-        extentOffset: head,
+        baseOffset: anchor + prefix,
+        extentOffset: head + prefix,
         affinity: selection.affinity == HomericCaretAffinity.upstream
             ? TextAffinity.upstream
             : TextAffinity.downstream,
@@ -370,8 +382,99 @@ final class HomericTextInputSession extends ChangeNotifier {
         // canonical model intentionally does not own.
         isDirectional: false,
       ),
-      composing: composingRange,
+      composing: composingRange.isValid
+          ? TextRange(
+              start: composingRange.start + prefix,
+              end: composingRange.end + prefix,
+            )
+          : composingRange,
     );
+  }
+
+  static const String _boundarySentinelText = '\u200B';
+
+  int get _sentinelLength => _boundarySentinel ? 1 : 0;
+
+  /// Strips the platform-only sentinel, or returns null when it is missing.
+  TextEditingValue? _localValue(TextEditingValue platform) {
+    final prefix = _sentinelLength;
+    if (prefix == 0) return platform;
+    if (!platform.text.startsWith(_boundarySentinelText)) return null;
+    final composing = platform.composing;
+    if (composing.isValid && composing.start < prefix) return null;
+    final selection = platform.selection;
+    // A caret placed before the sentinel is the block start.
+    int local(int offset) => offset < prefix ? 0 : offset - prefix;
+    return TextEditingValue(
+      text: platform.text.substring(prefix),
+      selection: selection.copyWith(
+        baseOffset: local(selection.baseOffset),
+        extentOffset: local(selection.extentOffset),
+      ),
+      composing: composing.isValid
+          ? TextRange(
+              start: composing.start - prefix,
+              end: composing.end - prefix,
+            )
+          : composing,
+    );
+  }
+
+  TextEditingValue _insertAfterSentinel(
+    TextEditingValue shadow,
+    TextEditingDeltaInsertion delta,
+  ) {
+    final prefix = _sentinelLength;
+    final inserted = delta.textInserted.length;
+    // Delta offsets up to the inserted text's end move past the sentinel;
+    // later ones already sit after it.
+    int map(int offset) => offset <= inserted ? offset + prefix : offset;
+    final selection = delta.selection;
+    final composing = delta.composing;
+    return TextEditingValue(
+      text: shadow.text.substring(0, prefix) +
+          delta.textInserted +
+          shadow.text.substring(prefix),
+      selection: selection.copyWith(
+        baseOffset: map(selection.baseOffset),
+        extentOffset: map(selection.extentOffset),
+      ),
+      composing: composing.isValid
+          ? TextRange(start: map(composing.start), end: map(composing.end))
+          : composing,
+    );
+  }
+
+  TextEditingValue _withSentinel(TextEditingValue value) {
+    final prefix = _sentinelLength;
+    final composing = value.composing;
+    return TextEditingValue(
+      text: '$_boundarySentinelText${value.text}',
+      selection: value.selection.copyWith(
+        baseOffset: value.selection.baseOffset + prefix,
+        extentOffset: value.selection.extentOffset + prefix,
+      ),
+      composing: composing.isValid
+          ? TextRange(
+              start: composing.start + prefix,
+              end: composing.end + prefix,
+            )
+          : composing,
+    );
+  }
+
+  bool _deletesBoundarySentinel(TextEditingDelta delta) =>
+      _boundarySentinel &&
+      delta is TextEditingDeltaDeletion &&
+      delta.deletedRange.start == 0 &&
+      delta.deletedRange.end == _sentinelLength;
+
+  void _deleteBackwardAtBoundary() {
+    if (controller.composing == null) {
+      _commandDelegate?.invoke(const DeleteCharacterIntent(forward: false));
+    }
+    // Handled or not, the platform gets a fresh sentinel for the next press.
+    _syncCanonical(force: true);
   }
 
   void _syncCanonical({required bool force}) {
@@ -400,6 +503,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     if (initial == null || blockId == null) return;
 
     var shadow = initial;
+    var sentinelRestored = false;
     final edits = <CanonicalTextEdit>[];
     try {
       for (final delta in deltas) {
@@ -407,12 +511,38 @@ final class HomericTextInputSession extends ChangeNotifier {
           _syncCanonical(force: true);
           return;
         }
-        final next = delta.apply(shadow);
+        if (edits.isEmpty && _deletesBoundarySentinel(delta)) {
+          _deleteBackwardAtBoundary();
+          return;
+        }
+        var next = delta.apply(shadow);
         if (!_validValue(next) || _containsNewline(next.text)) {
           _syncCanonical(force: true);
           return;
         }
-        final edit = _singleEdit(shadow.text, next.text);
+        final before = _localValue(shadow);
+        if (_boundarySentinel &&
+            delta is TextEditingDeltaInsertion &&
+            delta.insertionOffset == 0 &&
+            delta.textInserted.isNotEmpty) {
+          // A caret placed before the sentinel inserts at 0 and displaces it;
+          // apply the text after the sentinel instead.
+          next = _insertAfterSentinel(shadow, delta);
+          sentinelRestored = true;
+        } else if (before != null &&
+            _boundarySentinel &&
+            !next.text.startsWith(_boundarySentinelText)) {
+          // A platform range that swallowed the sentinel still edits the
+          // block; only an exact sentinel deletion is a boundary Backspace.
+          next = _withSentinel(next);
+          sentinelRestored = true;
+        }
+        final after = _localValue(next);
+        if (before == null || after == null) {
+          _syncCanonical(force: true);
+          return;
+        }
+        final edit = _singleEdit(before.text, after.text);
         if (edit != null) edits.add(edit);
         shadow = next;
       }
@@ -424,17 +554,22 @@ final class HomericTextInputSession extends ChangeNotifier {
       return;
     }
 
-    if (!_validValue(shadow) || _containsNewline(shadow.text)) {
+    final localInitial = _localValue(initial);
+    final local = _localValue(shadow);
+    if (localInitial == null ||
+        local == null ||
+        !_validValue(shadow) ||
+        _containsNewline(shadow.text)) {
       _syncCanonical(force: true);
       return;
     }
-    final composing = shadow.composing.isValid && !shadow.composing.isCollapsed
-        ? BlockTextRange(shadow.composing.start, shadow.composing.end)
+    final composing = local.composing.isValid && !local.composing.isCollapsed
+        ? BlockTextRange(local.composing.start, local.composing.end)
         : null;
     if (_selectionSpansBlocks(blockId)) {
       _applyDocumentSelectionDelta(
-        initial: initial,
-        shadow: shadow,
+        initial: localInitial,
+        shadow: local,
       );
       return;
     }
@@ -444,9 +579,9 @@ final class HomericTextInputSession extends ChangeNotifier {
         blockId: blockId,
         edits: edits,
         selection: BlockTextSelection(
-          anchor: shadow.selection.baseOffset,
-          head: shadow.selection.extentOffset,
-          affinity: shadow.selection.affinity == TextAffinity.upstream
+          anchor: local.selection.baseOffset,
+          head: local.selection.extentOffset,
+          affinity: local.selection.affinity == TextAffinity.upstream
               ? HomericCaretAffinity.upstream
               : HomericCaretAffinity.downstream,
         ),
@@ -457,7 +592,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     }
 
     final canonical = _canonicalValue(blockId);
-    if (_sameCanonicalValue(canonical, shadow)) {
+    if (!sentinelRestored && _sameCanonicalValue(canonical, shadow)) {
       _shadowValue = shadow;
       return;
     }
@@ -768,16 +903,17 @@ final class _EpochTextInputClient with DeltaTextInputClient {
   @override
   void showAutocorrectionPromptRect(int start, int end) {
     final value = session._shadowValue;
+    final prefix = session._sentinelLength;
     if (epoch != session._currentEpoch ||
         session._disposed ||
         value == null ||
-        start < 0 ||
+        start < prefix ||
         end <= start ||
         end > value.text.length) {
       return;
     }
     session._commandDelegate?.showAutocorrectionPromptRect(
-      TextRange(start: start, end: end),
+      TextRange(start: start - prefix, end: end - prefix),
     );
   }
 

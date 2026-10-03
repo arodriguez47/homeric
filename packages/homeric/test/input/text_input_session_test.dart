@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1098,6 +1099,136 @@ void main() {
 
     session.dispose();
     controller.dispose();
+  });
+
+  group('iOS soft-keyboard block boundary', () {
+    setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.iOS);
+    tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    test('platform value leads with a deletable boundary sentinel', () {
+      final document = _document('ab');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+
+      session.attach(blockId: 'a');
+
+      final state = _editingStateCalls(calls).single.arguments as Map;
+      expect(state['text'], '\u200Bab',
+          reason: 'UIKit deleteBackward sends nothing at offset 0, so the '
+              'block start must sit after one platform-only character');
+      expect(state['selectionBase'], 2);
+      expect(state['selectionExtent'], 2);
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    test('deleting the sentinel dispatches document Backspace once', () async {
+      final document = _documents(<String>['left', '']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(1, 0)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final delegate = _FakeCommandDelegate();
+      session.attach(blockId: 'b', commandDelegate: delegate);
+      final revision = controller.documentRevision;
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\u200B',
+          deltaText: '',
+          start: 0,
+          end: 1,
+          selectionBase: 0,
+          selectionExtent: 0,
+        ),
+      ]);
+
+      expect(delegate.intents, hasLength(1));
+      final intent = delegate.intents.single;
+      expect(intent, isA<DeleteCharacterIntent>());
+      expect((intent as DeleteCharacterIntent).forward, isFalse);
+      expect(controller.documentRevision, revision,
+          reason: 'the sentinel is never canonical text');
+      expect(
+        (_editingStateCalls(calls).last.arguments as Map)['text'],
+        '\u200B',
+        reason: 'an unhandled boundary Backspace restores the sentinel',
+      );
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    test('ordinary deltas map through the sentinel offset', () async {
+      final document = _document('ab');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final delegate = _FakeCommandDelegate();
+      session.attach(blockId: 'a', commandDelegate: delegate);
+      calls.clear();
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\u200Bab',
+          deltaText: 'X',
+          start: 2,
+          end: 2,
+          selectionBase: 3,
+          selectionExtent: 3,
+        ),
+      ]);
+      expect(controller.document.blocks.single.text, 'aXb');
+      expect(controller.selection,
+          HomericSelection.collapsed(controller.document.positionAt(0, 2)));
+      expect(_editingStateCalls(calls), isEmpty);
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\u200BaXb',
+          deltaText: '',
+          start: 1,
+          end: 2,
+          selectionBase: 1,
+          selectionExtent: 1,
+        ),
+      ]);
+      expect(controller.document.blocks.single.text, 'Xb');
+      expect(controller.selection,
+          HomericSelection.collapsed(controller.document.positionAt(0, 0)));
+      expect(delegate.intents, isEmpty);
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\u200BXb',
+          deltaText: 'Q',
+          start: 0,
+          end: 3,
+          selectionBase: 1,
+          selectionExtent: 1,
+        ),
+      ]);
+      expect(controller.document.blocks.single.text, 'Q',
+          reason: 'a platform range over the sentinel still edits the block');
+      expect(delegate.intents, isEmpty);
+      expect(_editingStateCalls(calls).last.arguments,
+          containsPair('text', '\u200BQ'));
+
+      session.debugAutocorrectionPromptCallback!(1, 2);
+      expect(delegate.autocorrectionPromptRanges, const <TextRange>[
+        TextRange(start: 0, end: 1),
+      ]);
+
+      session.dispose();
+      controller.dispose();
+    });
   });
 }
 

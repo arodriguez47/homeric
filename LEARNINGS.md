@@ -803,7 +803,9 @@ a user scrolling away from the caret is never pulled back.
 - **Missing or non-finite geometry falls back to `scrollToBlock`.** A row
   scrolled far away is unmounted (null geometry) or kept alive with a zero
   paint transform (NaN rect). After the retries, or on a non-finite rect, the
-  active block is scrolled in once per selection and content revision.
+  active block is scrolled in, up to three passes per selection and content
+  revision: `scrollToBlock` reports a kept-alive row as reached once it is
+  mounted, which a stale height estimate can leave off screen.
 - **`addPostFrameCallback` does not request a frame.** The retry loop only ran
   while something else kept frames coming; on an idle surface attempt 2 never
   fired. Queue the retry and call `ensureVisualUpdate()`.

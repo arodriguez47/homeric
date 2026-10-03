@@ -592,6 +592,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   HomericSelection? _typewriterSelection;
   int _typewriterContentRevision = -1;
   (HomericSelection?, int)? _caretRevealFallbackKey;
+  int _caretRevealFallbackPasses = 0;
+  static const int _maxCaretRevealFallbackPasses = 3;
   HomericSelection? _semanticsSelection;
   HomericTextRange? _semanticsComposing;
   bool _semanticsCanUndo = false;
@@ -1831,7 +1833,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       // Geometry may arrive one frame after a recycled row mounts.
       if (attempt >= 2) {
         // Still none: the row is not mounted at all. Bring it in by block.
-        _revealActiveBlockOnce();
+        _revealActiveBlockBounded();
         return;
       }
       final generation = _typewriterFocusGeneration;
@@ -1851,7 +1853,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (viewportHeight <= 0) return;
     if (!caret.globalRect.isFinite) {
       // A kept-alive row far off screen paints through a zero transform.
-      _revealActiveBlockOnce();
+      _revealActiveBlockBounded();
       return;
     }
     final caretRect = caret.globalRect.translate(0, -viewportTop);
@@ -1882,13 +1884,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   /// Scrolls the active block into view when its caret geometry is missing or
-  /// non-finite. Once per selection and content revision, so a block that
-  /// still yields no geometry cannot loop.
-  void _revealActiveBlockOnce() {
+  /// non-finite. `scrollToBlock` reports a kept-alive row as reached once it is
+  /// mounted, which a stale height estimate can leave off screen, so allow a
+  /// few passes per selection and content revision; the bound stops a block
+  /// that never yields geometry from looping.
+  void _revealActiveBlockBounded() {
     final blockId = widget.controller.activeBlockId;
+    if (blockId == null) return;
     final key = (widget.controller.selection, widget.controller.contentRevision);
-    if (blockId == null || key == _caretRevealFallbackKey) return;
-    _caretRevealFallbackKey = key;
+    if (key != _caretRevealFallbackKey) {
+      _caretRevealFallbackKey = key;
+      _caretRevealFallbackPasses = 0;
+    }
+    if (_caretRevealFallbackPasses >= _maxCaretRevealFallbackPasses) return;
+    _caretRevealFallbackPasses++;
     unawaited(scrollToBlock(blockId));
   }
 

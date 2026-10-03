@@ -1904,7 +1904,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   void _revealActiveBlockBounded() {
     final blockId = widget.controller.activeBlockId;
     if (blockId == null) return;
-    final key = (widget.controller.selection, widget.controller.contentRevision);
+    final key =
+        (widget.controller.selection, widget.controller.contentRevision);
     if (key != _caretRevealFallbackKey) {
       _caretRevealFallbackKey = key;
       _caretRevealFallbackPasses = 0;
@@ -1960,7 +1961,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         _scheduleTypewriterFocus(force: true);
         return;
       }
-        final result = await scrollToBlock(blockId);
+      final result = await scrollToBlock(blockId);
       if (!mounted ||
           generation != _focusRequestGeneration ||
           widget.controller.activeBlockId != blockId ||

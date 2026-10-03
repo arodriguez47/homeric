@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart'
     show cupertinoTextSelectionHandleControls;
@@ -1783,8 +1784,14 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   /// Scrolls so the collapsed caret line stays in the middle third of the
   /// viewport when [HomericEditableDocument.typewriterFocus] is enabled.
+  ///
+  /// Otherwise, while platform input is attached, scrolls the minimum distance
+  /// that keeps the caret line inside the viewport. Without it a Return near
+  /// the bottom edge moved the caret off screen (on iPhone, under the
+  /// keyboard chrome) and its row unmounted.
   void _scheduleTypewriterFocus({bool force = false}) {
-    if (!widget.typewriterFocus || widget.blockBuilder == null) return;
+    if (widget.blockBuilder == null) return;
+    if (!widget.typewriterFocus && !widget.inputSession.isAttached) return;
     final selection = widget.controller.selection;
     final contentRevision = widget.controller.contentRevision;
     if (!force &&
@@ -1803,7 +1810,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   void _applyTypewriterFocus({int attempt = 0}) {
-    if (!widget.typewriterFocus ||
+    if ((!widget.typewriterFocus && !widget.inputSession.isAttached) ||
         widget.blockBuilder == null ||
         _selectionDragActive ||
         _selectionAutoScrollTimer != null ||
@@ -1833,11 +1840,26 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final viewportTop = render.localToGlobal(Offset.zero).dy;
     final viewportHeight = render.size.height;
     if (viewportHeight <= 0) return;
-    final caretCenterY = caret.globalRect.center.dy - viewportTop;
-    // Keep the caret line at viewport center (always inside the middle third
-    // when scroll extent allows). Near document edges, clamping may leave the
-    // caret outside the band until [padding]/[scrollPadding] creates room.
-    final delta = caretCenterY - viewportHeight / 2;
+    final caretRect = caret.globalRect.translate(0, -viewportTop);
+    final double delta;
+    if (widget.typewriterFocus) {
+      // Keep the caret line at viewport center (always inside the middle
+      // third when scroll extent allows). Near document edges, clamping may
+      // leave the caret outside the band until [padding]/[scrollPadding]
+      // creates room.
+      delta = caretRect.center.dy - viewportHeight / 2;
+    } else {
+      // Reveal with one caret line of breathing room, never more than a
+      // quarter of the viewport.
+      final margin = math.min(caretRect.height, viewportHeight / 4);
+      if (caretRect.bottom + margin > viewportHeight) {
+        delta = caretRect.bottom + margin - viewportHeight;
+      } else if (caretRect.top - margin < 0) {
+        delta = caretRect.top - margin;
+      } else {
+        return;
+      }
+    }
     if (delta.abs() < 0.5) return;
     final target = (_scrollController.offset + delta)
         .clamp(position.minScrollExtent, position.maxScrollExtent);
@@ -1853,9 +1875,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final generation = _typewriterFocusGeneration;
     late VoidCallback listener;
     listener = () {
-      if (!mounted ||
-          generation != _typewriterFocusGeneration ||
-          !widget.typewriterFocus) {
+      if (!mounted || generation != _typewriterFocusGeneration) {
         _cancelTypewriterScrollIdleWait();
         return;
       }
@@ -1889,7 +1909,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         _scheduleTypewriterFocus(force: true);
         return;
       }
-      final result = await scrollToBlock(blockId);
+        final result = await scrollToBlock(blockId);
       if (!mounted ||
           generation != _focusRequestGeneration ||
           widget.controller.activeBlockId != blockId ||

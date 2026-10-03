@@ -776,3 +776,31 @@ across height-cache revisions (or re-verify internally before returning
 `reached`), and add a range-granular reveal. Evidence: Nexus
 `lib/widgets/homeric_journal_editor_session.dart` (`revealCanonicalRange`),
 `test/widgets/homeric_journal_editor_session_reveal_test.dart`.
+
+## engineer — 2026-10-03 — Keep the editing caret inside the viewport without typewriter mode
+
+**What:** On iPhone with the keyboard up, the Nexus Journal's writing viewport
+is about 209 pt tall. After Return and typing, the new line sat below the
+viewport's bottom edge and stayed there. Homeric only scrolled the caret in
+typewriter mode, or through pending-row settlement when the caret's row was not
+mounted yet. A row that straddled the bottom edge was mounted, so nothing
+revealed it.
+
+**Fix:** `_applyTypewriterFocus` now also runs with typewriter mode off while
+platform input is attached. It scrolls the minimum distance that keeps the
+caret line inside the viewport, with one caret line of margin (at most a
+quarter of the viewport). It triggers only on selection or content changes, so
+a user scrolling away from the caret is never pulled back.
+
+- **Two wrong hypotheses first.** A test that splits paragraphs past the edge
+  passes without the fix, because settlement already scrolls unmounted rows in.
+  Rows past the edge in the test harness are not mounted at all, even with a
+  250 px cache extent. The failing case is a mounted row that straddles the
+  edge. Debug prints on the simulator gave the real numbers: viewport top 188,
+  height 209, caret 350–377.
+- **Caret geometry often arrives one frame late** after a split. The existing
+  two-retry loop covers it; a height-cache fallback was not needed.
+- Evidence: `test/editing/editable_document_test.dart` ("default scrolling
+  keeps the editing caret inside the viewport"). The drag-autoscroll test now
+  asserts the scroll does not continue down, since an edit may reveal its
+  caret above.

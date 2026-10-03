@@ -776,3 +776,20 @@ across height-cache revisions (or re-verify internally before returning
 `reached`), and add a range-granular reveal. Evidence: Nexus
 `lib/widgets/homeric_journal_editor_session.dart` (`revealCanonicalRange`),
 `test/widgets/homeric_journal_editor_session_reveal_test.dart`.
+
+## engineer — 2026-10-03 — macOS menu validation is a protocol, not a FlutterAppDelegate override (HOM-25)
+
+**What:** HOM-25 gated the playground's Undo/Redo menu items with
+`override func validateMenuItem` and fell back to `super.validateMenuItem`.
+With Flutter 3.47.2, `FlutterAppDelegate` does not implement that method, so
+the macOS runner failed to compile ("does not override any method", "no member
+'validateMenuItem'") and blocked `melos run benchmark`, which builds the same
+runner in profile mode.
+
+**Rule going forward:** Conform the `AppDelegate` to `NSMenuItemValidation`,
+implement `validateMenuItem` without `override`, and return `true` for actions
+the delegate does not own; AppKit's default is enabled. Do not rely on
+superclass Objective-C members of Flutter's embedder classes. After any runner
+Swift change, verify with `flutter build macos --profile` from
+`packages/homeric/examples/playground`. Revert the tool's automatic
+`MACOSX_DEPLOYMENT_TARGET` bump in `project.pbxproj` unless the change needs it.

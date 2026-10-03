@@ -2,7 +2,7 @@ import Cocoa
 import FlutterMacOS
 
 @main
-class AppDelegate: FlutterAppDelegate {
+class AppDelegate: FlutterAppDelegate, NSMenuItemValidation {
   private var historyChannel: FlutterMethodChannel?
   private var canUndo = false
   private var canRedo = false
@@ -30,14 +30,16 @@ class AppDelegate: FlutterAppDelegate {
     historyChannel?.invokeMethod("redo", arguments: nil)
   }
 
-  override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+  // FlutterAppDelegate does not implement NSMenuItemValidation, so this is a
+  // protocol conformance rather than an override and there is no super call.
+  func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
     if menuItem.action == #selector(undo(_:)) {
       return canUndo
     }
     if menuItem.action == #selector(redo(_:)) {
       return canRedo
     }
-    return super.validateMenuItem(menuItem)
+    return true
   }
 
   private func registerHomericHistoryChannel() {

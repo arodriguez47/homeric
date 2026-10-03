@@ -1,7 +1,7 @@
 import 'package:flutter/cupertino.dart'
     show cupertinoTextSelectionHandleControls;
 import 'package:flutter/foundation.dart'
-    show debugDefaultTargetPlatformOverride;
+    show ValueListenable, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -4680,9 +4680,6 @@ void main() {
         ))
         .position;
 
-    // The first row past the bottom edge is already mounted in the cache
-    // extent, so no pending-row settlement scrolls it in (iPhone: the line
-    // after a Return sat under the Journal's bottom chrome).
     // Leave one row straddling the bottom edge: mounted, so no pending-row
     // settlement scrolls it in (iPhone: the line after a Return sat half
     // under the Journal's bottom chrome).
@@ -4763,6 +4760,47 @@ void main() {
     expect(viewport.contains(caret.center), isTrue);
   });
 
+  testWidgets('layout-only changes never pull back a caret the user left',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final padding =
+        ValueNotifier<EdgeInsetsGeometry>(const EdgeInsets.only(bottom: 20));
+    addTearDown(padding.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+        _editableDocument(controller, session, scrollPadding: padding));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    final position = tester
+        .state<ScrollableState>(find.descendant(
+          of: find.byType(HomericEditableDocument),
+          matching: find.byType(Scrollable),
+        ))
+        .position;
+
+    position.jumpTo(600);
+    await tester.pump();
+    padding.value = const EdgeInsets.only(bottom: 40);
+    for (var frame = 0; frame < 12; frame++) {
+      await tester.pump();
+    }
+    expect(position.pixels, 600,
+        reason: 'only edits and selection changes reveal the caret; a '
+            'padding or height update must not undo the user\'s scroll');
+  });
+
   testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',
       (tester) async {
     final document = _document(
@@ -4820,6 +4858,7 @@ Widget _editableDocument(
   double Function(BuildContext, Block)? blockGrabberCenterY,
   TextStyle? baseStyle,
   BlockParagraphSpec paragraphSpec = const BlockParagraphSpec(),
+  ValueListenable<EdgeInsetsGeometry>? scrollPadding,
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -4836,6 +4875,7 @@ Widget _editableDocument(
         blockGrabberCenterY: blockGrabberCenterY,
         cacheExtent: 0,
         estimatedBlockHeight: 44,
+        scrollPadding: scrollPadding,
         blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
           controller: controller,
           inputSession: session,

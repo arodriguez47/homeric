@@ -1794,22 +1794,35 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   /// keyboard chrome) and its row unmounted.
   void _scheduleTypewriterFocus({bool force = false}) {
     if (widget.blockBuilder == null) return;
-    if (!widget.typewriterFocus && !widget.inputSession.isAttached) return;
     final selection = widget.controller.selection;
     final contentRevision = widget.controller.contentRevision;
-    if (!force &&
-        selection == _typewriterSelection &&
-        contentRevision == _typewriterContentRevision) {
-      return;
-    }
+    final changed = selection != _typewriterSelection ||
+        contentRevision != _typewriterContentRevision;
+    // Recorded even when nothing is revealed, so a later layout-only call
+    // cannot mistake an old selection for a new one.
     _typewriterSelection = selection;
     _typewriterContentRevision = contentRevision;
+    if (widget.typewriterFocus) {
+      if (!force && !changed) return;
+    } else if (!changed || !widget.inputSession.isAttached) {
+      // Outside typewriter mode only an edit or a selection change while
+      // editing reveals the caret: forced layout updates (padding, height
+      // corrections) must not pull back a caret the user scrolled away from.
+      return;
+    }
     _cancelTypewriterScrollIdleWait();
+    _queueCaretReveal();
+  }
+
+  void _queueCaretReveal() {
     final generation = ++_typewriterFocusGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != _typewriterFocusGeneration) return;
       _applyTypewriterFocus();
     });
+    // A post-frame callback does not request a frame; an idle surface would
+    // never run it.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _applyTypewriterFocus({int attempt = 0}) {
@@ -1898,7 +1911,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
     if (_caretRevealFallbackPasses >= _maxCaretRevealFallbackPasses) return;
     _caretRevealFallbackPasses++;
-    unawaited(scrollToBlock(blockId));
+    // Reveal again from the scrolled position directly: outside typewriter
+    // mode the forced reschedule inside scrollToBlock is ignored.
+    unawaited(scrollToBlock(blockId).then((_) {
+      if (mounted) _queueCaretReveal();
+    }));
   }
 
   void _waitForTypewriterScrollIdle(

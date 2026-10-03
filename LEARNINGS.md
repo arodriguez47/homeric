@@ -777,39 +777,19 @@ across height-cache revisions (or re-verify internally before returning
 `lib/widgets/homeric_journal_editor_session.dart` (`revealCanonicalRange`),
 `test/widgets/homeric_journal_editor_session_reveal_test.dart`.
 
-## engineer — 2026-10-03 — Keep the editing caret inside the viewport without typewriter mode
+## engineer — 2026-10-03 — macOS menu validation is a protocol, not a FlutterAppDelegate override (HOM-25)
 
-**What:** On iPhone with the keyboard up, the Nexus Journal's writing viewport
-is about 209 pt tall. After Return and typing, the new line sat below the
-viewport's bottom edge and stayed there. Homeric only scrolled the caret in
-typewriter mode, or through pending-row settlement when the caret's row was not
-mounted yet. A row that straddled the bottom edge was mounted, so nothing
-revealed it.
+**What:** HOM-25 gated the playground's Undo/Redo menu items with
+`override func validateMenuItem` and fell back to `super.validateMenuItem`.
+With Flutter 3.47.2, `FlutterAppDelegate` does not implement that method, so
+the macOS runner failed to compile ("does not override any method", "no member
+'validateMenuItem'") and blocked `melos run benchmark`, which builds the same
+runner in profile mode.
 
-**Fix:** `_applyTypewriterFocus` now also runs with typewriter mode off while
-platform input is attached. It scrolls the minimum distance that keeps the
-caret line inside the viewport, with one caret line of margin (at most a
-quarter of the viewport). It triggers only on selection or content changes, so
-a user scrolling away from the caret is never pulled back.
-
-- **Two wrong hypotheses first.** A test that splits paragraphs past the edge
-  passes without the fix, because settlement already scrolls unmounted rows in.
-  Rows past the edge in the test harness are not mounted at all, even with a
-  250 px cache extent. The failing case is a mounted row that straddles the
-  edge. Debug prints on the simulator gave the real numbers: viewport top 188,
-  height 209, caret 350–377.
-- **Caret geometry often arrives one frame late** after a split. The existing
-  two-retry loop covers it; a height-cache fallback was not needed.
-- **Missing or non-finite geometry falls back to `scrollToBlock`.** A row
-  scrolled far away is unmounted (null geometry) or kept alive with a zero
-  paint transform (NaN rect). After the retries, or on a non-finite rect, the
-  active block is scrolled in, up to three passes per selection and content
-  revision: `scrollToBlock` reports a kept-alive row as reached once it is
-  mounted, which a stale height estimate can leave off screen.
-- **`addPostFrameCallback` does not request a frame.** The retry loop only ran
-  while something else kept frames coming; on an idle surface attempt 2 never
-  fired. Queue the retry and call `ensureVisualUpdate()`.
-- Evidence: `test/editing/editable_document_test.dart` ("default scrolling
-  keeps the editing caret inside the viewport"). The drag-autoscroll test now
-  asserts the scroll does not continue down, since an edit may reveal its
-  caret above.
+**Rule going forward:** Conform the `AppDelegate` to `NSMenuItemValidation`,
+implement `validateMenuItem` without `override`, and return `true` for actions
+the delegate does not own; AppKit's default is enabled. Do not rely on
+superclass Objective-C members of Flutter's embedder classes. After any runner
+Swift change, verify with `flutter build macos --profile` from
+`packages/homeric/examples/playground`. Revert the tool's automatic
+`MACOSX_DEPLOYMENT_TARGET` bump in `project.pbxproj` unless the change needs it.

@@ -233,6 +233,65 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+  for (final empty in [true, false]) {
+    testWidgets('iOS soft Backspace crosses the block start empty=$empty',
+        (tester) async {
+      final document = _document(['left', empty ? '' : 'right']);
+      final controller = HomericEditorController(document: document);
+      final session = HomericTextInputSession(controller: controller);
+      final key = GlobalKey<HomericEditableDocumentState>();
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_editableDocument(controller, session, key: key));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-block-1')));
+      await tester.pump();
+      controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(1, 0)),
+      );
+      await tester.pump();
+      final platformText = '\u200B${empty ? '' : 'right'}';
+      expect(session.activeBlockId, 'block-1');
+
+      // UIKit's deleteBackward removes the sentinel; no key event arrives.
+      session.debugDeltaCallback!(<TextEditingDelta>[
+        TextEditingDeltaDeletion(
+          oldText: platformText,
+          deletedRange: const TextRange(start: 0, end: 1),
+          selection: const TextSelection.collapsed(offset: 0),
+          composing: TextRange.empty,
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(controller.document.blocks.map((b) => b.text),
+          [empty ? 'left' : 'leftright']);
+      expect(controller.selection,
+          HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+      expect(session.activeBlockId, 'block-0');
+      expect(key.currentState!.focusedBlockId, 'block-0');
+
+      // The survivor keeps a sentinel, so typing still lands canonically.
+      session.debugDeltaCallback!(<TextEditingDelta>[
+        TextEditingDeltaInsertion(
+          oldText: '\u200B${empty ? 'left' : 'leftright'}',
+          textInserted: '!',
+          insertionOffset: 5,
+          selection: const TextSelection.collapsed(offset: 6),
+          composing: TextRange.empty,
+        ),
+      ]);
+      expect(controller.document.blocks.single.text,
+          empty ? 'left!' : 'left!right');
+
+      expect(controller.undo(), isTrue);
+      expect(controller.undo(), isTrue);
+      expect(controller.document.blocks.map((b) => b.text),
+          ['left', empty ? '' : 'right']);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+  }
   test('touch configuration resolves mobile defaults and explicit policy', () {
     const adaptive = HomericTouchSelectionConfiguration.adaptive();
 

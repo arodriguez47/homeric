@@ -1,7 +1,7 @@
 import 'package:flutter/cupertino.dart'
     show cupertinoTextSelectionHandleControls;
 import 'package:flutter/foundation.dart'
-    show debugDefaultTargetPlatformOverride;
+    show ValueListenable, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -2951,7 +2951,9 @@ void main() {
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     final stoppedOffset = scrollController.offset;
     await tester.pump(const Duration(milliseconds: 80));
-    expect(scrollController.offset, stoppedOffset);
+    // The drag's downward autoscroll stops. The edit may still reveal its
+    // caret, which here sits above the autoscrolled viewport.
+    expect(scrollController.offset, lessThanOrEqualTo(stoppedOffset));
   });
 
   testWidgets('focus leaving every editor row cancels a live pointer drag',
@@ -4648,6 +4650,200 @@ void main() {
     await expectCaretInMiddleThird();
   });
 
+  testWidgets('default scrolling keeps the editing caret inside the viewport',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewport = documentBox.localToGlobal(Offset.zero) & documentBox.size;
+    final position = tester
+        .state<ScrollableState>(find.descendant(
+          of: find.byType(HomericEditableDocument),
+          matching: find.byType(Scrollable),
+        ))
+        .position;
+
+    // Leave one row straddling the bottom edge: mounted, so no pending-row
+    // settlement scrolls it in (iPhone: the line after a Return sat half
+    // under the Journal's bottom chrome).
+    position.jumpTo(20);
+    await tester.pump();
+    final row = find.byKey(const ValueKey('homeric-editable-block-14'));
+    expect(tester.getRect(row).top, lessThan(viewport.bottom));
+    expect(tester.getRect(row).bottom, greaterThan(viewport.bottom));
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(14, 2)),
+    );
+    for (var frame = 0; frame < 4; frame++) {
+      await tester.pump();
+    }
+
+    final caret = key.currentState!.activeCaretGeometry?.globalRect;
+    expect(caret, isNotNull);
+    expect(caret!.bottom, lessThanOrEqualTo(viewport.bottom),
+        reason: 'a caret moved below the viewport must be revealed');
+    expect(caret.top, greaterThanOrEqualTo(viewport.top));
+    expect(position.pixels, greaterThan(20));
+
+    // Scrolling away from the caret is the user's choice; only edits and
+    // selection changes reveal it.
+    position.jumpTo(0);
+    await tester.pump();
+    await tester.pump();
+    expect(position.pixels, 0);
+  });
+
+  testWidgets('an edit brings back a caret scrolled far out of view',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(60, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewport = documentBox.localToGlobal(Offset.zero) & documentBox.size;
+    final position = tester
+        .state<ScrollableState>(find.descendant(
+          of: find.byType(HomericEditableDocument),
+          matching: find.byType(Scrollable),
+        ))
+        .position;
+
+    // The active row may stay alive off screen, where its caret geometry is
+    // null or non-finite (a zero paint transform).
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.activeBlockId, 'block-0');
+
+    _insertAtStartThroughPlatform(session, oldText: 'line-0', text: 'X');
+    for (var frame = 0; frame < 12; frame++) {
+      await tester.pump();
+    }
+
+    expect(controller.document.blocks.first.text, 'Xline-0');
+    final caret = key.currentState!.activeCaretGeometry?.globalRect;
+    expect(caret, isNotNull,
+        reason: 'the edited row must be scrolled back into view');
+    expect(caret!.isFinite, isTrue);
+    expect(viewport.contains(caret.center), isTrue);
+  });
+
+  testWidgets('layout-only changes never pull back a caret the user left',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final padding =
+        ValueNotifier<EdgeInsetsGeometry>(const EdgeInsets.only(bottom: 20));
+    addTearDown(padding.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+        _editableDocument(controller, session, scrollPadding: padding));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    final position = tester
+        .state<ScrollableState>(find.descendant(
+          of: find.byType(HomericEditableDocument),
+          matching: find.byType(Scrollable),
+        ))
+        .position;
+
+    position.jumpTo(600);
+    await tester.pump();
+    padding.value = const EdgeInsets.only(bottom: 40);
+    for (var frame = 0; frame < 12; frame++) {
+      await tester.pump();
+    }
+    expect(position.pixels, 600,
+        reason: 'only edits and selection changes reveal the caret; a '
+            'padding or height update must not undo the user\'s scroll');
+  });
+
+  testWidgets('moving the caret into a tall unmounted row lands it in view',
+      (tester) async {
+    final tall = List<String>.filled(400, 'word').join(' ');
+    final document = _document(<String>[
+      ...List<String>.generate(30, (index) => 'line-$index'),
+      tall,
+      'after',
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewport = documentBox.localToGlobal(Offset.zero) & documentBox.size;
+
+    // Pending-row settlement centres the tall row, which alone can leave a
+    // caret near its end outside the viewport.
+    controller.setSelection(HomericSelection.collapsed(
+      controller.document.positionAt(30, tall.length - 3),
+    ));
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump();
+    }
+
+    final caret = key.currentState!.activeCaretGeometry?.globalRect;
+    expect(caret, isNotNull);
+    expect(caret!.isFinite, isTrue);
+    expect(viewport.contains(caret.center), isTrue,
+        reason: 'the caret, not just its row, must end up visible');
+  });
+
   testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',
       (tester) async {
     final document = _document(
@@ -4705,6 +4901,7 @@ Widget _editableDocument(
   double Function(BuildContext, Block)? blockGrabberCenterY,
   TextStyle? baseStyle,
   BlockParagraphSpec paragraphSpec = const BlockParagraphSpec(),
+  ValueListenable<EdgeInsetsGeometry>? scrollPadding,
 }) =>
     _withOverlay(SizedBox(
       width: 500,
@@ -4721,6 +4918,7 @@ Widget _editableDocument(
         blockGrabberCenterY: blockGrabberCenterY,
         cacheExtent: 0,
         estimatedBlockHeight: 44,
+        scrollPadding: scrollPadding,
         blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
           controller: controller,
           inputSession: session,

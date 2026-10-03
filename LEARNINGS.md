@@ -793,8 +793,8 @@ autocorrection range crossing the platform boundary shifts by one. A
 `TextEditingDeltaDeletion` of exactly `[0, 1)` is not a text edit: it dispatches
 `DeleteCharacterIntent(forward: false)` through the host command delegate (the
 same guarded path as the physical key) and resyncs so the next press has a
-fresh sentinel. Any other delta that loses the sentinel fails closed with a
-resync.
+fresh sentinel. Any other delta whose range swallows the sentinel still applies
+as a block edit; the session restores the sentinel and pushes the value back.
 
 - **Key bindings are not the only Backspace.** Any document-boundary command
   bound to a physical key needs a soft-keyboard path on iOS. Check what the

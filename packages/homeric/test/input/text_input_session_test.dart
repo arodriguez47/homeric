@@ -1221,6 +1221,24 @@ void main() {
       expect(_editingStateCalls(calls).last.arguments,
           containsPair('text', '\u200BQ'));
 
+      // A caret placed before the sentinel inserts at offset 0, displacing
+      // it; it must not become document text.
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\u200BQ',
+          deltaText: 'Z',
+          start: 0,
+          end: 0,
+          selectionBase: 1,
+          selectionExtent: 1,
+        ),
+      ]);
+      expect(controller.document.blocks.single.text, 'ZQ');
+      expect(controller.selection,
+          HomericSelection.collapsed(controller.document.positionAt(0, 1)));
+      expect(_editingStateCalls(calls).last.arguments,
+          containsPair('text', '\u200BZQ'));
+
       session.debugAutocorrectionPromptCallback!(1, 2);
       expect(delegate.autocorrectionPromptRanges, const <TextRange>[
         TextRange(start: 0, end: 1),

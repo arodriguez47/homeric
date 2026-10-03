@@ -420,6 +420,31 @@ final class HomericTextInputSession extends ChangeNotifier {
     );
   }
 
+  TextEditingValue _insertAfterSentinel(
+    TextEditingValue shadow,
+    TextEditingDeltaInsertion delta,
+  ) {
+    final prefix = _sentinelLength;
+    final inserted = delta.textInserted.length;
+    // Delta offsets up to the inserted text's end move past the sentinel;
+    // later ones already sit after it.
+    int map(int offset) => offset <= inserted ? offset + prefix : offset;
+    final selection = delta.selection;
+    final composing = delta.composing;
+    return TextEditingValue(
+      text: shadow.text.substring(0, prefix) +
+          delta.textInserted +
+          shadow.text.substring(prefix),
+      selection: selection.copyWith(
+        baseOffset: map(selection.baseOffset),
+        extentOffset: map(selection.extentOffset),
+      ),
+      composing: composing.isValid
+          ? TextRange(start: map(composing.start), end: map(composing.end))
+          : composing,
+    );
+  }
+
   TextEditingValue _withSentinel(TextEditingValue value) {
     final prefix = _sentinelLength;
     final composing = value.composing;
@@ -496,7 +521,15 @@ final class HomericTextInputSession extends ChangeNotifier {
           return;
         }
         final before = _localValue(shadow);
-        if (before != null &&
+        if (_boundarySentinel &&
+            delta is TextEditingDeltaInsertion &&
+            delta.insertionOffset == 0 &&
+            delta.textInserted.isNotEmpty) {
+          // A caret placed before the sentinel inserts at 0 and displaces it;
+          // apply the text after the sentinel instead.
+          next = _insertAfterSentinel(shadow, delta);
+          sentinelRestored = true;
+        } else if (before != null &&
             _boundarySentinel &&
             !next.text.startsWith(_boundarySentinelText)) {
           // A platform range that swallowed the sentinel still edits the

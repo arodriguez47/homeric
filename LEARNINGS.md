@@ -800,6 +800,13 @@ a user scrolling away from the caret is never pulled back.
   height 209, caret 350–377.
 - **Caret geometry often arrives one frame late** after a split. The existing
   two-retry loop covers it; a height-cache fallback was not needed.
+- **Missing or non-finite geometry falls back to `scrollToBlock`.** A row
+  scrolled far away is unmounted (null geometry) or kept alive with a zero
+  paint transform (NaN rect). After the retries, or on a non-finite rect, the
+  active block is scrolled in once per selection and content revision.
+- **`addPostFrameCallback` does not request a frame.** The retry loop only ran
+  while something else kept frames coming; on an idle surface attempt 2 never
+  fired. Queue the retry and call `ensureVisualUpdate()`.
 - Evidence: `test/editing/editable_document_test.dart` ("default scrolling
   keeps the editing caret inside the viewport"). The drag-autoscroll test now
   asserts the scroll does not continue down, since an edit may reveal its

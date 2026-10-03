@@ -591,6 +591,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   VoidCallback? _removeTypewriterScrollIdleListener;
   HomericSelection? _typewriterSelection;
   int _typewriterContentRevision = -1;
+  (HomericSelection?, int)? _caretRevealFallbackKey;
   HomericSelection? _semanticsSelection;
   HomericTextRange? _semanticsComposing;
   bool _semanticsCanUndo = false;
@@ -1810,8 +1811,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   void _applyTypewriterFocus({int attempt = 0}) {
-    if ((!widget.typewriterFocus && !widget.inputSession.isAttached) ||
-        widget.blockBuilder == null ||
+    // Attachment is checked when the reveal is scheduled (an edit happened);
+    // a retry must not give up because the row's connection moved since.
+    if (widget.blockBuilder == null ||
         _selectionDragActive ||
         _selectionAutoScrollTimer != null ||
         !_scrollController.hasClients) {
@@ -1827,12 +1829,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final caret = activeCaretGeometry;
     if (caret == null) {
       // Geometry may arrive one frame after a recycled row mounts.
-      if (attempt >= 2) return;
+      if (attempt >= 2) {
+        // Still none: the row is not mounted at all. Bring it in by block.
+        _revealActiveBlockOnce();
+        return;
+      }
       final generation = _typewriterFocusGeneration;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || generation != _typewriterFocusGeneration) return;
         _applyTypewriterFocus(attempt: attempt + 1);
       });
+      // A post-frame callback does not request a frame; without one an idle
+      // surface never runs the retry.
+      WidgetsBinding.instance.ensureVisualUpdate();
       return;
     }
     final render = context.findRenderObject();
@@ -1840,6 +1849,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final viewportTop = render.localToGlobal(Offset.zero).dy;
     final viewportHeight = render.size.height;
     if (viewportHeight <= 0) return;
+    if (!caret.globalRect.isFinite) {
+      // A kept-alive row far off screen paints through a zero transform.
+      _revealActiveBlockOnce();
+      return;
+    }
     final caretRect = caret.globalRect.translate(0, -viewportTop);
     final double delta;
     if (widget.typewriterFocus) {
@@ -1865,6 +1879,17 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         .clamp(position.minScrollExtent, position.maxScrollExtent);
     if ((target - _scrollController.offset).abs() < 0.5) return;
     _scrollController.jumpTo(target);
+  }
+
+  /// Scrolls the active block into view when its caret geometry is missing or
+  /// non-finite. Once per selection and content revision, so a block that
+  /// still yields no geometry cannot loop.
+  void _revealActiveBlockOnce() {
+    final blockId = widget.controller.activeBlockId;
+    final key = (widget.controller.selection, widget.controller.contentRevision);
+    if (blockId == null || key == _caretRevealFallbackKey) return;
+    _caretRevealFallbackKey = key;
+    unawaited(scrollToBlock(blockId));
   }
 
   void _waitForTypewriterScrollIdle(

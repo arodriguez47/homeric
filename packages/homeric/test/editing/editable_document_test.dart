@@ -4654,6 +4654,56 @@ void main() {
     expect(position.pixels, 0);
   });
 
+  testWidgets('an edit brings back a caret scrolled far out of view',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(60, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    final documentBox = tester.renderObject(
+      find.byType(HomericEditableDocument),
+    ) as RenderBox;
+    final viewport = documentBox.localToGlobal(Offset.zero) & documentBox.size;
+    final position = tester
+        .state<ScrollableState>(find.descendant(
+          of: find.byType(HomericEditableDocument),
+          matching: find.byType(Scrollable),
+        ))
+        .position;
+
+    // The active row may stay alive off screen, where its caret geometry is
+    // null or non-finite (a zero paint transform).
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.activeBlockId, 'block-0');
+
+    _insertAtStartThroughPlatform(session, oldText: 'line-0', text: 'X');
+    for (var frame = 0; frame < 12; frame++) {
+      await tester.pump();
+    }
+
+    expect(controller.document.blocks.first.text, 'Xline-0');
+    final caret = key.currentState!.activeCaretGeometry?.globalRect;
+    expect(caret, isNotNull,
+        reason: 'the edited row must be scrolled back into view');
+    expect(caret!.isFinite, isTrue);
+    expect(viewport.contains(caret.center), isTrue);
+  });
+
   testWidgets('typewriter focus is opt-in; default scrolling leaves caret free',
       (tester) async {
     final document = _document(

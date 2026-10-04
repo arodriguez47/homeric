@@ -5,7 +5,8 @@ import 'package:homeric/homeric.dart';
 import '../transform/transform_test_utils.dart';
 
 /// Mirrors the journal host contract: literal source, live deriveDecorations,
-/// layout-only resolveStyle with a paintStyler side channel.
+/// layout-only resolveStyle with a paintStyler side channel, and underlay
+/// wash layers for fenced-code chrome.
 final class _JournalPaintMap {
   _JournalPaintMap();
 
@@ -21,6 +22,8 @@ final class _JournalPaintMap {
       color: Color(0xFF000000),
     ),
   };
+
+  static const codeWash = SolidWashSpec(Color(0x22111111));
 
   void beginBuild() => resolved.clear();
 
@@ -74,6 +77,22 @@ List<Decoration> journalMarkdownDecorationsForBlock(Block block) {
   return result;
 }
 
+List<PaintLayer> journalMarkdownPaintLayersForBlock(
+  Block block,
+  Iterable<Decoration> decorations,
+) =>
+    [
+      for (final decoration in decorations)
+        if (decoration.spec == 'code')
+          PaintLayer(
+            range: DocRange(
+                DocOffset(decoration.start), DocOffset(decoration.end)),
+            band: PaintBand.underlay,
+            painter: solidWashPainter,
+            spec: _JournalPaintMap.codeWash,
+          ),
+    ];
+
 Document _document(String text) => Document([
       Block(
         id: 'b',
@@ -111,6 +130,7 @@ Widget _documentHarness({
                     blockId: block.id,
                     focusNode: focusNode,
                     deriveDecorations: journalMarkdownDecorationsForBlock,
+                    derivePaintLayers: journalMarkdownPaintLayersForBlock,
                     resolveStyle: paintMap.resolve,
                     paintStyler: paintMap.paint,
                   ),
@@ -130,14 +150,55 @@ RenderHomericParagraph _paragraphRender(WidgetTester tester) =>
       ),
     );
 
+void _expectHiddenFenceView(String viewText, {required String body}) {
+  expect(viewText, body,
+      reason: 'opening fence + language tag and closing fence must fold');
+  expect(viewText.contains('```'), isFalse);
+  expect(viewText.contains('dart'), isFalse,
+      reason: 'language tag must hide with the opening fence line');
+  expect(viewText.contains('...'), isFalse,
+      reason: 'Homeric must not paint ellipsis stand-ins for hidden fences');
+}
+
+void _expectCodeChrome(RenderHomericParagraph render) {
+  expect(render.paintLayers, hasLength(1),
+      reason: 'host-emitted code wash must stay after fence leave');
+  expect(
+    (render.paintLayers.single.spec as SolidWashSpec).color,
+    _JournalPaintMap.codeWash.color,
+  );
+  // Stored is not painted: the underlay paints only the boxes its range
+  // resolves to, so a hidden-delimiter offset regression would leave the
+  // layer in place with nothing visible.
+  final boxes = ParagraphGeometry(render)
+      .rectsForRange(render.paintLayers.single.range)
+      .value;
+  expect(boxes, isNotEmpty,
+      reason: 'the code wash range must resolve to painted boxes');
+  expect(
+    boxes.any((box) => box.right > box.left && box.bottom > box.top),
+    isTrue,
+    reason: 'the code wash must cover a non-empty area',
+  );
+}
+
 /// Fenced block with language tag and trailing space.
 const _fenceLiteral = '```dart\nfoo\nbar\n``` ';
+
+/// Prose above a language-tagged fence — leave target for the reader repro.
+const _fenceWithLineAbove = 'above\n```dart\nconst y = 2;\n``` ';
 
 void main() {
   test('host hide covering ```dart\\n folds the language tag from view text',
       () {
     final block = para('b', _fenceLiteral);
     final decorations = journalMarkdownDecorationsForBlock(block);
+    expect(decorations.where(isMarkdownMarkHideDecoration), hasLength(2));
+    for (final hide in decorations.where(isMarkdownMarkHideDecoration)) {
+      expect(hide.replacementLength, 0,
+          reason: 'fence hides must be zero-length, not ellipsis replacements');
+    }
+
     final source = ParagraphSource.build(
       block: block,
       decorations: decorations,
@@ -146,10 +207,7 @@ void main() {
 
     expect(block.text, _fenceLiteral,
         reason: 'stored source must remain literal markdown');
-    expect(source.viewText, 'foo\nbar ',
-        reason: 'language tag must fold with the opening fence line');
-    expect(source.viewText.contains('dart'), isFalse);
-    expect(source.viewText.contains('```'), isFalse);
+    _expectHiddenFenceView(source.viewText, body: 'foo\nbar ');
   });
 
   testWidgets(
@@ -177,13 +235,16 @@ void main() {
 
     expect(controller.document.blocks.single.text, literal,
         reason: 'stored source must remain literal markdown');
-    expect(_paragraphRender(tester).source.viewText, 'foo\nbar ',
-        reason: 'opening fence + language tag and closing fence must fold');
+    _expectHiddenFenceView(
+      _paragraphRender(tester).source.viewText,
+      body: 'foo\nbar ',
+    );
     expect(
       paintMap.styleAtViewOffset(0)?.fontFamily,
       'monospace',
       reason: 'fence body must paint monospaced after hide-on-leave',
     );
+    _expectCodeChrome(_paragraphRender(tester));
 
     // Caret on the language tag: reveal-on-touch shows the opening line.
     controller.setSelection(
@@ -203,13 +264,62 @@ void main() {
     paintMap.paintedStyles.clear();
     await tester.pump();
 
-    expect(_paragraphRender(tester).source.viewText, 'foo\nbar ',
-        reason:
-            'trailing-space caret must not re-reveal fence or language tag');
-    expect(_paragraphRender(tester).source.viewText.contains('dart'), isFalse);
+    _expectHiddenFenceView(
+      _paragraphRender(tester).source.viewText,
+      body: 'foo\nbar ',
+    );
     expect(paintMap.paintCalls, greaterThan(0),
         reason: 'paintStyler must run when the resolve map is refilled');
     expect(paintMap.styleAtViewOffset(0)?.fontFamily, 'monospace',
         reason: 'monospace must survive hide-on-leave with language tag');
+    _expectCodeChrome(_paragraphRender(tester));
+  });
+
+  testWidgets(
+      'after leave to line above ```dart fence, tag hides and chrome remains',
+      (tester) async {
+    const literal = _fenceWithLineAbove;
+    final document = _document(literal);
+    final fenceStart = literal.indexOf('```');
+    final controller = HomericEditorController(
+      document: document,
+      selection:
+          HomericSelection.collapsed(document.positionAt(0, fenceStart + 3)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final paintMap = _JournalPaintMap();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    paintMap.beginBuild();
+    await tester.pumpWidget(_documentHarness(
+      controller: controller,
+      session: session,
+      paintMap: paintMap,
+    ));
+    await tester.pump();
+
+    expect(_paragraphRender(tester).source.viewText, contains('dart'),
+        reason: 'caret on language tag must reveal opening fence');
+
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    paintMap.beginBuild();
+    paintMap.paintCalls = 0;
+    paintMap.paintedStyles.clear();
+    await tester.pump();
+
+    _expectHiddenFenceView(
+      _paragraphRender(tester).source.viewText,
+      body: 'above\nconst y = 2; ',
+    );
+    expect(paintMap.paintCalls, greaterThan(0));
+    expect(
+      paintMap.styleAtViewOffset('above\n'.length)?.fontFamily,
+      'monospace',
+      reason: 'body must stay code-styled after leave to line above',
+    );
+    _expectCodeChrome(_paragraphRender(tester));
   });
 }

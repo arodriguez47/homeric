@@ -170,6 +170,19 @@ void _expectCodeChrome(RenderHomericParagraph render) {
     (render.paintLayers.single.spec as SolidWashSpec).color,
     _JournalPaintMap.codeWash.color,
   );
+  // Stored is not painted: the underlay paints only the boxes its range
+  // resolves to, so a hidden-delimiter offset regression would leave the
+  // layer in place with nothing visible.
+  final boxes = ParagraphGeometry(render)
+      .rectsForRange(render.paintLayers.single.range)
+      .value;
+  expect(boxes, isNotEmpty,
+      reason: 'the code wash range must resolve to painted boxes');
+  expect(
+    boxes.any((box) => box.right > box.left && box.bottom > box.top),
+    isTrue,
+    reason: 'the code wash must cover a non-empty area',
+  );
 }
 
 /// Multi-line fence with trailing space (newline body, not inline `` `code` ``).

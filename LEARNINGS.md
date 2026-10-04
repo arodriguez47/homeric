@@ -776,3 +776,24 @@ across height-cache revisions (or re-verify internally before returning
 `reached`), and add a range-granular reveal. Evidence: Nexus
 `lib/widgets/homeric_journal_editor_session.dart` (`revealCanonicalRange`),
 `test/widgets/homeric_journal_editor_session_reveal_test.dart`.
+
+## engineer — 2026-10-04 — Fence hiding and code chrome are host-owned (homeric#46)
+
+**What:** A reader repro showed fenced-code delimiters turning into `...` after
+leave and the shaded chrome disappearing. Homeric never invents `...`: it only
+paints what the host's decorations say. The delimiters fold out only when the
+host emits zero-length `markdownMarkHideReplacement` on the whole opening line
+(language tag included) and the closing line; the body keeps its `'code'`
+style; and the chrome is a host `derivePaintLayers` wash. A
+`ReplacementText('...')` from the host paints exactly the reported stand-ins.
+
+- **Pin the host contract in tests, not just the library.** The fence tests
+  show the wrong host path (`ReplacementText('...')`) next to the right one,
+  for both trailing-space leave and leave to a line above, with and without a
+  language tag.
+- **"Layer stored" is not "layer painted."** The chrome assertion resolves the
+  wash range through a fresh `ParagraphGeometry` and requires non-empty boxes;
+  a hidden-delimiter offset regression would otherwise leave the layer in
+  place with nothing visible.
+- Nexus mirror: its `LEARNINGS.md` entry for arodriguez47/nexus#270 records
+  this single-block contract next to the typed-fence (multi-block) case.

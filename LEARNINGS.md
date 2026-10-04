@@ -875,6 +875,22 @@ a user scrolling away from the caret is never pulled back.
   asserts the scroll does not continue down, since an edit may reveal its
   caret above.
 
+## engineer — 2026-10-03 — Mirror: iOS single taps resolve after the double-tap window (Nexus mention cards)
+
+Mirrored from Nexus `LEARNINGS.md` (arodriguez47/nexus#267).
+
+- **On iOS, `HomericEditableParagraph` resolves a single tap only after the
+  double-tap timeout**, so `onSingleTap` fires one `kDoubleTapTimeout` after
+  the tap. A widget test that taps and then pumps without advancing time
+  never sees the tap land; pump `kDoubleTapTimeout` first.
+- **`onSingleTap` only covers taps on a paragraph.** Consumers that open
+  transient UI from a tap (Nexus mention cards) need their own outside-tap
+  dismissal, such as a `TapRegion`: taps in the gutter or empty scroll area
+  reach no paragraph handler, and touch sends no hover exit.
+- **Share the hit test between hover and tap.** Nexus reports both through
+  one `reportMentionAt` over block geometry, so the staleness check
+  (`geometry.isCurrent` plus re-resolving the mention) stays identical.
+
 ## engineer — 2026-10-04 — Mirror: typed fences span blocks (Nexus typed code fences)
 
 Mirrored from Nexus `LEARNINGS.md` (arodriguez47/nexus#270).

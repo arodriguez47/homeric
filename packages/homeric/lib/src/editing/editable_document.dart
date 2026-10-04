@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart'
     show cupertinoTextSelectionHandleControls;
@@ -590,6 +591,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   VoidCallback? _removeTypewriterScrollIdleListener;
   HomericSelection? _typewriterSelection;
   int _typewriterContentRevision = -1;
+  (HomericSelection?, int)? _caretRevealFallbackKey;
+  int _caretRevealFallbackPasses = 0;
+  static const int _maxCaretRevealFallbackPasses = 3;
   HomericSelection? _semanticsSelection;
   HomericTextRange? _semanticsComposing;
   bool _semanticsCanUndo = false;
@@ -1783,28 +1787,48 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   /// Scrolls so the collapsed caret line stays in the middle third of the
   /// viewport when [HomericEditableDocument.typewriterFocus] is enabled.
+  ///
+  /// Otherwise, while platform input is attached, scrolls the minimum distance
+  /// that keeps the caret line inside the viewport. Without it a Return near
+  /// the bottom edge moved the caret off screen (on iPhone, under the
+  /// keyboard chrome) and its row unmounted.
   void _scheduleTypewriterFocus({bool force = false}) {
-    if (!widget.typewriterFocus || widget.blockBuilder == null) return;
+    if (widget.blockBuilder == null) return;
     final selection = widget.controller.selection;
     final contentRevision = widget.controller.contentRevision;
-    if (!force &&
-        selection == _typewriterSelection &&
-        contentRevision == _typewriterContentRevision) {
-      return;
-    }
+    final changed = selection != _typewriterSelection ||
+        contentRevision != _typewriterContentRevision;
+    // Recorded even when nothing is revealed, so a later layout-only call
+    // cannot mistake an old selection for a new one.
     _typewriterSelection = selection;
     _typewriterContentRevision = contentRevision;
+    if (widget.typewriterFocus) {
+      if (!force && !changed) return;
+    } else if (!changed || !widget.inputSession.isAttached) {
+      // Outside typewriter mode only an edit or a selection change while
+      // editing reveals the caret: forced layout updates (padding, height
+      // corrections) must not pull back a caret the user scrolled away from.
+      return;
+    }
     _cancelTypewriterScrollIdleWait();
+    _queueCaretReveal();
+  }
+
+  void _queueCaretReveal() {
     final generation = ++_typewriterFocusGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != _typewriterFocusGeneration) return;
       _applyTypewriterFocus();
     });
+    // A post-frame callback does not request a frame; an idle surface would
+    // never run it.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _applyTypewriterFocus({int attempt = 0}) {
-    if (!widget.typewriterFocus ||
-        widget.blockBuilder == null ||
+    // Attachment is checked when the reveal is scheduled (an edit happened);
+    // a retry must not give up because the row's connection moved since.
+    if (widget.blockBuilder == null ||
         _selectionDragActive ||
         _selectionAutoScrollTimer != null ||
         !_scrollController.hasClients) {
@@ -1820,12 +1844,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final caret = activeCaretGeometry;
     if (caret == null) {
       // Geometry may arrive one frame after a recycled row mounts.
-      if (attempt >= 2) return;
+      if (attempt >= 2) {
+        // Still none: the row is not mounted at all. Bring it in by block.
+        _revealActiveBlockBounded();
+        return;
+      }
       final generation = _typewriterFocusGeneration;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || generation != _typewriterFocusGeneration) return;
         _applyTypewriterFocus(attempt: attempt + 1);
       });
+      // A post-frame callback does not request a frame; without one an idle
+      // surface never runs the retry.
+      WidgetsBinding.instance.ensureVisualUpdate();
       return;
     }
     final render = context.findRenderObject();
@@ -1833,16 +1864,59 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final viewportTop = render.localToGlobal(Offset.zero).dy;
     final viewportHeight = render.size.height;
     if (viewportHeight <= 0) return;
-    final caretCenterY = caret.globalRect.center.dy - viewportTop;
-    // Keep the caret line at viewport center (always inside the middle third
-    // when scroll extent allows). Near document edges, clamping may leave the
-    // caret outside the band until [padding]/[scrollPadding] creates room.
-    final delta = caretCenterY - viewportHeight / 2;
+    if (!caret.globalRect.isFinite) {
+      // A kept-alive row far off screen paints through a zero transform.
+      _revealActiveBlockBounded();
+      return;
+    }
+    final caretRect = caret.globalRect.translate(0, -viewportTop);
+    final double delta;
+    if (widget.typewriterFocus) {
+      // Keep the caret line at viewport center (always inside the middle
+      // third when scroll extent allows). Near document edges, clamping may
+      // leave the caret outside the band until [padding]/[scrollPadding]
+      // creates room.
+      delta = caretRect.center.dy - viewportHeight / 2;
+    } else {
+      // Reveal with one caret line of breathing room, never more than a
+      // quarter of the viewport.
+      final margin = math.min(caretRect.height, viewportHeight / 4);
+      if (caretRect.bottom + margin > viewportHeight) {
+        delta = caretRect.bottom + margin - viewportHeight;
+      } else if (caretRect.top - margin < 0) {
+        delta = caretRect.top - margin;
+      } else {
+        return;
+      }
+    }
     if (delta.abs() < 0.5) return;
     final target = (_scrollController.offset + delta)
         .clamp(position.minScrollExtent, position.maxScrollExtent);
     if ((target - _scrollController.offset).abs() < 0.5) return;
     _scrollController.jumpTo(target);
+  }
+
+  /// Scrolls the active block into view when its caret geometry is missing or
+  /// non-finite. `scrollToBlock` reports a kept-alive row as reached once it is
+  /// mounted, which a stale height estimate can leave off screen, so allow a
+  /// few passes per selection and content revision; the bound stops a block
+  /// that never yields geometry from looping.
+  void _revealActiveBlockBounded() {
+    final blockId = widget.controller.activeBlockId;
+    if (blockId == null) return;
+    final key =
+        (widget.controller.selection, widget.controller.contentRevision);
+    if (key != _caretRevealFallbackKey) {
+      _caretRevealFallbackKey = key;
+      _caretRevealFallbackPasses = 0;
+    }
+    if (_caretRevealFallbackPasses >= _maxCaretRevealFallbackPasses) return;
+    _caretRevealFallbackPasses++;
+    // Reveal again from the scrolled position directly: outside typewriter
+    // mode the forced reschedule inside scrollToBlock is ignored.
+    unawaited(scrollToBlock(blockId).then((_) {
+      if (mounted) _queueCaretReveal();
+    }));
   }
 
   void _waitForTypewriterScrollIdle(
@@ -1853,9 +1927,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final generation = _typewriterFocusGeneration;
     late VoidCallback listener;
     listener = () {
-      if (!mounted ||
-          generation != _typewriterFocusGeneration ||
-          !widget.typewriterFocus) {
+      if (!mounted || generation != _typewriterFocusGeneration) {
         _cancelTypewriterScrollIdleWait();
         return;
       }
@@ -1898,7 +1970,15 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       }
       _retargetActiveHost();
       _scheduleTypewriterFocus(force: true);
+      // Outside typewriter mode the forced call above is ignored, and
+      // scrollToBlock centres the row: a tall row can leave the caret out of
+      // view, so reveal the caret itself.
+      if (!widget.typewriterFocus && widget.inputSession.isAttached) {
+        _queueCaretReveal();
+      }
     });
+    // A post-frame callback does not request a frame on its own.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   bool _captureSemanticsState() {

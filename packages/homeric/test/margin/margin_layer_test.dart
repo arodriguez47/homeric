@@ -135,6 +135,59 @@ void main() {
           block.globalOrigin!.dy + block.caretRect(2)!.top);
     });
 
+    testWidgets(
+        'a GlobalKey layer re-parented under a transform inside a layout '
+        'callback keeps its notes on their lines', (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta']));
+      const range = BlockTextRange(6, 10);
+      harness.host.notes = [_note('n', 'block-0', range)];
+      await harness.pump(tester);
+      final before = harness.noteRect(tester, 'n');
+
+      harness.transformed.value = true;
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(harness.noteRect(tester, 'n'), before);
+      await tester.pump();
+      expect(harness.noteRect(tester, 'n'), before);
+      expect(harness.noteRect(tester, 'n').top,
+          harness.rangeTop('block-0', range));
+
+      harness.transformed.value = false;
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      await tester.pump();
+      expect(harness.noteRect(tester, 'n'), before);
+    });
+
+    testWidgets(
+        'notes stay beside their lines when a transform scales the editor '
+        'and the layer together', (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta']))
+        ..transformScale = 0.5;
+      const range = BlockTextRange(6, 10);
+      harness.host.notes = [_note('n', 'block-0', range)];
+      await harness.pump(tester);
+
+      harness.transformed.value = true;
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      void expectBesideLine() {
+        final block = harness.state.documentGeometry.block('block-0')!;
+        final layer = tester.getRect(find.byType(HomericMarginLayer));
+        final note = harness.noteRect(tester, 'n');
+        expect(note.left, layer.left + _marginLeft * 0.5);
+        expect(note.width, _noteWidth * 0.5);
+        expect(note.top,
+            block.globalOrigin!.dy + block.rectsForRange(range)!.first.top / 2);
+      }
+
+      expectBesideLine();
+      await tester.pump();
+      expectBesideLine();
+    });
+
     testWidgets('a layer added after the editor settled still places notes',
         (tester) async {
       final harness = _Harness(_document(['alpha', 'beta']));
@@ -771,6 +824,95 @@ void main() {
     });
   });
 
+  group('host queries', () {
+    testWidgets('activation reports the resting form, which formOf shows',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta', 'eta']));
+      harness.host.notes = [
+        _note('a', 'block-0', const BlockTextRange(0, 5), fullHeight: 60),
+        _note('b', 'block-0', const BlockTextRange(6, 10), fullHeight: 60),
+        _note('c', 'block-2', const BlockTextRange(0, 3)),
+      ];
+      await harness.pump(tester);
+
+      for (final id in ['a', 'b', 'c']) {
+        final form = harness.layer.formOf(id);
+        expect(find.text('${form!.name} $id'), findsOneWidget,
+            reason: 'formOf($id) is what is painted');
+      }
+      expect(harness.layer.formOf('a'), MarginNoteForm.compact);
+      expect(harness.layer.formOf('c'), MarginNoteForm.full);
+
+      await tester.tap(_noteFinder('b'));
+      await tester.tap(_noteFinder('c'));
+      expect(harness.host.activated, ['b', 'c']);
+      expect(harness.host.activatedForms,
+          [MarginNoteForm.compact, MarginNoteForm.full]);
+    });
+
+    testWidgets('an expanded compact note still reports its resting form',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta']));
+      harness.host.notes = [
+        _note('a', 'block-0', const BlockTextRange(0, 5), fullHeight: 60),
+        _note('b', 'block-0', const BlockTextRange(6, 10), fullHeight: 60),
+      ];
+      await harness.pump(tester);
+      expect(harness.layer.formOf('b'), MarginNoteForm.compact);
+
+      harness.host.expanded = 'b';
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('full b'), findsOneWidget);
+      expect(harness.layer.formOf('b'), MarginNoteForm.compact);
+      expect(harness.layer.focusedNoteId, 'b');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      expect(harness.host.activated, ['b']);
+      expect(harness.host.activatedForms, [MarginNoteForm.compact]);
+    });
+
+    testWidgets('focusNote and formOf answer only for placed notes',
+        (tester) async {
+      final harness = _Harness(
+        _document([for (var index = 0; index < 60; index++) 'row $index']),
+      );
+      harness.host.notes = [
+        _note('near', 'block-0', const BlockTextRange(0, 3)),
+        _note('far', 'block-40', const BlockTextRange(0, 3)),
+        _note('bad', 'block-1', const BlockTextRange(1, 40)),
+      ];
+      await harness.pump(tester, cacheExtent: 0);
+      expect(harness.layer.formOf('near'), MarginNoteForm.full);
+      for (final id in ['far', 'bad', 'missing']) {
+        expect(harness.layer.formOf(id), isNull, reason: id);
+        expect(harness.layer.focusNote(id), isFalse, reason: id);
+      }
+
+      // Added in this frame: not placed until the layer lays out.
+      harness.host.notes = [
+        ...harness.host.notes,
+        _note('new', 'block-2', const BlockTextRange(0, 3)),
+      ];
+      expect(harness.layer.focusNote('new'), isFalse);
+      await tester.pump();
+      expect(harness.layer.formOf('new'), MarginNoteForm.full);
+      expect(harness.layer.focusNote('new'), isTrue);
+      await tester.pump();
+      expect(harness.layer.focusedNoteId, 'new');
+
+      // A note that was placed and focused, whose block then unmounts.
+      harness.scrollController.jumpTo(1000);
+      await tester.pump();
+      await tester.pump();
+      expect(harness.state.documentGeometry.mountedBlockIds,
+          isNot(contains('block-0')));
+      expect(harness.layer.formOf('near'), isNull);
+      expect(harness.layer.focusNote('near'), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('source indicators', () {
     testWidgets(
         'flagged ranges are underlined, the active one tinted, and prose '
@@ -947,6 +1089,7 @@ final class _Host extends ChangeNotifier {
   }
 
   final List<String> activated = [];
+  final List<MarginNoteForm> activatedForms = [];
   int dismissed = 0;
 }
 
@@ -968,6 +1111,11 @@ final class _Harness {
   final ValueNotifier<double> fontSize = ValueNotifier<double>(14);
   final Map<String, FocusNode> blockFocus = {};
   final ValueNotifier<bool> showLayer = ValueNotifier<bool>(true);
+
+  /// Wraps the editor and the layer in a [Transform], as a host's page
+  /// transition does, re-parenting both inside a layout callback.
+  final ValueNotifier<bool> transformed = ValueNotifier<bool>(false);
+  double transformScale = 1;
   EdgeInsets viewInsets = EdgeInsets.zero;
 
   HomericEditableDocumentState get state => documentKey.currentState!;
@@ -983,6 +1131,7 @@ final class _Harness {
     showLayer.value = withLayer;
     addTearDown(() {
       showLayer.dispose();
+      transformed.dispose();
       host.dispose();
       fontSize.dispose();
       scrollController.dispose();
@@ -1037,20 +1186,35 @@ final class _Harness {
                   lineHeight: lineHeight,
                   expandedNoteId: host.expanded,
                   composer: host.composer,
-                  onNoteActivated: host.activated.add,
+                  onNoteActivated: (id, form) {
+                    host.activated.add(id);
+                    host.activatedForms.add(form);
+                  },
                   onDismissed: () => host.dismissed++,
                 ),
               ),
       ),
     );
     await tester.pumpWidget(_app(
-      Stack(children: <Widget>[
-        // Stands in for the host's page background, which receives taps on
-        // empty margin space.
-        const Positioned.fill(child: ColoredBox(color: Color(0xFFFFFFFF))),
-        editor,
-        layer,
-      ]),
+      ValueListenableBuilder<bool>(
+        valueListenable: transformed,
+        builder: (context, transform, _) => LayoutBuilder(
+          builder: (context, constraints) {
+            final stack = Stack(children: <Widget>[
+              // Stands in for the host's page background, which receives
+              // taps on empty margin space.
+              const Positioned.fill(
+                child: ColoredBox(color: Color(0xFFFFFFFF)),
+              ),
+              editor,
+              layer,
+            ]);
+            return transform
+                ? Transform.scale(scale: transformScale, child: stack)
+                : stack;
+          },
+        ),
+      ),
       viewInsets: viewInsets,
     ));
     // First layout publishes geometry post-frame; the layer solves next.

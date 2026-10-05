@@ -10,6 +10,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show listEquals, mapEquals;
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -65,6 +66,17 @@ final class HomericMarginNote {
   final bool paintSourceIndicator;
 }
 
+/// Signature of [HomericMarginLayer.onNoteActivated]: the activated note and
+/// the form it rests in.
+///
+/// [form] is the resting form even while the note is shown expanded, so a
+/// host can tell a compact preview, which it would expand, from a full note,
+/// which it might open for editing.
+typedef HomericMarginNoteActivated = void Function(
+  String noteId,
+  MarginNoteForm form,
+);
+
 /// A not-yet-saved note being written beside a pending range.
 @immutable
 final class HomericMarginComposer {
@@ -104,7 +116,12 @@ final class HomericMarginComposer {
 /// they happen. Positions inside a block and collisions between blocks are
 /// re-solved after each [HomericEditableDocumentState.documentGeometryChanges]
 /// notice, so a line reflow inside an annotated block lands one frame after
-/// the text. Placement follows [solveMarginLayout] through a
+/// the text. Block positions relative to the layer are read only once a
+/// frame has completed, never while building: the layer may be built inside
+/// an ancestor's layout callback, where ancestors are not laid out yet. A
+/// rebuild therefore places notes with the positions of the last completed
+/// frame and corrects any difference in the next one. Placement follows
+/// [solveMarginLayout] through a
 /// [MarginLayoutMemory], so notes that stay mounted never change form or
 /// position when a neighbouring block mounts or unmounts.
 ///
@@ -181,8 +198,9 @@ class HomericMarginLayer extends StatefulWidget {
   /// focus when supplied, and returns focus to where it was when removed.
   final HomericMarginComposer? composer;
 
-  /// Called when a note is activated by tap, Enter or Space.
-  final ValueChanged<String>? onNoteActivated;
+  /// Called when a note is activated by tap, Enter, Space or the semantics
+  /// tap action, with the form the note rests in.
+  final HomericMarginNoteActivated? onNoteActivated;
 
   /// Called on Escape or on a tap outside while a note is expanded or the
   /// composer is open. The host clears [expandedNoteId] or [composer].
@@ -229,7 +247,12 @@ class HomericMarginLayer extends StatefulWidget {
 }
 
 /// State of a [HomericMarginLayer]; reach it through a [GlobalKey] to move
-/// keyboard focus into the margin.
+/// keyboard focus into the margin or to ask how a note is placed.
+///
+/// Notes are placed during the layer's layout, so the answers describe the
+/// last laid-out frame. After changing [HomericMarginLayer.notes], or
+/// revealing a note's block, call [focusNote] and [formOf] from a post-frame
+/// callback.
 class HomericMarginLayerState extends State<HomericMarginLayer> {
   HomericEditableDocumentState? _document;
   final MarginLayoutMemory _memory = MarginLayoutMemory();
@@ -246,7 +269,9 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   FocusNode? _focusBeforeExpansion;
   FocusNode? _focusBeforeComposer;
   _Presentation? _last;
-  bool _retryScheduled = false;
+  _FrameGeometry? _geometry;
+  bool _geometryReadScheduled = false;
+  Map<String, MarginNoteForm> _forms = const <String, MarginNoteForm>{};
   PointerDownEvent? _lastOutsideTap;
 
   /// Id of the note holding keyboard focus, if any.
@@ -257,17 +282,29 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     return null;
   }
 
-  /// Moves keyboard focus to note [noteId]. Returns false when the note is
-  /// not built, for example because its block is not mounted.
+  /// Moves keyboard focus to note [noteId]. Returns false, and does
+  /// nothing, when the note is not placed in the last laid-out frame: for
+  /// example because its block is not mounted, its range is outside the
+  /// block, or it was added since that frame. Call it from a post-frame
+  /// callback after changing notes.
   ///
   /// Focus leaves the editor's input session; the editor's selection is
   /// kept.
   bool focusNote(String noteId) {
+    if (!_forms.containsKey(noteId)) return false;
     final node = _focusNodes[noteId];
-    if (node == null || node.context == null) return false;
+    final context = node?.context;
+    if (node == null || context == null || !context.mounted) return false;
     node.requestFocus();
     return true;
   }
+
+  /// The form note [noteId] rests in as placed in the last laid-out frame,
+  /// or null when it is not placed there; see [focusNote] for why.
+  ///
+  /// An expanded note reports its resting form, which is what the margin
+  /// shows again once [HomericMarginLayer.expandedNoteId] is cleared.
+  MarginNoteForm? formOf(String noteId) => _forms[noteId];
 
   @override
   void initState() {
@@ -388,6 +425,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     if (identical(document, _document)) return;
     _detachDocument();
     _document = document;
+    _geometry = null;
     document?.documentGeometryChanges.addListener(_geometryChanged);
   }
 
@@ -400,18 +438,73 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   }
 
   void _geometryChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    // The document notifies outside the frame's build and layout, so the
+    // positions it signals can be read now.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      _scheduleGeometryRead();
+      return;
+    }
+    _readGeometry();
+    setState(() {});
   }
 
-  /// Rebuilds once after this frame, for inputs that only exist after a
-  /// first layout, such as this layer's own position.
-  void _scheduleRetry() {
-    if (_retryScheduled) return;
-    _retryScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _retryScheduled = false;
-      if (mounted) setState(() {});
-    });
+  /// Reads block positions after this frame completes, and rebuilds when
+  /// they differ from the ones this frame was built with.
+  ///
+  /// Build never reads them itself: a build can run inside an ancestor's
+  /// layout callback, and walking to the root then crosses render objects
+  /// that are mid-layout or, when just inserted, not laid out at all.
+  void _scheduleGeometryRead() {
+    if (_geometryReadScheduled) return;
+    _geometryReadScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _geometryReadScheduled = false;
+      if (!mounted) return;
+      final previous = _geometry;
+      _readGeometry();
+      if (!_FrameGeometry.same(previous, _geometry)) setState(() {});
+    }, debugLabel: 'HomericMarginLayer.readGeometry');
+  }
+
+  /// Captures the layer-space origin of every mounted block and the layer's
+  /// global bottom. Only call it while no frame is being built or laid out.
+  void _readGeometry() {
+    _attachDocument();
+    final document = _document;
+    if (document == null || !document.mounted) {
+      _geometry = null;
+      return;
+    }
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.attached || !_laidOutToRoot(box)) return;
+    // One transform for every block: a transform shared by the editor and
+    // the layer, such as a host's page transition, cancels out.
+    final toLayer = Matrix4.tryInvert(box.getTransformTo(null));
+    if (toLayer == null) return;
+    final geometry = document.documentGeometry;
+    final origins = <String, Offset>{};
+    for (final blockId in geometry.mountedBlockIds ?? const <String>[]) {
+      final origin = geometry.block(blockId)?.globalOrigin;
+      if (origin == null) continue;
+      final local = MatrixUtils.transformPoint(toLayer, origin);
+      if (local.isFinite) origins[blockId] = local;
+    }
+    _geometry = _FrameGeometry(
+      document: document,
+      blockOrigins: origins,
+      layerBottom: box.localToGlobal(Offset(0, box.size.height)).dy,
+    );
+  }
+
+  static bool _laidOutToRoot(RenderObject node) {
+    RenderObject? current = node;
+    while (current != null) {
+      if (current is RenderBox && !current.hasSize) return false;
+      current = current.parent;
+    }
+    return true;
   }
 
   FocusNode _focusNodeFor(String id) =>
@@ -420,7 +513,10 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   GlobalKey _shellKeyFor(String id) =>
       _shellKeys[id] ??= GlobalKey(debugLabel: 'HomericMarginLayer note $id');
 
-  void _activate(String id) => widget.onNoteActivated?.call(id);
+  void _activate(String id) {
+    final form = _forms[id];
+    if (form != null) widget.onNoteActivated?.call(id, form);
+  }
 
   bool get _dismissible =>
       widget.expandedNoteId != null || widget.composer != null;
@@ -482,6 +578,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     }());
     _attachDocument();
     final snapshot = _collect(context);
+    _scheduleGeometryRead();
     return Focus(
       focusNode: _layerNode,
       canRequestFocus: false,
@@ -513,27 +610,28 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           builder: (context, constraints) => _present(
             snapshot,
             (constraints as _PresenterConstraints).heights,
+            constraints.biggest,
           ),
         ),
       ),
     );
   }
 
-  /// Reads every input that comes from the editor, at build time.
+  /// Gathers every input that comes from the editor, at build time.
+  ///
+  /// Block-local geometry comes from the document's current capability;
+  /// where each block sits in the layer comes from [_geometry], read after
+  /// the last completed frame. Nothing here walks the render tree.
   _Snapshot _collect(BuildContext context) {
     final document = _document;
-    final box = context.findRenderObject();
+    final frame = _geometry;
     if (document == null ||
         !document.mounted ||
-        box is! RenderBox ||
-        !box.attached ||
-        !box.hasSize) {
-      _scheduleRetry();
+        frame == null ||
+        !identical(frame.document, document)) {
       return const _Snapshot.empty();
     }
     final media = MediaQuery.maybeOf(context);
-    final layerOrigin = box.localToGlobal(Offset.zero);
-    final layerSize = box.size;
     final geometry = document.documentGeometry;
     final mounted = geometry.mountedBlockIds ?? const <String>[];
     final notesByBlock = <String, List<HomericMarginNote>>{};
@@ -552,20 +650,20 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       if (notes != null) measured.addAll(notes);
       final block = geometry.block(blockId);
       final link = block?.layerLink;
-      final origin = block?.globalOrigin;
+      final origin = frame.blockOrigins[blockId];
       final rect = block?.blockRect;
       if (block == null || link == null || origin == null || rect == null) {
         // Mounted, but its geometry for this document revision is not laid
-        // out yet; the document signals once it is.
+        // out yet, or it mounted after the last completed frame; the
+        // document signals once it lays out.
         pending.add(blockId);
         continue;
       }
       final placement = _BlockPlacement(
         blockId: blockId,
         link: link,
-        dx: widget.marginLeft - (origin.dx - layerOrigin.dx),
+        dx: widget.marginLeft - origin.dx,
         top: origin.dy,
-        topInLayer: origin.dy - layerOrigin.dy,
         right: rect.right,
       );
       final inputs = <_NoteInputs>[];
@@ -601,10 +699,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     final screenHeight = media?.size.height;
     final keyboardOverlap = screenHeight == null || viewInsets <= 0
         ? 0.0
-        : math.max(
-            0.0,
-            layerOrigin.dy + layerSize.height - (screenHeight - viewInsets),
-          );
+        : math.max(0.0, frame.layerBottom - (screenHeight - viewInsets));
     return _Snapshot(
       blocks: blocks,
       measured: measured,
@@ -618,13 +713,8 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       isUnmounted: (blockId) =>
           !mountedSet.contains(blockId) &&
           controller.document.indexOfBlockId(blockId) != null,
-      viewportTop: widget.viewportPadding.top,
-      viewportBottom:
-          layerSize.height - widget.viewportPadding.bottom - keyboardOverlap,
-      overlayMaxHeight: math.max(
-        widget.lineHeight,
-        layerSize.height - widget.viewportPadding.vertical - viewInsets,
-      ),
+      keyboardOverlap: keyboardOverlap,
+      viewInsets: viewInsets,
     );
   }
 
@@ -640,8 +730,13 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     return (anchor: anchor, rects: rects);
   }
 
-  /// Runs during layout, once full-form heights are measured.
-  Widget _present(_Snapshot snapshot, Map<String, double> heights) {
+  /// Runs during layout, once full-form heights are measured and the
+  /// layer's [size] for this frame is known.
+  Widget _present(
+    _Snapshot snapshot,
+    Map<String, double> heights,
+    Size size,
+  ) {
     final notesById = <String, HomericMarginNote>{
       for (final note in widget.notes) note.id: note,
     };
@@ -652,7 +747,16 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       presentation = _solve(snapshot, heights, notesById);
       _last = presentation;
     }
-    return _build(presentation, snapshot, notesById);
+    final padding = widget.viewportPadding;
+    final viewport = (
+      top: padding.top,
+      bottom: size.height - padding.bottom - snapshot.keyboardOverlap,
+      maxHeight: math.max(
+        widget.lineHeight,
+        size.height - padding.vertical - snapshot.viewInsets,
+      ),
+    );
+    return _build(presentation, viewport, notesById);
   }
 
   _Presentation _solve(
@@ -770,9 +874,10 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
 
   Widget _build(
     _Presentation presentation,
-    _Snapshot snapshot,
+    _Viewport viewport,
     Map<String, HomericMarginNote> notesById,
   ) {
+    final forms = <String, MarginNoteForm>{};
     final expandedId = widget.expandedNoteId;
     final focusedId = focusedNoteId;
     final indicators = <Widget>[];
@@ -796,6 +901,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       for (final placed in group.notes) {
         final note = notesById[placed.id];
         if (note == null) continue;
+        forms[placed.id] = placed.form;
         final active = placed.id == expandedId || placed.id == focusedId;
         addIndicator(
           group.block.blockId,
@@ -840,7 +946,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           overlay = _overlayFollower(
             block: group.block,
             top: placed.top,
-            snapshot: snapshot,
+            viewport: viewport,
             child: _shell(
               note,
               placed.order.toDouble(),
@@ -868,7 +974,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       composerOverlay = _overlayFollower(
         block: composer.block,
         top: composer.anchor.top,
-        snapshot: snapshot,
+        viewport: viewport,
         child: FocusTraversalOrder(
           order: NumericFocusOrder(composer.order),
           child: _composerCard(composerWidget),
@@ -895,6 +1001,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       ));
     }
 
+    _forms = forms;
     return ClipRect(
       child: Stack(
         children: <Widget>[
@@ -1046,7 +1153,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   Widget _overlayFollower({
     required _BlockPlacement block,
     required double top,
-    required _Snapshot snapshot,
+    required _Viewport viewport,
     required Widget child,
   }) {
     final padding = widget.expandedPadding;
@@ -1060,9 +1167,9 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
             left: -padding.left,
             top: top - padding.top,
             width: widget.noteWidth + padding.horizontal,
-            maxHeight: snapshot.overlayMaxHeight,
-            clampTop: snapshot.viewportTop - block.topInLayer,
-            clampBottom: snapshot.viewportBottom - block.topInLayer,
+            maxHeight: viewport.maxHeight,
+            clampTop: viewport.top - block.top,
+            clampBottom: viewport.bottom - block.top,
             child: child,
           ),
         ],
@@ -1074,13 +1181,52 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
 // ---------------------------------------------------------------------------
 // Inputs and solved presentation.
 
+/// Where the mounted blocks sat in the layer at the end of a completed frame.
+final class _FrameGeometry {
+  const _FrameGeometry({
+    required this.document,
+    required this.blockOrigins,
+    required this.layerBottom,
+  });
+
+  final HomericEditableDocumentState document;
+
+  /// Link origin of each mounted block, in the layer's coordinates.
+  final Map<String, Offset> blockOrigins;
+
+  /// Global y of the layer's bottom edge, for the keyboard inset.
+  final double layerBottom;
+
+  static const double _tolerance = 0.01;
+
+  static bool same(_FrameGeometry? a, _FrameGeometry? b) {
+    if (a == null || b == null) return identical(a, b);
+    if (!identical(a.document, b.document) ||
+        (a.layerBottom - b.layerBottom).abs() > _tolerance ||
+        a.blockOrigins.length != b.blockOrigins.length) {
+      return false;
+    }
+    for (final entry in a.blockOrigins.entries) {
+      final other = b.blockOrigins[entry.key];
+      if (other == null ||
+          (other.dx - entry.value.dx).abs() > _tolerance ||
+          (other.dy - entry.value.dy).abs() > _tolerance) {
+        return false;
+      }
+    }
+    return true;
+  }
+}
+
+/// Vertical bounds, in the layer, that overlays stay inside.
+typedef _Viewport = ({double top, double bottom, double maxHeight});
+
 final class _BlockPlacement {
   const _BlockPlacement({
     required this.blockId,
     required this.link,
     required this.dx,
     required this.top,
-    required this.topInLayer,
     required this.right,
   });
 
@@ -1090,11 +1236,8 @@ final class _BlockPlacement {
   /// Follower x offset that puts block-local x = [dx] at the margin's left.
   final double dx;
 
-  /// Global top of the block when read, the solver's shared space.
+  /// Top of the block in the layer when read, the solver's shared space.
   final double top;
-
-  /// Top of the block relative to the layer when read.
-  final double topInLayer;
 
   /// Block-local right edge of the block.
   final double right;
@@ -1140,9 +1283,8 @@ final class _Snapshot {
     required this.mounted,
     required this.blockOrder,
     required this.isUnmounted,
-    required this.viewportTop,
-    required this.viewportBottom,
-    required this.overlayMaxHeight,
+    required this.keyboardOverlap,
+    required this.viewInsets,
   });
 
   const _Snapshot.empty()
@@ -1153,9 +1295,8 @@ final class _Snapshot {
         mounted = const <String>{},
         blockOrder = const <String, int>{},
         isUnmounted = _never,
-        viewportTop = 0,
-        viewportBottom = 0,
-        overlayMaxHeight = 0;
+        keyboardOverlap = 0,
+        viewInsets = 0;
 
   static bool _never(String _) => false;
 
@@ -1170,9 +1311,10 @@ final class _Snapshot {
   final Set<String> mounted;
   final Map<String, int> blockOrder;
   final bool Function(String blockId) isUnmounted;
-  final double viewportTop;
-  final double viewportBottom;
-  final double overlayMaxHeight;
+
+  /// Height of the layer's bottom covered by the keyboard.
+  final double keyboardOverlap;
+  final double viewInsets;
 }
 
 final class _PlacedNote {

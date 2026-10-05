@@ -243,8 +243,13 @@ class _MarginDemoState extends State<_MarginDemo> {
             ),
       ];
 
-  void _activate(String id) =>
-      setState(() => _expanded = _expanded == id ? null : id);
+  /// A compact preview expands to its full text; activating it again closes
+  /// it. A full note is already readable in place (a host with editable
+  /// notes would open it for editing here), so it only closes an open one.
+  void _activate(String id, MarginNoteForm form) => setState(() {
+        _expanded =
+            form == MarginNoteForm.compact && _expanded != id ? id : null;
+      });
 
   void _dismiss() => setState(() {
         _expanded = null;

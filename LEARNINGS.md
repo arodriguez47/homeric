@@ -965,3 +965,34 @@ built side by side.
   composer clamp inside the viewport in the canvas's `performLayout`, using
   the block's offset in the layer read at build. They then travel with their
   block while scrolling until the next solve.
+
+## engineer — 2026-10-05 — Never read ancestor geometry while building
+
+**What:** `HomericMarginLayer` called `localToGlobal` on itself in `build`,
+and the document's `globalOrigin` closures, which also walk up the render
+tree. Nexus gives the layer a `GlobalKey` to reach `focusNote`. A page
+transition then wrapped the editor and the layer in a new `RenderTransform`
+inside a `LayoutBuilder`. The re-parented layer rebuilt in that layout
+callback, while the transform had never been laid out, and the walk hit
+"RenderBox was not laid out". The same thing happens in an ordinary build
+pass whenever a parent inserts a render object above a keyed child. Checking
+only the layer's own `hasSize` cannot catch it: the reparented box keeps its
+old size.
+
+**Fix:** build reads only block-local geometry, such as links and range
+rects. Block positions relative to the layer are read post-frame, when every
+ancestor is laid out: in the `documentGeometryChanges` listener, which the
+document already defers out of the frame, and in one coalesced post-frame
+pass after every layer build. That pass rebuilds only when the values
+differ. Origins are mapped into the layer's own space through one inverted
+transform, so a transform shared by the editor and the layer cancels out. A
+scaled transition no longer skews the margin's x offset. The layer's size
+for overlay clamping is taken from its own layout constraints in the same
+frame, not read at build.
+
+**Rule going forward:** treat `build` as possibly running inside a layout
+callback. Never call `localToGlobal`, `getTransformTo` or `size` on
+ancestors, or on anything reached through them, from `build`. Read shared
+space post-frame and correct in the next frame. Do not paper over it with a
+`hasSize` guard on the read target. This supersedes the "read at build"
+detail in the 2026-10-05 margin entry above.

@@ -34,6 +34,11 @@ void main() {
     expect(tester.getSize(note('crowd-0')).height, closeTo(14 * 1.4, 0.01),
         reason: 'the crowded paragraph shows previews');
 
+    // The demo expands a note activated in its compact form.
+    final layer = tester.state<HomericMarginLayerState>(
+      find.byType(HomericMarginLayer),
+    );
+    expect(layer.formOf('crowd-1'), MarginNoteForm.compact);
     await tester.tap(note('crowd-1'));
     await tester.pump();
     expect(

@@ -2812,6 +2812,85 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets(
+      'a real mouse click on a menu item survives frames between down and up',
+      (tester) async {
+    // The menu lives in the root overlay. Unless it joins the paragraph's
+    // TextFieldTapRegion group, the pointer-down on an item is a tap outside
+    // the editor that dismisses the menu, and the item unmounts before the
+    // pointer-up. `tester.tap` sends down and up in one frame and misses it.
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final clipboard = _FakeClipboard(readValue: 'six');
+    final controller = HomericEditorController(
+      document: _document('one two'),
+      selection: const HomericSelection(anchor: 1, head: 4),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 200,
+          child: HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            focusNode: focusNode,
+            blockId: 'b',
+            clipboard: clipboard,
+            resolveStyle: (_) => _style,
+          ),
+        ),
+      ),
+    ));
+    focusNode.requestFocus();
+    await tester.pump();
+    final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
+    final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+
+    Future<void> clickMenuItem(String label) async {
+      await tester.tapAt(
+        origin + const Offset(10, 7),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      final item = find.descendant(of: toolbar, matching: find.text(label));
+      expect(item, findsOneWidget, reason: 'precondition: menu shows $label');
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: tester.getCenter(item));
+      await tester.pump();
+      await mouse.down(tester.getCenter(item));
+      await tester.pump();
+      expect(item, findsOneWidget,
+          reason: 'MUTATION: a pointer-down on the menu counted as a tap '
+              'outside the editor and dismissed it before the click landed');
+      await tester.pump(const Duration(milliseconds: 50));
+      await mouse.up();
+      await mouse.removePointer();
+      await tester.pump();
+      await tester.pump();
+    }
+
+    await clickMenuItem('Copy');
+    expect(clipboard.writes, <String>['one']);
+    expect(controller.document.blocks.single.text, 'one two');
+    expect(toolbar, findsNothing);
+
+    await clickMenuItem('Cut');
+    expect(clipboard.writes, <String>['one', 'one']);
+    expect(controller.document.blocks.single.text, ' two');
+
+    controller.setSelection(const HomericSelection(anchor: 2, head: 5));
+    await tester.pump();
+    await clickMenuItem('Paste');
+    expect(controller.document.blocks.single.text, ' six');
+    expect(toolbar, findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('current projected spell results paint outside controller state',
       (tester) async {
     final provider = _FakeSpellProvider();

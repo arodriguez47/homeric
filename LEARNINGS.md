@@ -1086,3 +1086,22 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   computes both from a single `marginNotePartition`, so a note whose passage
   was deleted leaves the margin and appears below in the same frame, never in
   both or neither.
+
+## engineer — 2026-10-05 — An overlay menu must join the editor's TextFieldTapRegion, and `tester.tap` cannot prove it
+
+- **Symptom (macOS app):** right-click menu Cut/Copy/Paste did nothing.
+  Pre-existing since 0963f3d (touch chrome added `TextFieldTapRegion
+  .onTapOutside -> _dismissContextMenu`); present in pinned b6bddcd.
+- **Cause:** `ContextMenuController` puts the menu in the root overlay,
+  outside the paragraph's `TextFieldTapRegion` group. A pointer-down on an
+  item is a "tap outside", which dismisses the menu, and the item unmounts
+  before pointer-up. Flutter's own `SelectionOverlay` wraps its toolbar in
+  `TextFieldTapRegion` for this reason; Homeric's `_showContextMenu` now does
+  too.
+- **Why the tests missed it:** `tester.tap` sends down and up with no frame
+  between them. The arena already holds the button's recognizer, so the tap
+  fires even though the menu is gone. Any overlay-activation test needs a
+  `createGesture(kind: mouse)` with a `pump()` between `down` and `up`.
+  Evidence: `test/editing/editable_paragraph_test.dart` ("a real mouse
+  click on a menu item survives frames between down and up"), plus Nexus
+  `test/widgets/journal_context_menu_clipboard_test.dart`.

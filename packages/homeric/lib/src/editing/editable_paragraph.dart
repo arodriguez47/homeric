@@ -2345,45 +2345,53 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           menuContext,
           buttonItems,
         ).toList(growable: false);
-        return _HomericContextMenuFocusScope(
-          canFocus: () =>
-              mounted && menu.isShown && _isMenuWitnessCurrent(witness),
-          onStale: _dismissContextMenu,
-          child: Shortcuts(
-            shortcuts: const <ShortcutActivator, Intent>{
-              SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-              SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
-              SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
-            },
-            child: Focus(
-              canRequestFocus: false,
-              onFocusChange: (focused) {
-                if (!focused && menu.isShown) _dismissContextMenu();
+        // The menu lives in the root overlay, outside this paragraph's
+        // TextFieldTapRegion. Join that group so a pointer-down on a menu item
+        // is not a tap outside the editor: otherwise onTapOutside dismisses
+        // the menu on down, the item unmounts before up, and a real mouse
+        // click never activates it.
+        return TextFieldTapRegion(
+          child: _HomericContextMenuFocusScope(
+            canFocus: () =>
+                mounted && menu.isShown && _isMenuWitnessCurrent(witness),
+            onStale: _dismissContextMenu,
+            child: Shortcuts(
+              shortcuts: const <ShortcutActivator, Intent>{
+                SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+                SingleActivator(LogicalKeyboardKey.numpadEnter):
+                    ActivateIntent(),
+                SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
               },
-              onKeyEvent: (_, event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape) {
-                  _dismissContextMenu();
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: AdaptiveTextSelectionToolbar(
-                anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
-                children: <Widget>[
-                  for (var index = 0; index < adaptiveButtons.length; index++)
-                    Actions(
-                      actions: <Type, Action<Intent>>{
-                        ActivateIntent: CallbackAction<ActivateIntent>(
-                          onInvoke: (_) {
-                            buttonItems[index].onPressed?.call();
-                            return null;
-                          },
-                        ),
-                      },
-                      child: adaptiveButtons[index],
-                    ),
-                ],
+              child: Focus(
+                canRequestFocus: false,
+                onFocusChange: (focused) {
+                  if (!focused && menu.isShown) _dismissContextMenu();
+                },
+                onKeyEvent: (_, event) {
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.escape) {
+                    _dismissContextMenu();
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: AdaptiveTextSelectionToolbar(
+                  anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
+                  children: <Widget>[
+                    for (var index = 0; index < adaptiveButtons.length; index++)
+                      Actions(
+                        actions: <Type, Action<Intent>>{
+                          ActivateIntent: CallbackAction<ActivateIntent>(
+                            onInvoke: (_) {
+                              buttonItems[index].onPressed?.call();
+                              return null;
+                            },
+                          ),
+                        },
+                        child: adaptiveButtons[index],
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

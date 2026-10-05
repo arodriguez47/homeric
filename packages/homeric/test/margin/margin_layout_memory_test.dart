@@ -193,6 +193,21 @@ void main() {
       expect(out.single.top, 30);
     });
 
+    test('the last block losing its notes reopens its predecessor', () {
+      final memory = MarginLayoutMemory();
+      final a = _block('a', 0, [_n('a0', height: 100)]);
+      final b = _block('b', 150, [_n('b0', height: 100)]);
+      final c = _block('c', 160, _crowd('c'));
+      memory.solve([a, b, c], lineHeight: _line);
+
+      final out = memory.solve(
+        [a, b],
+        lineHeight: _line,
+        isUnmounted: (blockId) => false,
+      );
+      expect(out, solveMarginLayout([a, b], lineHeight: _line));
+    });
+
     test('a block gaining notes between kept blocks reopens its predecessor',
         () {
       final memory = MarginLayoutMemory();

@@ -604,7 +604,8 @@ void main() {
       // 0..300, so the bottom 100 px are covered.
       final card = tester.getRect(_expandedFinder('n'));
       expect(card.bottom, lessThanOrEqualTo(200 - 8));
-      expect(card.height, lessThanOrEqualTo(_viewportHeight - 16 - 400 + 300));
+      // Only the 100 px the keyboard covers are lost, not the full inset.
+      expect(card.height, closeTo(_viewportHeight - 16 - 100, 1));
     });
   });
 
@@ -793,6 +794,42 @@ void main() {
 
       expect(editorFocus.hasPrimaryFocus, isTrue);
       expect(harness.controller.selection, selection);
+    });
+
+    testWidgets(
+        'a composer supplied during a geometry hold takes focus once '
+        'built', (tester) async {
+      final harness = _Harness(_document(['first', 'second', 'third']));
+      harness.host.notes = [
+        _note('a', 'block-1', const BlockTextRange(0, 6)),
+        _note('b', 'block-2', const BlockTextRange(0, 5)),
+      ];
+      await harness.pump(tester);
+      harness.blockFocus['block-0']!.requestFocus();
+      await tester.pump();
+
+      harness.controller.setSelection(HomericSelection.collapsed(
+        harness.controller.document.positionAt(0, 5),
+      ));
+      expect(harness.controller.insertParagraphBreak(), isTrue);
+      harness.host.composer = HomericMarginComposer(
+        blockId: 'block-2',
+        range: const BlockTextRange(0, 5),
+        semanticsLabel: 'New note',
+        builder: (context) =>
+            const SizedBox(height: 40, child: Text('composing')),
+      );
+      await tester.pump();
+      // The edited block's geometry is still pending: no composer yet.
+      expect(find.byKey(const ValueKey<String>('homeric-margin-composer')),
+          findsNothing);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey<String>('homeric-margin-composer')),
+          findsOneWidget);
+      expect(FocusManager.instance.primaryFocus, isA<FocusScopeNode>(),
+          reason: 'focus must not stay in the document');
     });
 
     testWidgets('a composer without its own focus target focuses its scope',

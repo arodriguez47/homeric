@@ -307,6 +307,10 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   int _composerGeneration = 0;
   FocusNode? _focusBeforeExpansion;
   FocusNode? _focusBeforeComposer;
+
+  /// Set while a new composer waits to take focus; the composer is not in
+  /// the tree during a geometry hold, so focus is requested once it is.
+  bool _composerFocusPending = false;
   _Presentation? _last;
   _FrameGeometry? _geometry;
   bool _geometryReadScheduled = false;
@@ -429,14 +433,11 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       if (!_focusWithin(_composerScope)) {
         _focusBeforeComposer = FocusManager.instance.primaryFocus;
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || widget.composer == null) return;
-        if (_composerScope.context != null && !_focusWithin(_composerScope)) {
-          _composerScope.requestFocus();
-        }
-      });
+      _composerFocusPending = true;
+      _focusComposerWhenBuilt();
       return;
     }
+    _composerFocusPending = false;
     final before = _focusBeforeComposer;
     _focusBeforeComposer = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -465,10 +466,20 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // The retired scope's widgets unmounted at the end of this frame.
       retired.dispose();
-      if (!mounted || widget.composer == null) return;
-      if (_composerScope.context != null && !_focusWithin(_composerScope)) {
-        _composerScope.requestFocus();
+    });
+    _composerFocusPending = true;
+    _focusComposerWhenBuilt();
+  }
+
+  void _focusComposerWhenBuilt() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.composer == null || !_composerFocusPending) {
+        return;
       }
+      // Still held back: _present asks again once the composer is built.
+      if (_composerScope.context == null) return;
+      _composerFocusPending = false;
+      if (!_focusWithin(_composerScope)) _composerScope.requestFocus();
     });
   }
 
@@ -784,7 +795,6 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           !mountedSet.contains(blockId) &&
           controller.document.indexOfBlockId(blockId) != null,
       keyboardOverlap: keyboardOverlap,
-      viewInsets: viewInsets,
     );
   }
 
@@ -817,13 +827,16 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       presentation = _solve(snapshot, heights, notesById);
       _last = presentation;
     }
+    if (_composerFocusPending && presentation.composer != null) {
+      _focusComposerWhenBuilt();
+    }
     final padding = widget.viewportPadding;
     final viewport = (
       top: padding.top,
       bottom: size.height - padding.bottom - snapshot.keyboardOverlap,
       maxHeight: math.max(
         widget.lineHeight,
-        size.height - padding.vertical - snapshot.viewInsets,
+        size.height - padding.vertical - snapshot.keyboardOverlap,
       ),
     );
     return _build(presentation, viewport, notesById);
@@ -1409,7 +1422,6 @@ final class _Snapshot {
     required this.blockOrder,
     required this.isUnmounted,
     required this.keyboardOverlap,
-    required this.viewInsets,
   });
 
   const _Snapshot.empty()
@@ -1420,8 +1432,7 @@ final class _Snapshot {
         mounted = const <String>{},
         blockOrder = const <String, int>{},
         isUnmounted = _never,
-        keyboardOverlap = 0,
-        viewInsets = 0;
+        keyboardOverlap = 0;
 
   static bool _never(String _) => false;
 
@@ -1439,7 +1450,6 @@ final class _Snapshot {
 
   /// Height of the layer's bottom covered by the keyboard.
   final double keyboardOverlap;
-  final double viewInsets;
 }
 
 final class _PlacedNote {

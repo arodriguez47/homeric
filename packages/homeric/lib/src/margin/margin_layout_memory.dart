@@ -123,20 +123,27 @@ final class MarginLayoutMemory {
           (moved - shift).abs() <= _kTolerance ? _Status.kept : _Status.changed;
     }
     // A block that vanished while still mounted changes the next block
-    // that was placed after it.
+    // that was placed after it. With no such block, it was the tail, and the
+    // last retained predecessor's form depended on its anchor.
     for (var index = 0; index < previous.length; index++) {
       final blockId = previous[index].blockId;
       if (currentIds.contains(blockId) ||
           (isUnmounted?.call(blockId) ?? true)) {
         continue;
       }
+      var successor = -1;
+      var predecessor = -1;
       for (var next = 0; next < current.length; next++) {
-        final after = previousIndex[current[next].block.blockId];
-        if (after != null && after > index) {
-          status[next] = _Status.changed;
+        final other = previousIndex[current[next].block.blockId];
+        if (other == null) continue;
+        if (other > index) {
+          successor = next;
           break;
         }
+        predecessor = next;
       }
+      final affected = successor >= 0 ? successor : predecessor;
+      if (affected >= 0) status[affected] = _Status.changed;
     }
     // A kept block whose previous neighbour differs had something removed
     // or inserted between them, which changes its cascade.

@@ -270,7 +270,8 @@ class _MarginDemoState extends State<_MarginDemo> {
           : selection.anchor);
       if (start is InlinePosition &&
           end is InlinePosition &&
-          start.block.id == end.block.id) {
+          start.block.id == end.block.id &&
+          start.offset < end.offset) {
         blockId = start.block.id;
         range = BlockTextRange(start.offset, end.offset);
       }

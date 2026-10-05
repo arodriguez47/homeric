@@ -1,3 +1,10 @@
+import 'package:flutter/cupertino.dart' show CupertinoButton;
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
+import 'package:flutter/material.dart'
+    show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold;
+import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
@@ -644,7 +651,173 @@ void main() {
       expect(controller.document, same(document));
     });
   });
+
+  group('host selection menu items', () {
+    testWidgets(
+        'host items follow the built-ins and receive the live selection',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final calls = <(HomericSelection, String, BlockTextSelection)>[];
+        var presses = 0;
+        final controller = await _pumpMenuDocument(
+          tester,
+          selectionMenuItemsBuilder: (selection, blockId, blockSelection) {
+            calls.add((selection, blockId, blockSelection));
+            return <ContextMenuButtonItem>[
+              ContextMenuButtonItem(
+                label: 'Annotate',
+                onPressed: () => presses++,
+              ),
+            ];
+          },
+        );
+
+        await _showMenuOnFirstWord(tester);
+
+        expect(_menuLabels(tester), [
+          'Cut',
+          'Copy',
+          'Paste',
+          'Select All',
+          'Undo',
+          'Redo',
+          'Annotate',
+        ]);
+        final (selection, blockId, blockSelection) = calls.last;
+        expect(selection, controller.selection);
+        expect(blockId, 'a');
+        expect(blockSelection, const BlockTextSelection(anchor: 0, head: 3));
+
+        await tester.tap(find.text('Annotate'));
+        await tester.pump();
+        expect(presses, 1);
+        expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+
+        await _showMenuOnFirstWord(tester);
+        final stalePress = tester
+            .widgetList<CupertinoButton>(find.descendant(
+              of: find.byType(AdaptiveTextSelectionToolbar),
+              matching: find.byType(CupertinoButton),
+            ))
+            .last
+            .onPressed!;
+        controller.setSelection(const HomericSelection.collapsed(5));
+        await tester.pump();
+        stalePress();
+        await tester.pump();
+        expect(presses, 1,
+            reason: 'a press for a selection that changed is dropped');
+        expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+        await tester.pumpWidget(const SizedBox.shrink());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('the menu is unchanged when the host supplies no items',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        await _pumpMenuDocument(tester);
+
+        await _showMenuOnFirstWord(tester);
+
+        expect(_menuLabels(tester), [
+          'Cut',
+          'Copy',
+          'Paste',
+          'Select All',
+          'Undo',
+          'Redo',
+        ]);
+        await tester.pumpWidget(const SizedBox.shrink());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('an empty host list leaves the built-ins untouched',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        var calls = 0;
+        await _pumpMenuDocument(
+          tester,
+          selectionMenuItemsBuilder: (_, __, ___) {
+            calls++;
+            return const <ContextMenuButtonItem>[];
+          },
+        );
+
+        await _showMenuOnFirstWord(tester);
+
+        expect(calls, greaterThan(0));
+        expect(_menuLabels(tester).last, 'Redo');
+        await tester.pumpWidget(const SizedBox.shrink());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+  });
 }
+
+Future<HomericEditorController> _pumpMenuDocument(
+  WidgetTester tester, {
+  HomericSelectionMenuItemsBuilder? selectionMenuItemsBuilder,
+}) async {
+  final controller = HomericEditorController(document: _document(['one two']));
+  final session = HomericTextInputSession(controller: controller);
+  addTearDown(session.dispose);
+  addTearDown(controller.dispose);
+  FocusNode? focus;
+  await tester.pumpWidget(MaterialApp(
+    home: Scaffold(
+      body: SizedBox(
+        width: 500,
+        height: 300,
+        child: HomericEditableDocument.builder(
+          controller: controller,
+          inputSession: session,
+          selectionMenuItemsBuilder: selectionMenuItemsBuilder,
+          blockBuilder: (context, block, focusNode) {
+            focus = focusNode;
+            return HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => const TextStyle(fontSize: 14),
+            );
+          },
+        ),
+      ),
+    ),
+  ));
+  focus!.requestFocus();
+  await tester.pump();
+  return controller;
+}
+
+Future<void> _showMenuOnFirstWord(WidgetTester tester) async {
+  final origin = tester.getTopLeft(
+    find.byKey(const ValueKey<String>('homeric-editable-a')),
+  );
+  await tester.tapAt(
+    origin + const Offset(10, 7),
+    buttons: kSecondaryMouseButton,
+  );
+  await tester.pump();
+  expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+}
+
+List<String?> _menuLabels(WidgetTester tester) => tester
+    .widgetList<Text>(find.descendant(
+      of: find.byType(AdaptiveTextSelectionToolbar),
+      matching: find.byType(Text),
+    ))
+    .map((text) => text.data)
+    .toList(growable: false);
 
 Document _document(List<String> texts) => Document([
       for (var index = 0; index < texts.length; index++)

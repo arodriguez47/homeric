@@ -383,6 +383,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   final LayerLink _selectionStartLayerLink = LayerLink();
   final LayerLink _selectionEndLayerLink = LayerLink();
   final LayerLink _localTouchToolbarLayerLink = LayerLink();
+
+  /// Document geometry target at this paragraph's local origin.
+  final LayerLink _documentBlockLayerLink = LayerLink();
   final HomericSelectionOverlayCoordinator _localTouchOverlayCoordinator =
       HomericSelectionOverlayCoordinator();
   HomericSelectionEndpoint? _localTouchMovingEndpoint;
@@ -1029,6 +1032,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                       : TextDirection.ltr,
             );
           },
+          blockLayerLink: _documentBlockLayerLink,
+          // Resolved when queried, never retained from this build.
+          blockGeometry: _currentConsumerGeometry,
         );
         _scheduleGeometryPublication(overlayContext, geometry);
         final caret = focused &&
@@ -1481,7 +1487,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                   return Focus(
                     focusNode: _focusNode,
                     onFocusChange: _focusChanged,
-                    child: body,
+                    // Inside a document, the paragraph's origin is published
+                    // as this block's geometry origin.
+                    child: _documentHost == null
+                        ? body
+                        : CompositedTransformTarget(
+                            link: _documentBlockLayerLink,
+                            child: body,
+                          ),
                   );
                 },
               ),
@@ -2489,7 +2502,30 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                 )
             : null,
       ),
+      ..._hostContextMenuItems(witness, selection),
     ];
+  }
+
+  Iterable<ContextMenuButtonItem> _hostContextMenuItems(
+    _MenuWitness witness,
+    BlockTextSelection? blockSelection,
+  ) {
+    final builder = _documentHost?.selectionMenuItemsBuilder;
+    final selection = _controller.selection;
+    if (builder == null || selection == null || blockSelection == null) {
+      return const <ContextMenuButtonItem>[];
+    }
+    return builder(selection, widget.blockId, blockSelection).map((item) {
+      final onPressed = item.onPressed;
+      if (onPressed == null) return item;
+      return item.copyWith(onPressed: () {
+        final isCurrent = _isMenuWitnessCurrent(witness);
+        // Dismiss first: removing the menu refocuses this paragraph, and a
+        // host item may move focus elsewhere, such as into a note composer.
+        _dismissContextMenu();
+        if (isCurrent) onPressed();
+      });
+    });
   }
 
   void _invokeMenuIntent(_MenuWitness witness, Intent intent) {
@@ -3184,6 +3220,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     }
     _renderParagraph = render;
     _renderGeneration = generation;
+    // Covers a paragraph that relays out as its own boundary, without its
+    // row, and the first geometry of a newly mounted paragraph.
+    if (geometryChanged) _documentHost?.mountedGeometryChanged();
     _documentHost?.selectionHostLayoutChanged(
       widget.blockId,
       owner: this,

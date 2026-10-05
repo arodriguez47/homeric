@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart' show SchedulerPhase;
 import 'package:flutter/services.dart' show RawFloatingCursorPoint;
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart' show internal;
@@ -27,6 +28,8 @@ import '../model/selection.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/homeric_paragraph.dart';
 import 'block_height_cache.dart';
+import 'editable_paragraph.dart'
+    show HomericEditableBlockGeometry, HomericEditableParagraph;
 import 'editor_controller.dart';
 import 'selection_overlay.dart';
 
@@ -420,6 +423,155 @@ final class HomericActiveCaretGeometry {
   final Rect globalRect;
 }
 
+/// Builds host-owned selection context-menu items.
+///
+/// [selection] is the live canonical selection when the menu builds, and
+/// [blockSelection] is its fragment inside [blockId], the row showing the
+/// menu. Returned items are appended after Homeric's built-in items. Homeric
+/// dismisses the menu before invoking an item's `onPressed`, and drops the
+/// press when the selection changed after the menu was shown.
+typedef HomericSelectionMenuItemsBuilder = List<ContextMenuButtonItem> Function(
+  HomericSelection selection,
+  String blockId,
+  BlockTextSelection blockSelection,
+);
+
+/// Revocable geometry for the rows a [HomericEditableDocument] has laid out.
+///
+/// Obtain one from [HomericEditableDocumentState.documentGeometry] and
+/// re-obtain it whenever
+/// [HomericEditableDocumentState.documentGeometryChanges] fires. A capability
+/// becomes stale, and every query returns `null`, as soon as any row lays out,
+/// mounts or unmounts, or the canonical document changes. Scrolling does not
+/// make it stale: rows keep their geometry and [HomericMountedBlockGeometry.layerLink]
+/// carries the scroll offset at composite time.
+final class HomericDocumentGeometry {
+  const HomericDocumentGeometry._(
+    this._state, {
+    required this.generation,
+    required this.documentRevision,
+  });
+
+  final HomericEditableDocumentState _state;
+
+  /// Document geometry generation captured by this capability.
+  final int generation;
+
+  /// Controller document revision captured by this capability.
+  final int documentRevision;
+
+  /// Whether queries still address the current rows and document.
+  bool get isCurrent =>
+      _state.mounted &&
+      _state._documentGeometryGeneration == generation &&
+      _state.widget.controller.documentRevision == documentRevision;
+
+  /// Ids of blocks with a laid-out row, in document order, or `null` once
+  /// stale.
+  ///
+  /// Rows recycled out of the cache extent are absent, and so are rows kept
+  /// alive off-screen, which are not laid out or painted.
+  List<String>? get mountedBlockIds =>
+      isCurrent ? _state._mountedGeometryBlockIds() : null;
+
+  /// Geometry for one laid-out block, or `null` when [blockId] has no
+  /// laid-out row or this capability is stale.
+  HomericMountedBlockGeometry? block(String blockId) =>
+      isCurrent ? _state._mountedBlockGeometry(this, blockId) : null;
+}
+
+/// Geometry for one laid-out block, expressed in the coordinate space of
+/// [layerLink].
+///
+/// The link's origin is the block's local origin. For a block rendered by a
+/// [HomericEditableParagraph] that is the paragraph's top-left, so [blockRect],
+/// [rectsForRange] and [caretRect] are paragraph-local, matching
+/// [HomericEditableBlockGeometry]. For any other block it is the top-left of
+/// the widget returned by the document's block builder. A
+/// [CompositedTransformFollower] on [layerLink] tracks the block through
+/// scroll and movement in the frame they happen; offsets inside the block
+/// change only on relayout, which the document signals.
+///
+/// Every query returns `null` once [isCurrent] is false. Non-finite
+/// rectangles are never returned.
+final class HomericMountedBlockGeometry {
+  const HomericMountedBlockGeometry._({
+    required this.blockId,
+    required HomericDocumentGeometry document,
+    required LayerLink layerLink,
+    required int contentLength,
+    Rect? blockRect,
+    HomericEditableBlockGeometry? text,
+  })  : _document = document,
+        _layerLink = layerLink,
+        _contentLength = contentLength,
+        _blockRect = blockRect,
+        _text = text;
+
+  /// Stable canonical block ID.
+  final String blockId;
+
+  final HomericDocumentGeometry _document;
+  final LayerLink _layerLink;
+  final int _contentLength;
+  final Rect? _blockRect;
+  final HomericEditableBlockGeometry? _text;
+
+  /// Whether this block is rendered by an editable paragraph with text
+  /// geometry. Other blocks report only [blockRect].
+  bool get hasText => _text != null;
+
+  /// Whether queries still address the current layout.
+  bool get isCurrent => _document.isCurrent && (_text?.isCurrent ?? true);
+
+  /// Composited target whose origin is this block's local origin, or `null`
+  /// once stale.
+  ///
+  /// Flutter requires a link's leader to paint before its followers: place a
+  /// following widget after the editor in paint order, for example as a later
+  /// [Stack] child. Use `showWhenUnlinked: false`, because the leader is not
+  /// painted while its row is off-screen.
+  LayerLink? get layerLink => isCurrent ? _layerLink : null;
+
+  /// Block bounds in link space, or `null` once stale.
+  Rect? get blockRect {
+    if (!isCurrent) return null;
+    final rect = _text?.blockRect ?? _blockRect;
+    return rect != null && rect.isFinite ? rect : null;
+  }
+
+  /// Visual line rectangles for a canonical block range, in link space.
+  ///
+  /// Returns an empty list for a range whose text is entirely hidden, such as
+  /// a folded range, and for blocks without text; fall back to [caretRect] at
+  /// the range start. Returns `null` once stale or when [range] lies outside
+  /// the block.
+  List<Rect>? rectsForRange(BlockTextRange range) {
+    if (!isCurrent || range.end > _contentLength) return null;
+    final text = _text;
+    if (text == null) return const <Rect>[];
+    final rects = text.rectsForRange(range);
+    if (rects == null) return null;
+    return List<Rect>.unmodifiable(rects.where((rect) => rect.isFinite));
+  }
+
+  /// Caret rectangle at a canonical block [offset], in link space.
+  ///
+  /// Returns `null` once stale, for blocks without text, or when [offset] lies
+  /// outside the block.
+  Rect? caretRect(
+    int offset, {
+    HomericCaretAffinity affinity = HomericCaretAffinity.downstream,
+  }) {
+    final text = _text;
+    if (!isCurrent || text == null || offset < 0 || offset > _contentLength) {
+      return null;
+    }
+    final rect = text.caretRect(offset, affinity: affinity);
+    return rect != null && rect.isFinite ? rect : null;
+  }
+}
+
 const _documentSelectAllSemanticsAction =
     CustomSemanticsAction(label: 'Select all document text');
 const _documentUndoSemanticsAction =
@@ -444,6 +596,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.onCommandRejected,
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
+    this.selectionMenuItemsBuilder,
   })  : blockBuilder = null,
         blockGrabberStyle = const HomericBlockGrabberStyle(),
         blockGrabberCenterY = null,
@@ -475,6 +628,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.blockGrabberStyle = const HomericBlockGrabberStyle(),
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
+    this.selectionMenuItemsBuilder,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
         child = null;
@@ -531,6 +685,12 @@ class HomericEditableDocument extends StatefulWidget {
 
   /// Touch-selection policy shared by every mounted paragraph.
   final HomericTouchSelectionConfiguration touchSelectionConfiguration;
+
+  /// Optional host items appended after the built-in selection context-menu
+  /// items of every paragraph in this document.
+  ///
+  /// When null, the menu is unchanged.
+  final HomericSelectionMenuItemsBuilder? selectionMenuItemsBuilder;
 
   /// Returns the nearest document editing coordinator, if present.
   static HomericEditableDocumentState? maybeOf(BuildContext context) => context
@@ -599,10 +759,110 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   bool _semanticsCanUndo = false;
   bool _semanticsCanRedo = false;
   bool _semanticsReadOnly = false;
+  final Map<String, _DocumentBlockRowState> _rowAnchors =
+      <String, _DocumentBlockRowState>{};
+  final _DocumentGeometryNotifier _documentGeometryChanges =
+      _DocumentGeometryNotifier();
+  int _documentGeometryGeneration = 0;
+  bool _documentGeometryNotificationScheduled = false;
 
   /// Current ordered consumer command bindings.
   List<HomericDocumentCommandBinding> get commandBindings =>
       widget.commandBindings;
+
+  /// Current host items appended to every paragraph's selection menu.
+  HomericSelectionMenuItemsBuilder? get selectionMenuItemsBuilder =>
+      widget.selectionMenuItemsBuilder;
+
+  /// Current revocable geometry for the rows this document has laid out.
+  ///
+  /// Re-obtain it after every [documentGeometryChanges] notification; a
+  /// retained capability answers `null` once that signal's cause happened.
+  HomericDocumentGeometry get documentGeometry => HomericDocumentGeometry._(
+        this,
+        generation: _documentGeometryGeneration,
+        documentRevision: widget.controller.documentRevision,
+      );
+
+  /// Notifies after any frame in which a row laid out, mounted or unmounted,
+  /// for text and non-text blocks alike.
+  ///
+  /// Notifications are deferred out of the frame and coalesced, so a
+  /// listener may call `setState`. Paint-only changes, such as selection
+  /// colour or caret blink, and scrolling do not notify: a row's local
+  /// geometry is unchanged by them, and [HomericMountedBlockGeometry.layerLink]
+  /// carries the scroll offset.
+  Listenable get documentGeometryChanges => _documentGeometryChanges;
+
+  /// Revokes [documentGeometry] and schedules one [documentGeometryChanges]
+  /// notification.
+  @internal
+  void mountedGeometryChanged() {
+    _documentGeometryGeneration++;
+    if (_documentGeometryNotificationScheduled) return;
+    if (WidgetsBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      _documentGeometryNotificationScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _documentGeometryNotificationScheduled = false;
+        if (mounted) _documentGeometryChanges.notify();
+      }, debugLabel: 'HomericEditableDocument.documentGeometryChanges');
+      return;
+    }
+    if (mounted) _documentGeometryChanges.notify();
+  }
+
+  List<String> _mountedGeometryBlockIds() {
+    final document = widget.controller.document;
+    final mounted = <({int index, String blockId})>[];
+    for (final blockId in <String>{
+      ..._rowAnchors.keys,
+      ..._selectionHosts.keys
+    }) {
+      final index = document.indexOfBlockId(blockId);
+      if (index == null || !(_rowAnchors[blockId]?.isLaidOut ?? true)) {
+        continue;
+      }
+      mounted.add((index: index, blockId: blockId));
+    }
+    mounted.sort((left, right) => left.index.compareTo(right.index));
+    return List<String>.unmodifiable(mounted.map((entry) => entry.blockId));
+  }
+
+  HomericMountedBlockGeometry? _mountedBlockGeometry(
+    HomericDocumentGeometry document,
+    String blockId,
+  ) {
+    final index = widget.controller.document.indexOfBlockId(blockId);
+    if (index == null) return null;
+    final row = _rowAnchors[blockId];
+    if (row != null && !row.isLaidOut) return null;
+    final contentLength =
+        widget.controller.document.blocks[index].contentLength;
+    final host = _selectionHosts[blockId];
+    final textLink = host?.blockLayerLink;
+    final textGeometry = host?.blockGeometry;
+    if (textLink != null && textGeometry != null) {
+      final text = textGeometry();
+      if (text == null) return null;
+      return HomericMountedBlockGeometry._(
+        blockId: blockId,
+        document: document,
+        layerLink: textLink,
+        contentLength: contentLength,
+        text: text,
+      );
+    }
+    final size = row?.contentSize;
+    if (row == null || size == null) return null;
+    return HomericMountedBlockGeometry._(
+      blockId: blockId,
+      document: document,
+      layerLink: row.layerLink,
+      contentLength: contentLength,
+      blockRect: Offset.zero & size,
+    );
+  }
 
   /// Reports one rejected command through the document-owned callback.
   void reportCommandRejection(HomericDocumentCommandRejection rejection) =>
@@ -678,6 +938,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (!identical(oldWidget.controller, widget.controller)) {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
+      mountedGeometryChanged();
       _focusRequestGeneration++;
       _paragraphLayoutCache.clear();
       _syncOrder(force: true);
@@ -889,7 +1150,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       int blockOffset,
       HomericCaretAffinity affinity,
     ) selectionEndpointGeometry,
+    LayerLink? blockLayerLink,
+    HomericEditableBlockGeometry? Function()? blockGeometry,
   }) {
+    final ownerChanged = !identical(_selectionHosts[blockId]?.owner, owner);
     _selectionHosts[blockId] = _MountedSelectionHost(
       owner: owner,
       globalRect: globalRect,
@@ -899,7 +1163,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       activeCaretGeometry: activeCaretGeometry,
       magnifierInfo: magnifierInfo,
       selectionEndpointGeometry: selectionEndpointGeometry,
+      blockLayerLink: blockLayerLink,
+      blockGeometry: blockGeometry,
     );
+    if (ownerChanged) mountedGeometryChanged();
     if (_touchSelectionRequested) _scheduleTouchSelectionSync();
   }
 
@@ -907,6 +1174,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   void unregisterSelectionHost(String blockId, Object owner) {
     if (identical(_selectionHosts[blockId]?.owner, owner)) {
       _selectionHosts.remove(blockId);
+      mountedGeometryChanged();
       final stationaryHostRecycled = blockId == _touchStationaryBlockId &&
           identical(owner, _touchStationaryHostOwner);
       if (stationaryHostRecycled) {
@@ -2399,6 +2667,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _mountedRows.clear();
     _mountedFocusNodes.clear();
     _selectionHosts.clear();
+    _rowAnchors.clear();
+    _documentGeometryChanges.dispose();
     _paragraphLayoutCache.dispose();
     _rowKeys.clear();
     _blockIdsByRowKey.clear();
@@ -2525,16 +2795,26 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                   grabberCenterY: widget.blockGrabberCenterY,
                   onMove: (delta) => moveBlockBy(block.id, delta),
                   onHeight: _recordHeight,
-                  onMount: (context, focusNode) {
-                    _mountedRows[block.id] = context;
-                    _mountedFocusNodes[block.id] = focusNode;
+                  onLayoutChanged: mountedGeometryChanged,
+                  onMount: (row) {
+                    _mountedRows[block.id] = row.context;
+                    _mountedFocusNodes[block.id] = row._focusNode;
+                    if (!identical(_rowAnchors[block.id], row)) {
+                      _rowAnchors[block.id] = row;
+                      mountedGeometryChanged();
+                    }
                   },
-                  onUnmount: (context, focusNode) {
-                    if (identical(_mountedRows[block.id], context)) {
+                  onUnmount: (row) {
+                    if (identical(_mountedRows[block.id], row.context)) {
                       _mountedRows.remove(block.id);
                     }
-                    if (identical(_mountedFocusNodes[block.id], focusNode)) {
+                    if (identical(
+                        _mountedFocusNodes[block.id], row._focusNode)) {
                       _mountedFocusNodes.remove(block.id);
+                    }
+                    if (identical(_rowAnchors[block.id], row)) {
+                      _rowAnchors.remove(block.id);
+                      mountedGeometryChanged();
                     }
                     _releaseRowKeyWhenUnused(block.id);
                   },
@@ -2622,6 +2902,10 @@ final class _BlockMoveWitness {
   final String? nextBlockId;
 }
 
+final class _DocumentGeometryNotifier extends ChangeNotifier {
+  void notify() => notifyListeners();
+}
+
 final class _MountedSelectionHost {
   const _MountedSelectionHost({
     required this.owner,
@@ -2632,6 +2916,8 @@ final class _MountedSelectionHost {
     required this.activeCaretGeometry,
     required this.magnifierInfo,
     required this.selectionEndpointGeometry,
+    required this.blockLayerLink,
+    required this.blockGeometry,
   });
 
   final Object owner;
@@ -2652,6 +2938,8 @@ final class _MountedSelectionHost {
     int blockOffset,
     HomericCaretAffinity affinity,
   ) selectionEndpointGeometry;
+  final LayerLink? blockLayerLink;
+  final HomericEditableBlockGeometry? Function()? blockGeometry;
 }
 
 final class _ViewportAnchor {
@@ -2677,6 +2965,7 @@ class _DocumentBlockRow extends StatefulWidget {
     required this.grabberCenterY,
     required this.onMove,
     required this.onHeight,
+    required this.onLayoutChanged,
     required this.onMount,
     required this.onUnmount,
   });
@@ -2694,8 +2983,9 @@ class _DocumentBlockRow extends StatefulWidget {
   final double Function(BuildContext context, Block block)? grabberCenterY;
   final ValueChanged<int> onMove;
   final void Function(BlockHeightWitness witness, double height) onHeight;
-  final void Function(BuildContext context, FocusNode focusNode) onMount;
-  final void Function(BuildContext context, FocusNode focusNode) onUnmount;
+  final VoidCallback onLayoutChanged;
+  final void Function(_DocumentBlockRowState row) onMount;
+  final void Function(_DocumentBlockRowState row) onUnmount;
 
   @override
   State<_DocumentBlockRow> createState() => _DocumentBlockRowState();
@@ -2705,6 +2995,36 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
     with AutomaticKeepAliveClientMixin<_DocumentBlockRow> {
   late final FocusNode _focusNode = FocusNode();
   ValueNotifier<bool>? _grabberHovered;
+
+  /// Composited target at the top-left of the block builder's widget.
+  final LayerLink layerLink = LayerLink();
+  final GlobalKey _contentKey = GlobalKey();
+
+  /// Laid-out size of the block builder's widget, when finite.
+  Size? get contentSize {
+    final render = _contentKey.currentContext?.findRenderObject();
+    if (render is! RenderBox ||
+        !render.attached ||
+        !render.hasSize ||
+        !render.size.isFinite) {
+      return null;
+    }
+    return render.size;
+  }
+
+  /// Whether the enclosing sliver lays this row out, rather than keeping it
+  /// alive off-screen without layout or paint.
+  bool get isLaidOut {
+    RenderObject? node = context.findRenderObject();
+    while (node != null) {
+      final parentData = node.parentData;
+      if (parentData is SliverMultiBoxAdaptorParentData) {
+        return !parentData.keptAlive;
+      }
+      node = node.parent;
+    }
+    return true;
+  }
 
   @override
   bool get wantKeepAlive => widget.keepAlive();
@@ -2718,7 +3038,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    widget.onMount(context, _focusNode);
+    widget.onMount(this);
   }
 
   @override
@@ -2738,7 +3058,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
 
   @override
   void dispose() {
-    widget.onUnmount(context, _focusNode);
+    widget.onUnmount(this);
     widget.controller.removeListener(_controllerChanged);
     _grabberHovered?.dispose();
     _focusNode.dispose();
@@ -2828,10 +3148,14 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           ),
         ),
         Expanded(
-          child: HomericParagraphLayoutCacheScope(
-            cache: widget.paragraphLayoutCache,
-            cacheKey: widget.block.id,
-            child: widget.builder(context, widget.block, _focusNode),
+          child: CompositedTransformTarget(
+            key: _contentKey,
+            link: layerLink,
+            child: HomericParagraphLayoutCacheScope(
+              cache: widget.paragraphLayoutCache,
+              cacheKey: widget.block.id,
+              child: widget.builder(context, widget.block, _focusNode),
+            ),
           ),
         ),
       ],
@@ -2839,6 +3163,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
     return _MeasureNaturalHeight(
       witness: widget.witness,
       onHeight: widget.onHeight,
+      onLayoutChanged: widget.onLayoutChanged,
       child: hoverChangesOpacity
           ? MouseRegion(
               onEnter: (_) {
@@ -2860,15 +3185,17 @@ class _MeasureNaturalHeight extends SingleChildRenderObjectWidget {
   const _MeasureNaturalHeight({
     required this.witness,
     required this.onHeight,
+    required this.onLayoutChanged,
     required super.child,
   });
 
   final BlockHeightWitness witness;
   final void Function(BlockHeightWitness witness, double height) onHeight;
+  final VoidCallback onLayoutChanged;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
-      _RenderMeasureNaturalHeight(witness, onHeight);
+      _RenderMeasureNaturalHeight(witness, onHeight, onLayoutChanged);
 
   @override
   void updateRenderObject(
@@ -2877,19 +3204,40 @@ class _MeasureNaturalHeight extends SingleChildRenderObjectWidget {
   ) {
     renderObject
       ..witness = witness
-      ..onHeight = onHeight;
+      ..onHeight = onHeight
+      ..onLayoutChanged = onLayoutChanged;
   }
 }
 
+/// Measures one row and reports its geometry changes.
+///
+/// [onLayoutChanged] runs only from layout, attach and detach. Attach and
+/// detach cover mount, unmount and keep-alive transitions; paint-only updates
+/// and scrolling reach none of them, so they never signal.
 class _RenderMeasureNaturalHeight extends RenderProxyBox {
-  _RenderMeasureNaturalHeight(this.witness, this.onHeight);
+  _RenderMeasureNaturalHeight(
+      this.witness, this.onHeight, this.onLayoutChanged);
 
   BlockHeightWitness witness;
   void Function(BlockHeightWitness witness, double height) onHeight;
+  VoidCallback onLayoutChanged;
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    onLayoutChanged();
+  }
+
+  @override
+  void detach() {
+    super.detach();
+    onLayoutChanged();
+  }
 
   @override
   void performLayout() {
     super.performLayout();
+    onLayoutChanged();
     final currentWitness = witness;
     final height = size.height;
     WidgetsBinding.instance.addPostFrameCallback((_) {

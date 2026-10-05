@@ -45,6 +45,16 @@ void main() {
       find.byKey(const ValueKey<String>('homeric-margin-expanded-crowd-1')),
       findsOneWidget,
     );
+    // Tapping the expanded note activates it again, which closes it.
+    await tester.tap(
+      find.byKey(const ValueKey<String>('homeric-margin-expanded-crowd-1')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('homeric-margin-expanded-crowd-1')),
+      findsNothing,
+    );
+    expect(note('crowd-1'), findsOneWidget);
 
     await tester.tap(find.text('Annotate selection'));
     await tester.pump();

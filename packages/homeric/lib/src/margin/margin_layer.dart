@@ -78,15 +78,31 @@ typedef HomericMarginNoteActivated = void Function(
 );
 
 /// A not-yet-saved note being written beside a pending range.
+///
+/// The layer keeps one composer's state across rebuilds while the host
+/// supplies the *same* composer again, and builds a fresh one when the host
+/// supplies a *different* one; see [id].
 @immutable
 final class HomericMarginComposer {
   /// Creates a composer anchored to [range] inside block [blockId].
   const HomericMarginComposer({
+    this.id,
     required this.blockId,
     required this.range,
     required this.builder,
     this.semanticsLabel,
   });
+
+  /// Host identity of this composer, for example the id of the note being
+  /// edited or of the draft being written.
+  ///
+  /// Two composers are the same composer when their ids are equal; when
+  /// both ids are null, when their [blockId] and [range] are equal. Supplying
+  /// a different composer in place of the current one disposes the current
+  /// one's widgets and builds the new one in a fresh focus scope, which takes
+  /// focus. Removing the composer returns focus to where it was before the
+  /// first composer of the run opened.
+  final Object? id;
 
   /// Canonical id of the block holding [range].
   final String blockId;
@@ -95,7 +111,9 @@ final class HomericMarginComposer {
   final BlockTextRange range;
 
   /// Builds the host's editor, for example a text field with
-  /// `autofocus: true`. It is built once, inside its own focus scope.
+  /// `autofocus: true`. Each composer, as identified by [id], is built inside
+  /// its own focus scope, and its state lives until the host supplies a
+  /// different composer or none.
   final WidgetBuilder builder;
 
   /// Accessible label of the composer region.
@@ -195,11 +213,16 @@ class HomericMarginLayer extends StatefulWidget {
   final String? expandedNoteId;
 
   /// Optional composer for a not-yet-saved note. It is shown on top, takes
-  /// focus when supplied, and returns focus to where it was when removed.
+  /// focus when supplied or when replaced by a different composer (see
+  /// [HomericMarginComposer.id]), and returns focus, when removed, to where
+  /// it was before the first composer opened.
   final HomericMarginComposer? composer;
 
   /// Called when a note is activated by tap, Enter, Space or the semantics
-  /// tap action, with the form the note rests in.
+  /// tap action, with the form the note rests in. An expanded note is
+  /// activated the same ways: a tap on it that no descendant claims, such as
+  /// a button inside [HomericMarginNote.fullBuilder], activates it, and a
+  /// drag scrolls it instead.
   final HomericMarginNoteActivated? onNoteActivated;
 
   /// Called on Escape or on a tap outside while a note is expanded or the
@@ -264,8 +287,11 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     canRequestFocus: false,
     skipTraversal: true,
   );
-  final FocusScopeNode _composerScope =
-      FocusScopeNode(debugLabel: 'HomericMarginLayer composer');
+  FocusScopeNode _composerScope = _newComposerScope();
+
+  /// Bumped when the host replaces the composer with a different one, so
+  /// the replacement is built fresh.
+  int _composerGeneration = 0;
   FocusNode? _focusBeforeExpansion;
   FocusNode? _focusBeforeComposer;
   _Presentation? _last;
@@ -319,8 +345,14 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     if (oldWidget.expandedNoteId != widget.expandedNoteId) {
       _expansionChanged(oldWidget.expandedNoteId);
     }
-    if ((oldWidget.composer == null) != (widget.composer == null)) {
-      _composerChanged(oldWidget.composer);
+    final oldComposer = oldWidget.composer;
+    final newComposer = widget.composer;
+    if ((oldComposer == null) != (newComposer == null)) {
+      _composerChanged(oldComposer);
+    } else if (oldComposer != null &&
+        newComposer != null &&
+        !_sameComposer(oldComposer, newComposer)) {
+      _composerSwapped();
     }
     final ids = <String>{for (final note in widget.notes) note.id};
     final removed = <FocusNode>[];
@@ -398,6 +430,31 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       if (!mounted) return;
       if (_focusIsNowhere() || _focusWithin(_layerNode)) {
         _restoreFocus(before);
+      }
+    });
+  }
+
+  static FocusScopeNode _newComposerScope() =>
+      FocusScopeNode(debugLabel: 'HomericMarginLayer composer');
+
+  static bool _sameComposer(HomericMarginComposer a, HomericMarginComposer b) {
+    if (a.id != null || b.id != null) return a.id == b.id;
+    return a.blockId == b.blockId && a.range == b.range;
+  }
+
+  /// The host replaced the composer with a different one: build it fresh in
+  /// a new scope and give it focus. Where focus returns once the composer
+  /// is removed stays what it was before the first composer opened.
+  void _composerSwapped() {
+    final retired = _composerScope;
+    _composerScope = _newComposerScope();
+    _composerGeneration++;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // The retired scope's widgets unmounted at the end of this frame.
+      retired.dispose();
+      if (!mounted || widget.composer == null) return;
+      if (_composerScope.context != null && !_focusWithin(_composerScope)) {
+        _composerScope.requestFocus();
       }
     });
   }
@@ -1103,18 +1160,26 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     );
   }
 
+  /// Like a resting note, a tap on the expanded note activates it: the tap
+  /// recognizer is the outermost one, so descendants that claim the tap,
+  /// such as a host button, win it, and the scroll view's drag wins a drag.
   Widget _expandedCard(HomericMarginNote note) => TapRegion(
         groupId: this,
         onTapOutside: _outsideTap,
-        child: DecoratedBox(
-          key: ValueKey<String>('homeric-margin-expanded-${note.id}'),
-          decoration: widget.expandedDecoration,
-          child: Padding(
-            padding: widget.expandedPadding,
-            child: SingleChildScrollView(
-              child: SizedBox(
-                width: widget.noteWidth,
-                child: Builder(builder: note.fullBuilder),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
+          onTap: () => _activate(note.id),
+          child: DecoratedBox(
+            key: ValueKey<String>('homeric-margin-expanded-${note.id}'),
+            decoration: widget.expandedDecoration,
+            child: Padding(
+              padding: widget.expandedPadding,
+              child: SingleChildScrollView(
+                child: SizedBox(
+                  width: widget.noteWidth,
+                  child: Builder(builder: note.fullBuilder),
+                ),
               ),
             ),
           ),
@@ -1125,6 +1190,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         groupId: this,
         onTapOutside: _outsideTap,
         child: FocusScope(
+          key: ValueKey<int>(_composerGeneration),
           node: _composerScope,
           onKeyEvent: _composerKey,
           child: Semantics(

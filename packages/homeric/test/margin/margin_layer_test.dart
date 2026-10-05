@@ -768,6 +768,99 @@ void main() {
       );
     });
 
+    testWidgets(
+        'a swapped-in composer takes focus; removal returns it to the editor',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta', 'gamma']),
+          selection: const HomericSelection(anchor: 1, head: 4));
+      final fieldA = FocusNode(debugLabel: 'composer field a');
+      final fieldB = FocusNode(debugLabel: 'composer field b');
+      addTearDown(fieldA.dispose);
+      addTearDown(fieldB.dispose);
+      final disposed = <String>[];
+      HomericMarginComposer composer(
+        String name,
+        BlockTextRange range,
+        FocusNode field,
+      ) =>
+          HomericMarginComposer(
+            blockId: 'block-0',
+            range: range,
+            builder: (context) => _DisposeProbe(
+              onDispose: () => disposed.add(name),
+              child: Focus(
+                focusNode: field,
+                autofocus: true,
+                child: SizedBox(height: 40, child: Text('composing $name')),
+              ),
+            ),
+          );
+      await harness.pump(tester);
+      final editorFocus = harness.blockFocus['block-0']!..requestFocus();
+      await tester.pump();
+      final selection = harness.controller.selection;
+
+      harness.host.composer = composer('a', const BlockTextRange(0, 5), fieldA);
+      await tester.pump();
+      await tester.pump();
+      expect(fieldA.hasPrimaryFocus, isTrue);
+
+      // The same composer supplied again keeps its state.
+      harness.host.composer = composer('a', const BlockTextRange(0, 5), fieldA);
+      await tester.pump();
+      await tester.pump();
+      expect(disposed, isEmpty);
+      expect(fieldA.hasPrimaryFocus, isTrue);
+
+      harness.host.composer =
+          composer('b', const BlockTextRange(6, 10), fieldB);
+      await tester.pump();
+      await tester.pump();
+      expect(disposed, ['a'], reason: 'the previous composer is built fresh');
+      expect(find.text('composing a'), findsNothing);
+      expect(fieldB.hasPrimaryFocus, isTrue);
+
+      harness.host.composer = null;
+      await tester.pump();
+      await tester.pump();
+      expect(disposed, ['a', 'b']);
+      expect(editorFocus.hasPrimaryFocus, isTrue,
+          reason: 'focus returns to where it was before the first composer');
+      expect(harness.controller.selection, selection);
+    });
+
+    testWidgets('a composer with a new id is swapped even on the same range',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta']));
+      final field = FocusNode(debugLabel: 'composer field');
+      addTearDown(field.dispose);
+      final disposed = <String>[];
+      HomericMarginComposer composer(String id) => HomericMarginComposer(
+            id: id,
+            blockId: 'block-0',
+            range: const BlockTextRange(0, 5),
+            builder: (context) => _DisposeProbe(
+              onDispose: () => disposed.add(id),
+              child: Focus(
+                focusNode: field,
+                autofocus: true,
+                child: Text('composing $id'),
+              ),
+            ),
+          );
+      await harness.pump(tester);
+      harness.host.composer = composer('new');
+      await tester.pump();
+      await tester.pump();
+      expect(field.hasPrimaryFocus, isTrue);
+
+      harness.host.composer = composer('edit');
+      await tester.pump();
+      await tester.pump();
+      expect(disposed, ['new']);
+      expect(field.hasPrimaryFocus, isTrue);
+    });
+
     testWidgets('tap targets reach 44 px and split between neighbours',
         (tester) async {
       final harness = _Harness(_document([
@@ -870,6 +963,127 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       expect(harness.host.activated, ['b']);
       expect(harness.host.activatedForms, [MarginNoteForm.compact]);
+    });
+
+    testWidgets('a click on an expanded note activates it in its resting form',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta']));
+      harness.host.notes = [
+        _note('a', 'block-0', const BlockTextRange(0, 5), fullHeight: 60),
+        _note('b', 'block-0', const BlockTextRange(6, 10), fullHeight: 60),
+      ];
+      await harness.pump(tester);
+      harness.host.expanded = 'b';
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.text('full b'), kind: PointerDeviceKind.mouse);
+      await tester.pump();
+      expect(harness.host.activated, ['b']);
+      expect(harness.host.activatedForms, [MarginNoteForm.compact]);
+      expect(harness.host.dismissed, 0, reason: 'a tap inside is not outside');
+    });
+
+    testWidgets('a touch tap on an expanded note activates it', (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta']));
+      harness.host.notes = [
+        _note('a', 'block-0', const BlockTextRange(0, 5), fullHeight: 60),
+        _note('b', 'block-0', const BlockTextRange(6, 10), fullHeight: 60),
+      ];
+      await harness.pump(tester);
+      harness.host.expanded = 'b';
+      await tester.pump();
+      await tester.pump();
+
+      // No hover precedes a touch.
+      final gesture = await tester.startGesture(
+        tester.getCenter(_expandedFinder('b')),
+        kind: PointerDeviceKind.touch,
+      );
+      await gesture.up();
+      await tester.pump();
+      expect(harness.host.activated, ['b']);
+      expect(harness.host.activatedForms, [MarginNoteForm.compact]);
+      expect(harness.host.dismissed, 0);
+    });
+
+    testWidgets('dragging inside a tall expanded note scrolls, not activates',
+        (tester) async {
+      final harness = _Harness(_document(['alpha', 'beta']));
+      harness.host.notes = [
+        HomericMarginNote(
+          id: 'long',
+          blockId: 'block-0',
+          range: const BlockTextRange(0, 5),
+          fullBuilder: (context) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              for (var line = 0; line < 30; line++)
+                SizedBox(height: _line, child: Text('line $line')),
+            ],
+          ),
+          compactBuilder: (context) => const Text('long'),
+        ),
+      ];
+      await harness.pump(tester);
+      harness.host.expanded = 'long';
+      await tester.pump();
+      await tester.pump();
+      final card = tester.getRect(_expandedFinder('long'));
+      final before = tester.getRect(find.text('line 29')).top;
+
+      final gesture =
+          await tester.startGesture(card.center, kind: PointerDeviceKind.touch);
+      // A real drag arrives as many moves; the first only crosses the slop.
+      for (var step = 0; step < 10; step++) {
+        await gesture.moveBy(const Offset(0, -20));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(find.text('line 29')).top, lessThan(before));
+      expect(harness.host.activated, isEmpty);
+      expect(harness.host.dismissed, 0);
+    });
+
+    testWidgets('a button inside an expanded note receives its own tap',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma']));
+      var pressed = 0;
+      harness.host.notes = [
+        HomericMarginNote(
+          id: 'n',
+          blockId: 'block-0',
+          range: const BlockTextRange(0, 5),
+          fullBuilder: (context) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const SizedBox(height: 40, child: Text('body')),
+              GestureDetector(
+                key: const ValueKey<String>('inner-button'),
+                onTap: () => pressed++,
+                child: const SizedBox(height: 20, child: Text('Edit')),
+              ),
+            ],
+          ),
+          compactBuilder: (context) => const Text('n'),
+        ),
+      ];
+      await harness.pump(tester);
+      harness.host.expanded = 'n';
+      await tester.pump();
+      await tester.pump();
+
+      final button = find.descendant(
+        of: _expandedFinder('n'),
+        matching: find.byKey(const ValueKey<String>('inner-button')),
+      );
+      await tester.tap(button);
+      await tester.pump();
+      expect(pressed, 1);
+      expect(harness.host.activated, isEmpty);
+      expect(harness.host.dismissed, 0);
     });
 
     testWidgets('focusNote and formOf answer only for placed notes',
@@ -1062,6 +1276,28 @@ Finder _sourceFinder(String blockId) =>
 
 ValueKey<String> _shellLabelKey(String id) =>
     ValueKey<String>('homeric-margin-target-$id');
+
+/// Reports when the composer subtree it sits in is disposed.
+class _DisposeProbe extends StatefulWidget {
+  const _DisposeProbe({required this.onDispose, required this.child});
+
+  final VoidCallback onDispose;
+  final Widget child;
+
+  @override
+  State<_DisposeProbe> createState() => _DisposeProbeState();
+}
+
+class _DisposeProbeState extends State<_DisposeProbe> {
+  @override
+  void dispose() {
+    widget.onDispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
 
 // ---------------------------------------------------------------------------
 // Harness.

@@ -996,3 +996,30 @@ ancestors, or on anything reached through them, from `build`. Read shared
 space post-frame and correct in the next frame. Do not paper over it with a
 `hasSize` guard on the read target. This supersedes the "read at build"
 detail in the 2026-10-05 margin entry above.
+
+## engineer — 2026-10-05 — Overlay activation and replaced host subtrees need explicit identity
+
+**What:** the first margin consumer (Nexus annotations) hit two gaps. An
+expanded note reacted to Enter, Space and the semantics tap but not to a
+pointer, so touch users could never activate it a second time to open the
+editor. And replacing one `HomericMarginComposer` with another in a single
+rebuild reused the old composer's elements and focus scope: the new field
+never took focus and the old field's state leaked into the new composer.
+
+**Fix:** the expanded card is wrapped, inside its `TapRegion`, in the same
+outermost opaque `GestureDetector(onTap:)` that resting notes use. Being the
+shallowest tap recognizer, it loses the arena to any descendant that claims
+the tap (a host button), and to the scroll view's drag once the pointer
+crosses the slop. A composer now has an identity: an optional host `id`,
+or `blockId` + `range` when both ids are null. A different composer gets a
+new `FocusScopeNode` and a generation key on its `FocusScope`, so its
+subtree is built fresh; the retired scope is disposed post-frame, the new
+one takes focus, and the pre-composer focus target is kept for removal.
+
+**Rule going forward:** every activation path the keyboard and semantics
+offer must also exist for pointers, tested with a touch gesture that has no
+preceding hover. When a host can swap one "open thing" for another of the
+same type, define identity in the API and key the subtree on it; a
+`Builder` that merely rebuilds is not a fresh instance. In widget tests,
+once a tap recognizer shares the arena with a drag, a single large `moveBy`
+is consumed crossing the slop and scrolls nothing; drag in steps.

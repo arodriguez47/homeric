@@ -1023,3 +1023,66 @@ same type, define identity in the API and key the subtree on it; a
 `Builder` that merely rebuilds is not a fresh instance. In widget tests,
 once a tap recognizer shares the arena with a drag, a single large `moveBy`
 is consumed crossing the slop and scrolls nothing; drag in steps.
+
+## engineer — 2026-10-05 — Mirror: a margin beside a column-wide scrollable needs its own scroll (Nexus margin notes)
+
+Mirrored from Nexus `LEARNINGS.md` (branch `t3code/margin-annotations-design`,
+margin-annotations U7). The re-parenting half of that entry is covered here by
+"Never read ancestor geometry while building" above.
+
+- **The space beside a centred editor does not scroll it.** The editor's
+  `Scrollable` is column-wide and `Align` hit-tests only its child, so a wheel
+  over either gutter moved nothing, before any margin existed. A host that
+  puts `HomericMarginLayer` beside the column must forward gutter scrolls
+  itself: a translucent full-width `Listener` that registers wheels with the
+  pointer-signal resolver (which honours the FIRST registration, so the prose
+  scrollable or an expanded note's own scroll view still wins where it is
+  hit), and drives `ScrollPosition.drag` with a fling for trackpads, which
+  send pan-zoom events rather than `PointerScrollEvent`s.
+- **Geometry assertions must outlast a host's entry transition.** Nexus scales
+  the column 0.97→1 over 1200 ms after an entry switch; a rect read 200 ms in
+  is ~1.7% small. Read geometry once any wrapping transform has settled.
+
+## engineer — 2026-10-05 — Mirror: a focused node that unmounts sends no blur (Nexus margin note editor)
+
+Mirrored from Nexus `LEARNINGS.md` (branch `t3code/margin-annotations-design`,
+margin-annotations U8). Relevant to every Homeric overlay that hosts a field
+(the margin composer, selection menus).
+
+- **Detaching a focused node notifies nobody.** `FocusAttachment.detach`
+  unfocuses the node and marks it detached: its own listeners and its
+  ancestors' `Focus.onFocusChange` never hear that focus left. A host that
+  saves on blur loses text when its composer is removed; flush on an explicit
+  close. An ancestor `onFocusChange` used as a "focus is inside X" flag goes
+  stale when a focused descendant unmounts; read `FocusManager.instance`
+  instead.
+- **`autofocus` is a no-op while the scope already has a focused child.** A
+  field mounted with `autofocus: true` beside a focused editor, or while
+  Homeric's selection menu is handing focus back to the paragraph, does not
+  take focus. Request focus a frame after mount.
+- **`addPostFrameCallback` does not ask for a frame**, restated from the
+  2026-10-03 caret entry: a restore scheduled by an event that changes no
+  widget state runs only at some unrelated later frame unless the caller also
+  calls `ensureVisualUpdate()`.
+
+## engineer — 2026-10-05 — Mirror: consuming margin geometry from a host (Nexus margin notes U9)
+
+Mirrored from Nexus `LEARNINGS.md` (branch `t3code/margin-annotations-design`,
+margin-annotations U9). The library-side points of that entry already live in
+the three 2026-10-05 margin entries above; these are the host-side ones.
+
+- **A note that is not placed cannot take focus.** `focusNote` returns false
+  for a note whose block is not mounted. A "go to the note" command must
+  first scroll the source in without moving the selection (Nexus's
+  `revealBlockRange`: scroll-only, verified against painted geometry, bounded
+  attempts), then retry `focusNote` for a bounded number of frames.
+  `revealCanonicalRange` would select the passage and break "Escape returns
+  the caret where it was".
+- **Do not fix the one-frame reflow lag with a per-frame solve.** Hosts see a
+  note land a frame after an edit reflows its block; that is the
+  signal-driven re-solve working, and solving every frame brings back the
+  jumps `MarginLayoutMemory` prevents.
+- **Feed the layer and any "detached notes" list from one partition.** Nexus
+  computes both from a single `marginNotePartition`, so a note whose passage
+  was deleted leaves the margin and appears below in the same frame, never in
+  both or neither.

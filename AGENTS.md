@@ -10,7 +10,7 @@ Homeric: a Flutter text-editing package built from fundamentals — own document
 
 - **Licensing / provenance:** never copy source from super_editor, AppFlowy, or ProseMirror — including "for reference." Read to learn, then write. When PM's algorithmic math is ported (StepMap ranges, recover), the file header cites the upstream file and commit. Porting *test expectations* is fine and intended.
 - **Phase 1 purity:** zero `package:flutter` or `dart:ui` imports under `lib/src/model`, `lib/src/transform`, `lib/src/decoration`, `lib/src/view` — enforced by `no_flutter_imports_test`.
-- **No presentation semantics in the core:** decorations/annotations expose anchored ranges and (Phase 2) geometry; margin note vs popover is the consumer's decision.
+- **No presentation semantics in the core:** decorations/annotations expose anchored ranges and (Phase 2) geometry; margin note vs popover is the consumer's decision. The one sanctioned home for presentation built on that published geometry is the optional module `packages/homeric/lib/src/margin/`, exposed only through `package:homeric/margin.dart`. The core directories (`model`, `transform`, `decoration`, `view`, `render`, `editing`) gain no margin concepts and never import `margin` — enforced by `no_flutter_imports_test`.
 - **Structural sharing, no deep copies:** history retention and 100k-word memory behavior depend on it; reference-identity tests guard it.
 
 ## Compounding rule (mirrored learnings)

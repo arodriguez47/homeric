@@ -43,7 +43,7 @@ class PlaygroundApp extends StatelessWidget {
                   children: [
                     Expanded(
                       flex: 3,
-                      child: EditorPage(viewModel: viewModel),
+                      child: EditorPage(viewModel: viewModel, marginDemo: true),
                     ),
                     const VerticalDivider(width: 1),
                     SizedBox(

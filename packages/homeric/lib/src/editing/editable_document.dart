@@ -500,11 +500,13 @@ final class HomericMountedBlockGeometry {
     required HomericDocumentGeometry document,
     required LayerLink layerLink,
     required int contentLength,
+    required Offset? Function() globalOrigin,
     Rect? blockRect,
     HomericEditableBlockGeometry? text,
   })  : _document = document,
         _layerLink = layerLink,
         _contentLength = contentLength,
+        _globalOrigin = globalOrigin,
         _blockRect = blockRect,
         _text = text;
 
@@ -514,6 +516,7 @@ final class HomericMountedBlockGeometry {
   final HomericDocumentGeometry _document;
   final LayerLink _layerLink;
   final int _contentLength;
+  final Offset? Function() _globalOrigin;
   final Rect? _blockRect;
   final HomericEditableBlockGeometry? _text;
 
@@ -532,6 +535,18 @@ final class HomericMountedBlockGeometry {
   /// [Stack] child. Use `showWhenUnlinked: false`, because the leader is not
   /// painted while its row is off-screen.
   LayerLink? get layerLink => isCurrent ? _layerLink : null;
+
+  /// Global position of the [layerLink] origin in the last completed
+  /// layout, or `null` once stale or while the block is detached.
+  ///
+  /// Unlike every other query this moves with scrolling, which does not make
+  /// the capability stale. Compare it only with positions read in the same
+  /// frame, for example to put several blocks in one shared space.
+  Offset? get globalOrigin {
+    if (!isCurrent) return null;
+    final origin = _globalOrigin();
+    return origin != null && origin.isFinite ? origin : null;
+  }
 
   /// Block bounds in link space, or `null` once stale.
   Rect? get blockRect {
@@ -850,6 +865,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         document: document,
         layerLink: textLink,
         contentLength: contentLength,
+        // The paragraph plane's origin is the link origin.
+        globalOrigin: () => host!.globalRect()?.topLeft,
         text: text,
       );
     }
@@ -860,6 +877,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       document: document,
       layerLink: row.layerLink,
       contentLength: contentLength,
+      globalOrigin: () => row.contentGlobalOrigin,
       blockRect: Offset.zero & size,
     );
   }
@@ -3010,6 +3028,15 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
       return null;
     }
     return render.size;
+  }
+
+  /// Global position of the block builder's widget, when laid out.
+  Offset? get contentGlobalOrigin {
+    final render = _contentKey.currentContext?.findRenderObject();
+    if (render is! RenderBox || !render.attached || !render.hasSize) {
+      return null;
+    }
+    return render.localToGlobal(Offset.zero);
   }
 
   /// Whether the enclosing sliver lays this row out, rather than keeping it

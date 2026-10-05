@@ -172,12 +172,20 @@ final class MarginNotePlacement {
 /// left without notes take no part in placement. Throws [ArgumentError]
 /// when [lineHeight] is not finite and positive, or when [gap],
 /// [maxShiftLines] or [maxFullLines] is not finite and non-negative.
+///
+/// [floor] and [trailingAnchor] let a caller solve a run of blocks between
+/// placements it keeps: [floor] is the lowest top the first note may take,
+/// as if a kept note ended `gap` above it, and [trailingAnchor] acts as the
+/// first anchor of an annotated block after the last one in [blocks]. Both
+/// default to "nothing there"; a NaN value is rejected.
 List<MarginNotePlacement> solveMarginLayout(
   List<MarginBlockInput> blocks, {
   required double lineHeight,
   double gap = kMarginNoteGap,
   double maxShiftLines = kMarginMaxShiftLines,
   double maxFullLines = kMarginMaxFullLines,
+  double floor = double.negativeInfinity,
+  double trailingAnchor = double.infinity,
 }) {
   if (!lineHeight.isFinite || lineHeight <= 0) {
     throw ArgumentError.value(lineHeight, 'lineHeight', 'must be > 0');
@@ -185,6 +193,13 @@ List<MarginNotePlacement> solveMarginLayout(
   _checkNonNegative(gap, 'gap');
   _checkNonNegative(maxShiftLines, 'maxShiftLines');
   _checkNonNegative(maxFullLines, 'maxFullLines');
+  if (floor.isNaN || floor == double.infinity) {
+    throw ArgumentError.value(floor, 'floor', 'must be a number below +inf');
+  }
+  if (trailingAnchor.isNaN || trailingAnchor == double.negativeInfinity) {
+    throw ArgumentError.value(
+        trailingAnchor, 'trailingAnchor', 'must be a number above -inf');
+  }
   final maxShift = maxShiftLines * lineHeight;
   final maxFullHeight = maxFullLines * lineHeight;
 
@@ -204,15 +219,15 @@ List<MarginNotePlacement> solveMarginLayout(
   final placements = <MarginNotePlacement>[];
   // Lowest top the next note may take: the previous placement's bottom
   // plus the gap.
-  var floor = double.negativeInfinity;
+  var lowest = floor;
   for (var g = 0; g < groups.length; g++) {
     final group = groups[g];
     final nextAnchor = g + 1 < groups.length
         ? groups[g + 1].notes.first.anchorTop
-        : double.infinity;
+        : trailingAnchor;
 
     var fits = true;
-    var cursor = floor;
+    var cursor = lowest;
     for (final note in group.notes) {
       final height = _height(note.fullHeight);
       final top = cursor > note.anchorTop ? cursor : note.anchorTop;
@@ -228,7 +243,7 @@ List<MarginNotePlacement> solveMarginLayout(
     final form = fits ? MarginNoteForm.full : MarginNoteForm.compact;
     for (final note in group.notes) {
       final height = _height(fits ? note.fullHeight : note.compactHeight);
-      final top = floor > note.anchorTop ? floor : note.anchorTop;
+      final top = lowest > note.anchorTop ? lowest : note.anchorTop;
       placements.add(MarginNotePlacement(
         id: note.id,
         blockId: group.block.blockId,
@@ -238,7 +253,7 @@ List<MarginNotePlacement> solveMarginLayout(
         height: height,
         anchorTop: note.anchorTop,
       ));
-      floor = top + height + gap;
+      lowest = top + height + gap;
     }
   }
   return placements;

@@ -344,6 +344,57 @@ void main() {
     expect(capability.isCurrent, isTrue);
   });
 
+  testWidgets('globalOrigin puts blocks in one space that moves with scroll',
+      (tester) async {
+    final harness = _Harness(Document(<Block>[
+      _block('block-0', 'before'),
+      Block(id: 'rule', type: 'rule', runs: const <InlineRun>[]),
+      for (var index = 2; index < 10; index++)
+        _block('block-$index', 'row $index'),
+    ]));
+    await harness.pump(
+      tester,
+      blockBuilder: (context, block, focusNode) => block.type == 'rule'
+          ? const SizedBox(
+              key: ValueKey<String>('rule-content'),
+              height: 20,
+            )
+          : HomericEditableParagraph(
+              controller: harness.controller,
+              inputSession: harness.session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => _style,
+            ),
+    );
+    final capability = harness.state.documentGeometry;
+    final text = capability.block('block-5')!;
+    final rule = capability.block('rule')!;
+    expect(text.globalOrigin, _paragraphRect(tester, 'block-5').topLeft);
+    expect(
+      rule.globalOrigin,
+      tester.getTopLeft(find.byKey(const ValueKey<String>('rule-content'))),
+    );
+    // A follower on the link lands on the published origin.
+    harness.follow(text.layerLink!);
+    await tester.pump();
+    expect(tester.getTopLeft(find.byKey(_followerKey)), text.globalOrigin);
+    final distance = text.globalOrigin!.dy - rule.globalOrigin!.dy;
+    harness.signals = 0;
+
+    harness.scrollController.jumpTo(30);
+    await tester.pump();
+
+    expect(harness.signals, 0);
+    expect(capability.isCurrent, isTrue);
+    expect(text.globalOrigin, _paragraphRect(tester, 'block-5').topLeft);
+    expect(text.globalOrigin!.dy - rule.globalOrigin!.dy, distance);
+
+    harness.width.value = 200;
+    await tester.pump();
+    expect(text.globalOrigin, isNull, reason: 'stale after relayout');
+  });
+
   testWidgets('a stale capability stays revoked after the document is disposed',
       (tester) async {
     final harness = _Harness(_document(['abc']));

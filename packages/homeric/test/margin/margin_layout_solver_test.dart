@@ -382,6 +382,58 @@ void main() {
         () => solveMarginLayout(const [], lineHeight: _line, gap: -1),
         throwsArgumentError,
       );
+      expect(
+        () => solveMarginLayout(const [], lineHeight: _line, floor: double.nan),
+        throwsArgumentError,
+      );
+      expect(
+        () => solveMarginLayout(const [],
+            lineHeight: _line, trailingAnchor: double.negativeInfinity),
+        throwsArgumentError,
+      );
+    });
+
+    test('a floor pushes the first note down as a kept note above would', () {
+      final blocks = [
+        MarginBlockInput(blockId: 'b1', top: 0, notes: [_note('n1', 10)]),
+      ];
+      final out = solveMarginLayout(blocks, lineHeight: _line, floor: 30);
+      expect(out.single.top, 30);
+      expect(out.single.displaced, isTrue);
+      expect(out.single.form, MarginNoteForm.full);
+      // Beyond two lines of shift the group compacts, as with any cascade.
+      final far = solveMarginLayout(blocks, lineHeight: _line, floor: 51);
+      expect(far.single.form, MarginNoteForm.compact);
+      expect(far.single.top, 51);
+      // A floor above the anchor changes nothing.
+      expect(solveMarginLayout(blocks, lineHeight: _line, floor: -100),
+          _solve(blocks));
+    });
+
+    test('a trailing anchor bounds the last group like a next block would', () {
+      final blocks = [
+        MarginBlockInput(blockId: 'b1', top: 0, notes: [
+          _note('n1', 0, fullHeight: 60),
+        ]),
+      ];
+      expect(
+        solveMarginLayout(blocks, lineHeight: _line, trailingAnchor: 60)
+            .single
+            .form,
+        MarginNoteForm.full,
+      );
+      expect(
+        solveMarginLayout(blocks, lineHeight: _line, trailingAnchor: 59)
+            .single
+            .form,
+        MarginNoteForm.compact,
+      );
+      // Equivalent to an annotated block whose first anchor is there.
+      final withNext = _solve([
+        ...blocks,
+        MarginBlockInput(blockId: 'b2', top: 59, notes: [_note('n2', 59)]),
+      ]);
+      expect(_byId(withNext, 'n1').form, MarginNoteForm.compact);
     });
 
     test(

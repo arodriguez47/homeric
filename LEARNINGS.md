@@ -908,3 +908,60 @@ Mirrored from Nexus `LEARNINGS.md` (arodriguez47/nexus#270).
 - **Collapsing a hidden block is not possible yet.** Hiding all of a fence
   line's text leaves an empty paragraph. A block-level collapse would be the
   Homeric-side follow-up if consumers need it.
+
+## engineer — 2026-10-05 — Document geometry is a revocable capability with a pushed signal
+
+**What:** Margin annotations need content beside any mounted block, outside
+the paragraph whose overlay cannot hit-test past its own bounds.
+`HomericEditableDocumentState.documentGeometry` publishes, for laid-out rows
+only, a `LayerLink` per block, block and range rects in that link's space,
+and `globalOrigin` for putting several blocks in one shared space.
+`documentGeometryChanges` fires post-frame, coalesced, when any row lays out,
+mounts or unmounts. Scrolling and paint-only changes never fire it.
+
+- **Followers must paint after the editor.** Flutter requires a link's
+  leader to paint before its followers ("LeaderLayer anchor must come before
+  FollowerLayer in paint order"), so a following widget is a later `Stack`
+  child, never an earlier one. Use `showWhenUnlinked: false`: rows in the
+  cache extent are laid out but not painted, so their leader is absent.
+- **Re-fetch on every signal.** Any row layout revokes the whole capability,
+  and so does a document revision before the rows lay out. A text block can
+  be in `mountedBlockIds` while `block(id)` is still null until its first
+  geometry notice. A newly mounted block can cause two notifications in one
+  post-frame pass.
+- **`globalOrigin` moves with scrolling and does not revoke the capability.**
+  Compare it only with values read in the same frame. Differences between
+  blocks are scroll-invariant, which is all a cross-block solver needs.
+
+## engineer — 2026-10-05 — Margin notes track blocks at composite time and re-solve on the signal
+
+**What:** `HomericMarginLayer` (`package:homeric/margin.dart`) wraps each
+block's notes in a `CompositedTransformFollower` on that block's link, so
+scrolling and an edit above move the notes in the same frame as the text.
+Offsets inside a block and collisions between blocks are re-solved after
+`documentGeometryChanges`, so a reflow inside an annotated block lands one
+frame late. Full-form heights are measured by an off-stage pass and handed
+to an `AbstractLayoutBuilder` in the same layout, so the solver picks each
+group's form before anything is shown. Full and compact forms are never
+built side by side.
+
+- **Mounting must not move what stays on screen.** A group's form depends
+  on the next annotated block, and its position on the cascade from the
+  previous one. The editor mounts only near the viewport, so a fresh solve
+  per frame let an on-screen note compact or jump when a neighbour mounted.
+  `MarginLayoutMemory` keeps placements of unchanged blocks across solves.
+  Blocks that mount below are solved under the kept notes and never reopen
+  them. Blocks that mount above are limited by the first kept note. Any other
+  change reopens the block before it. The remaining instability is a newly
+  mounted block above whose compact previews alone overrun the kept notes.
+  It falls back to a fresh solve and is visible only when that cascade is
+  taller than the cache extent.
+- **Pending is not unmounted.** In a frame where the host rebuilds the layer
+  after an edit but before the rows lay out, every text block's geometry is
+  null. Dropping the notes would blank the margin for a frame. The layer
+  keeps the last placements for that frame, because followers already carry
+  the block movement, and re-solves on the signal that follows.
+- **Clamp the overlay where its size is known.** The expanded note and the
+  composer clamp inside the viewport in the canvas's `performLayout`, using
+  the block's offset in the layer read at build. They then travel with their
+  block while scrolling until the next solve.

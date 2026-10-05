@@ -14,6 +14,7 @@ library;
 import 'package:flutter/material.dart' hide Decoration;
 import 'package:flutter/services.dart' show SuggestionSpan, TextRange;
 import 'package:homeric/homeric.dart';
+import 'package:homeric/margin.dart';
 
 import '../decoration_spec.dart';
 import '../view_models/document_view_model.dart';
@@ -27,6 +28,7 @@ class EditorPage extends StatefulWidget {
     this.cacheExtent = 250,
     this.scrollController,
     this.documentKey,
+    this.marginDemo = false,
   });
 
   /// The document view-model this page renders and edits.
@@ -45,6 +47,9 @@ class EditorPage extends StatefulWidget {
   /// without walking the reorderable sliver with a test [Finder].
   final GlobalKey<HomericEditableDocumentState>? documentKey;
 
+  /// Whether wide layouts show the margin-notes demo beside the editor.
+  final bool marginDemo;
+
   @override
   State<EditorPage> createState() => _EditorPageState();
 }
@@ -52,6 +57,11 @@ class EditorPage extends StatefulWidget {
 class _EditorPageState extends State<EditorPage> {
   bool _darkText = false;
   double _fontSize = 18;
+  final GlobalKey<HomericEditableDocumentState> _ownDocumentKey =
+      GlobalKey<HomericEditableDocumentState>();
+
+  GlobalKey<HomericEditableDocumentState> get _documentKey =>
+      widget.documentKey ?? _ownDocumentKey;
 
   TextStyle get _baseStyle => TextStyle(
         fontSize: _fontSize,
@@ -74,25 +84,30 @@ class _EditorPageState extends State<EditorPage> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: HomericEditableDocument.builder(
-              key: widget.documentKey,
-              controller: widget.viewModel.editorController,
-              inputSession: widget.viewModel.inputSession,
-              scrollController: widget.scrollController,
-              padding: const EdgeInsets.all(16),
-              cacheExtent: widget.cacheExtent,
-              estimatedBlockHeight: 54,
-              layoutRevision: (_darkText, _fontSize),
-              touchSelectionConfiguration:
-                  const HomericTouchSelectionConfiguration.adaptive(),
-              blockBuilder: (context, block, focusNode) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _BlockView(
-                  key: ValueKey(block.id),
-                  viewModel: widget.viewModel,
-                  block: block,
-                  focusNode: focusNode,
-                  baseStyle: _baseStyle,
+            child: _MarginDemo(
+              enabled: widget.marginDemo,
+              documentKey: _documentKey,
+              viewModel: widget.viewModel,
+              editor: HomericEditableDocument.builder(
+                key: _documentKey,
+                controller: widget.viewModel.editorController,
+                inputSession: widget.viewModel.inputSession,
+                scrollController: widget.scrollController,
+                padding: const EdgeInsets.all(16),
+                cacheExtent: widget.cacheExtent,
+                estimatedBlockHeight: 54,
+                layoutRevision: (_darkText, _fontSize),
+                touchSelectionConfiguration:
+                    const HomericTouchSelectionConfiguration.adaptive(),
+                blockBuilder: (context, block, focusNode) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _BlockView(
+                    key: ValueKey(block.id),
+                    viewModel: widget.viewModel,
+                    block: block,
+                    focusNode: focusNode,
+                    baseStyle: _baseStyle,
+                  ),
                 ),
               ),
             ),
@@ -100,6 +115,258 @@ class _EditorPageState extends State<EditorPage> {
         ],
       ),
     );
+  }
+}
+
+/// Margin-notes demo: a [HomericMarginLayer] beside the editor with sparse,
+/// colliding and crowded notes, one note per annotation underline from the
+/// decoration panel, expansion on tap, and a composer for the current
+/// selection. Notes live only in this widget; it is a consumer of
+/// `package:homeric/margin.dart`, not part of the editor.
+class _MarginDemo extends StatefulWidget {
+  const _MarginDemo({
+    required this.enabled,
+    required this.documentKey,
+    required this.viewModel,
+    required this.editor,
+  });
+
+  final bool enabled;
+  final GlobalKey<HomericEditableDocumentState> documentKey;
+  final DocumentViewModel viewModel;
+  final Widget editor;
+
+  @override
+  State<_MarginDemo> createState() => _MarginDemoState();
+}
+
+class _MarginDemoState extends State<_MarginDemo> {
+  static const double _gap = 24;
+  static const double _noteWidth = 220;
+  static const Color _ink = Color(0xFF2F5D9E);
+
+  final List<({String id, String blockId, BlockTextRange range, String text})>
+      _notes = [
+    // Sparse: one note on the heading's misspelling.
+    (
+      id: 'typo',
+      blockId: 'heading',
+      range: const BlockTextRange(8, 17),
+      text: 'Spelled this way on purpose: the spell-check demo needs it.',
+    ),
+    // Colliding: two notes on the first line of one paragraph.
+    (
+      id: 'bold',
+      blockId: 'intro',
+      range: const BlockTextRange(19, 27),
+      text: 'Markdown markers fold away when delimiters are hidden.',
+    ),
+    (
+      id: 'hidden',
+      blockId: 'intro',
+      range: const BlockTextRange(39, 49),
+      text: 'A second voice, shifted below the first with a connector.',
+    ),
+    // Crowded: three long notes on a one-line paragraph turn compact.
+    for (var index = 0; index < 3; index++)
+      (
+        id: 'crowd-$index',
+        blockId: 'notes',
+        range: BlockTextRange(index * 8, index * 8 + 5),
+        text: 'Crowded note ${index + 1}. Several notes beside one short '
+            'paragraph cannot all fit in full, so the paragraph shows '
+            'one-line previews. Tap a preview to read it in full over its '
+            'neighbours; Escape or a tap elsewhere closes it again.',
+      ),
+  ];
+
+  String? _expanded;
+  HomericMarginComposer? _composer;
+  final TextEditingController _draft = TextEditingController();
+  int _created = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.viewModel.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    widget.viewModel.removeListener(_changed);
+    _draft.dispose();
+    super.dispose();
+  }
+
+  void _changed() => setState(() {});
+
+  HomericMarginNote _note(
+      String id, String blockId, BlockTextRange range, String text,
+      {bool indicator = false}) {
+    const style = TextStyle(
+      fontSize: 14,
+      height: 1.4,
+      fontStyle: FontStyle.italic,
+      color: _ink,
+    );
+    return HomericMarginNote(
+      id: id,
+      blockId: blockId,
+      range: range,
+      semanticsLabel: 'Margin note: $text',
+      paintSourceIndicator: indicator,
+      fullBuilder: (context) => Text(text, style: style),
+      compactBuilder: (context) => Text(
+        text,
+        style: style,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  List<HomericMarginNote> get _allNotes => [
+        for (final note in _notes)
+          _note(note.id, note.blockId, note.range, note.text,
+              indicator:
+                  note.id.startsWith('typo') || note.id.startsWith('created')),
+        // One note per annotation underline added in the decoration panel;
+        // the underline is already the in-document mark.
+        for (final decoration in widget.viewModel.decorations.decorations)
+          if (decoration.spec
+              case PlaygroundSpec(kind: PlaygroundDecorationKind.annotation))
+            _note(
+              'underline-${decoration.blockId}-${decoration.start}',
+              decoration.blockId,
+              BlockTextRange(decoration.start, decoration.end),
+              'Annotation underline ${decoration.start}–${decoration.end}.',
+            ),
+      ];
+
+  void _activate(String id) =>
+      setState(() => _expanded = _expanded == id ? null : id);
+
+  void _dismiss() => setState(() {
+        _expanded = null;
+        _composer = null;
+      });
+
+  void _compose() {
+    final selection = widget.viewModel.editorController.selection;
+    final document = widget.viewModel.editorController.document;
+    var blockId = 'intro';
+    var range = const BlockTextRange(0, 4);
+    if (selection != null) {
+      final start = document.resolve(selection.anchor < selection.head
+          ? selection.anchor
+          : selection.head);
+      final end = document.resolve(selection.anchor < selection.head
+          ? selection.head
+          : selection.anchor);
+      if (start is InlinePosition &&
+          end is InlinePosition &&
+          start.block.id == end.block.id) {
+        blockId = start.block.id;
+        range = BlockTextRange(start.offset, end.offset);
+      }
+    }
+    _draft.clear();
+    setState(() {
+      _expanded = null;
+      _composer = HomericMarginComposer(
+        blockId: blockId,
+        range: range,
+        semanticsLabel: 'New margin note',
+        builder: (context) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _draft,
+              autofocus: true,
+              maxLines: null,
+              style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
+              decoration: const InputDecoration(
+                isDense: true,
+                hintText: 'Write a note…',
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => _save(blockId, range),
+                child: const Text('Save'),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
+  void _save(String blockId, BlockTextRange range) {
+    final text = _draft.text.trim();
+    setState(() {
+      if (text.isNotEmpty) {
+        _notes.add((
+          id: 'created-${_created++}',
+          blockId: blockId,
+          range: range,
+          text: text,
+        ));
+      }
+      _composer = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.editor;
+    return LayoutBuilder(builder: (context, constraints) {
+      final editorWidth = constraints.maxWidth - _gap - _noteWidth - 16;
+      if (editorWidth < 320) return widget.editor;
+      final lineHeight = MediaQuery.textScalerOf(context).scale(14) * 1.4;
+      return Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: editorWidth,
+            child: widget.editor,
+          ),
+          // Later child: notes follow block links, which must paint first.
+          Positioned.fill(
+            child: HomericMarginLayer(
+              documentKey: widget.documentKey,
+              notes: _allNotes,
+              // The editor's 16 px padding ends its text column early.
+              marginLeft: editorWidth - 16 + _gap,
+              noteWidth: _noteWidth,
+              lineHeight: lineHeight,
+              expandedNoteId: _expanded,
+              composer: _composer,
+              onNoteActivated: _activate,
+              onDismissed: _dismiss,
+              expandedDecoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(6),
+                boxShadow: const [
+                  BoxShadow(color: Color(0x33000000), blurRadius: 8),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            right: 8,
+            bottom: 8,
+            child: FilledButton.tonal(
+              onPressed: _compose,
+              child: const Text('Annotate selection'),
+            ),
+          ),
+        ],
+      );
+    });
   }
 }
 

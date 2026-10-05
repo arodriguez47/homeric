@@ -165,6 +165,7 @@ class HomericMarginLayer extends StatefulWidget {
     this.viewportPadding = const EdgeInsets.all(8),
     this.minTapTargetHeight = 44,
     this.expandedPadding = const EdgeInsets.all(8),
+    this.expandedFrameBuilder,
     this.expandedDecoration = const BoxDecoration(
       color: Color(0xFFFFFFFF),
       boxShadow: <BoxShadow>[
@@ -242,8 +243,14 @@ class HomericMarginLayer extends StatefulWidget {
   final EdgeInsets expandedPadding;
 
   /// Frame painted behind an expanded note and the composer, which cover
-  /// neighbouring notes.
+  /// neighbouring notes. Ignored when [expandedFrameBuilder] is set.
   final Decoration expandedDecoration;
+
+  /// Builds the frame around an expanded note's or the composer's padded
+  /// content, for frames a [Decoration] cannot express, such as a blurred
+  /// backdrop. The result must size itself to `child`.
+  final Widget Function(BuildContext context, Widget child)?
+      expandedFrameBuilder;
 
   /// Colour of the line from a displaced note to its source line.
   final Color connectorColor;
@@ -1160,6 +1167,20 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     );
   }
 
+  Widget _expandedFrame({required Key key, required Widget child}) {
+    final builder = widget.expandedFrameBuilder;
+    return builder == null
+        ? DecoratedBox(
+            key: key,
+            decoration: widget.expandedDecoration,
+            child: child,
+          )
+        : KeyedSubtree(
+            key: key,
+            child: Builder(builder: (context) => builder(context, child)),
+          );
+  }
+
   /// Like a resting note, a tap on the expanded note activates it: the tap
   /// recognizer is the outermost one, so descendants that claim the tap,
   /// such as a host button, win it, and the scroll view's drag wins a drag.
@@ -1170,9 +1191,8 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           behavior: HitTestBehavior.opaque,
           excludeFromSemantics: true,
           onTap: () => _activate(note.id),
-          child: DecoratedBox(
+          child: _expandedFrame(
             key: ValueKey<String>('homeric-margin-expanded-${note.id}'),
-            decoration: widget.expandedDecoration,
             child: Padding(
               padding: widget.expandedPadding,
               child: SingleChildScrollView(
@@ -1196,9 +1216,8 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           child: Semantics(
             container: true,
             label: composer.semanticsLabel,
-            child: DecoratedBox(
+            child: _expandedFrame(
               key: const ValueKey<String>('homeric-margin-composer'),
-              decoration: widget.expandedDecoration,
               child: Padding(
                 padding: widget.expandedPadding,
                 child: SingleChildScrollView(

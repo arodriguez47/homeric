@@ -832,6 +832,45 @@ void main() {
           reason: 'focus must not stay in the document');
     });
 
+    testWidgets(
+        'a replacement composer is not drawn at the old one\'s anchor during '
+        'a geometry hold', (tester) async {
+      final harness = _Harness(_document(['first', 'second', 'third']));
+      harness.host.notes = [
+        _note('a', 'block-1', const BlockTextRange(0, 6)),
+        _note('b', 'block-2', const BlockTextRange(0, 5)),
+      ];
+      HomericMarginComposer composer(String id, String blockId) =>
+          HomericMarginComposer(
+            id: id,
+            blockId: blockId,
+            range: const BlockTextRange(0, 5),
+            semanticsLabel: 'New note',
+            builder: (context) =>
+                const SizedBox(height: 40, child: Text('composing')),
+          );
+      harness.host.composer = composer('old', 'block-2');
+      await harness.pump(tester);
+      final composerFinder =
+          find.byKey(const ValueKey<String>('homeric-margin-composer'));
+      expect(composerFinder, findsOneWidget);
+
+      harness.controller.setSelection(HomericSelection.collapsed(
+        harness.controller.document.positionAt(0, 5),
+      ));
+      expect(harness.controller.insertParagraphBreak(), isTrue);
+      harness.host.composer = composer('new', 'block-1');
+      await tester.pump();
+      expect(composerFinder, findsNothing,
+          reason: 'the old placement belongs to the old composer');
+
+      await tester.pump();
+      await tester.pump();
+      expect(composerFinder, findsOneWidget);
+      expect(tester.getRect(composerFinder).top + 8,
+          harness.rangeTop('block-1', const BlockTextRange(0, 5)));
+    });
+
     testWidgets('a composer without its own focus target focuses its scope',
         (tester) async {
       final harness = _Harness(_document(['alpha beta']));

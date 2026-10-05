@@ -822,7 +822,14 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     };
     final _Presentation presentation;
     if (snapshot.hold) {
-      presentation = _last!.retain(snapshot.mounted, notesById);
+      final current = widget.composer;
+      presentation = _last!.retain(
+        snapshot.mounted,
+        notesById,
+        // A replacement composer must not appear at the old one's anchor.
+        keepComposer: (placed) =>
+            current != null && _sameComposer(placed.source, current),
+      );
     } else {
       presentation = _solve(snapshot, heights, notesById);
       _last = presentation;
@@ -928,6 +935,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     if (composer != null) {
       final composerOrder = _composerOrder(snapshot, composer, placements);
       placedComposer = _PlacedComposer(
+        source: composer.composer,
         block: composer.block,
         anchor: composer.anchor,
         rects: composer.rects,
@@ -1491,12 +1499,15 @@ final class _PlacedGroup {
 
 final class _PlacedComposer {
   const _PlacedComposer({
+    required this.source,
     required this.block,
     required this.anchor,
     required this.rects,
     required this.order,
   });
 
+  /// The composer this placement was solved for.
+  final HomericMarginComposer source;
   final _BlockPlacement block;
   final Rect anchor;
   final List<Rect> rects;
@@ -1518,8 +1529,9 @@ final class _Presentation {
   /// still supplies.
   _Presentation retain(
     Set<String> mounted,
-    Map<String, HomericMarginNote> notes,
-  ) =>
+    Map<String, HomericMarginNote> notes, {
+    required bool Function(_PlacedComposer placed) keepComposer,
+  }) =>
       _Presentation(
         <_PlacedGroup>[
           for (final group in groups)
@@ -1529,7 +1541,9 @@ final class _Presentation {
                   if (notes.containsKey(note.id)) note,
               ]),
         ],
-        composer != null && mounted.contains(composer!.block.blockId)
+        composer != null &&
+                mounted.contains(composer!.block.blockId) &&
+                keepComposer(composer!)
             ? composer
             : null,
       );

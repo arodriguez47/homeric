@@ -46,4 +46,53 @@ void main() {
         reason: 'Phase 1 modules must not touch Flutter or dart:ui '
             '(R1):\n${offenders.join('\n')}');
   });
+
+  // KTD2: margin presentation is an optional module built on published
+  // geometry. The core may not reach into it, and the core library does
+  // not export it.
+  test('core modules never import the margin module', () {
+    const coreDirs = [
+      'lib/src/model',
+      'lib/src/transform',
+      'lib/src/decoration',
+      'lib/src/view',
+      'lib/src/render',
+      'lib/src/editing',
+    ];
+    final marginImport = RegExp(
+      '''^\\s*(import|export)\\s+['"]([^'"]*/)?margin(/|\\.dart['"])''',
+    );
+    final offenders = <String>[];
+    var scanned = 0;
+    for (final dir in coreDirs) {
+      final directory = Directory(dir);
+      expect(directory.existsSync(), isTrue, reason: '$dir is missing');
+      final files = directory
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.dart'));
+      for (final file in files) {
+        scanned++;
+        final lines = file.readAsLinesSync();
+        for (var i = 0; i < lines.length; i++) {
+          if (marginImport.hasMatch(lines[i])) {
+            offenders.add('${file.path}:${i + 1}: ${lines[i].trim()}');
+          }
+        }
+      }
+    }
+    expect(scanned, greaterThanOrEqualTo(30));
+    expect(offenders, isEmpty,
+        reason: 'core modules must not depend on margin presentation '
+            '(KTD2):\n${offenders.join('\n')}');
+
+    expect(
+        marginImport.hasMatch("import '../margin/margin_layer.dart';"), isTrue,
+        reason: 'the guard must recognise a relative margin import');
+    expect(
+        marginImport.hasMatch("import 'package:homeric/margin.dart';"), isTrue);
+    final library = File('lib/homeric.dart').readAsStringSync();
+    expect(library, isNot(contains('margin')),
+        reason: 'margin types ship only through package:homeric/margin.dart');
+  });
 }

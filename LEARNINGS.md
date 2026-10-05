@@ -908,3 +908,200 @@ Mirrored from Nexus `LEARNINGS.md` (arodriguez47/nexus#270).
 - **Collapsing a hidden block is not possible yet.** Hiding all of a fence
   line's text leaves an empty paragraph. A block-level collapse would be the
   Homeric-side follow-up if consumers need it.
+
+## engineer — 2026-10-05 — Document geometry is a revocable capability with a pushed signal
+
+**What:** Margin annotations need content beside any mounted block, outside
+the paragraph whose overlay cannot hit-test past its own bounds.
+`HomericEditableDocumentState.documentGeometry` publishes, for laid-out rows
+only, a `LayerLink` per block, block and range rects in that link's space,
+and `globalOrigin` for putting several blocks in one shared space.
+`documentGeometryChanges` fires post-frame, coalesced, when any row lays out,
+mounts or unmounts. Scrolling and paint-only changes never fire it.
+
+- **Followers must paint after the editor.** Flutter requires a link's
+  leader to paint before its followers ("LeaderLayer anchor must come before
+  FollowerLayer in paint order"), so a following widget is a later `Stack`
+  child, never an earlier one. Use `showWhenUnlinked: false`: rows in the
+  cache extent are laid out but not painted, so their leader is absent.
+- **Re-fetch on every signal.** Any row layout revokes the whole capability,
+  and so does a document revision before the rows lay out. A text block can
+  be in `mountedBlockIds` while `block(id)` is still null until its first
+  geometry notice. A newly mounted block can cause two notifications in one
+  post-frame pass.
+- **`globalOrigin` moves with scrolling and does not revoke the capability.**
+  Compare it only with values read in the same frame. Differences between
+  blocks are scroll-invariant, which is all a cross-block solver needs.
+
+## engineer — 2026-10-05 — Margin notes track blocks at composite time and re-solve on the signal
+
+**What:** `HomericMarginLayer` (`package:homeric/margin.dart`) wraps each
+block's notes in a `CompositedTransformFollower` on that block's link, so
+scrolling and an edit above move the notes in the same frame as the text.
+Offsets inside a block and collisions between blocks are re-solved after
+`documentGeometryChanges`, so a reflow inside an annotated block lands one
+frame late. Full-form heights are measured by an off-stage pass and handed
+to an `AbstractLayoutBuilder` in the same layout, so the solver picks each
+group's form before anything is shown. Full and compact forms are never
+built side by side.
+
+- **Mounting must not move what stays on screen.** A group's form depends
+  on the next annotated block, and its position on the cascade from the
+  previous one. The editor mounts only near the viewport, so a fresh solve
+  per frame let an on-screen note compact or jump when a neighbour mounted.
+  `MarginLayoutMemory` keeps placements of unchanged blocks across solves.
+  Blocks that mount below are solved under the kept notes and never reopen
+  them. Blocks that mount above are limited by the first kept note. Any other
+  change reopens the block before it. The remaining instability is a newly
+  mounted block above whose compact previews alone overrun the kept notes.
+  It falls back to a fresh solve and is visible only when that cascade is
+  taller than the cache extent.
+- **Pending is not unmounted.** In a frame where the host rebuilds the layer
+  after an edit but before the rows lay out, every text block's geometry is
+  null. Dropping the notes would blank the margin for a frame. The layer
+  keeps the last placements for that frame, because followers already carry
+  the block movement, and re-solves on the signal that follows.
+- **Clamp the overlay where its size is known.** The expanded note and the
+  composer clamp inside the viewport in the canvas's `performLayout`, using
+  the block's offset in the layer read at build. They then travel with their
+  block while scrolling until the next solve.
+
+## engineer — 2026-10-05 — Never read ancestor geometry while building
+
+**What:** `HomericMarginLayer` called `localToGlobal` on itself in `build`,
+and the document's `globalOrigin` closures, which also walk up the render
+tree. Nexus gives the layer a `GlobalKey` to reach `focusNote`. A page
+transition then wrapped the editor and the layer in a new `RenderTransform`
+inside a `LayoutBuilder`. The re-parented layer rebuilt in that layout
+callback, while the transform had never been laid out, and the walk hit
+"RenderBox was not laid out". The same thing happens in an ordinary build
+pass whenever a parent inserts a render object above a keyed child. Checking
+only the layer's own `hasSize` cannot catch it: the reparented box keeps its
+old size.
+
+**Fix:** build reads only block-local geometry, such as links and range
+rects. Block positions relative to the layer are read post-frame, when every
+ancestor is laid out: in the `documentGeometryChanges` listener, which the
+document already defers out of the frame, and in one coalesced post-frame
+pass after every layer build. That pass rebuilds only when the values
+differ. Origins are mapped into the layer's own space through one inverted
+transform, so a transform shared by the editor and the layer cancels out. A
+scaled transition no longer skews the margin's x offset. The layer's size
+for overlay clamping is taken from its own layout constraints in the same
+frame, not read at build.
+
+**Rule going forward:** treat `build` as possibly running inside a layout
+callback. Never call `localToGlobal`, `getTransformTo` or `size` on
+ancestors, or on anything reached through them, from `build`. Read shared
+space post-frame and correct in the next frame. Do not paper over it with a
+`hasSize` guard on the read target. This supersedes the "read at build"
+detail in the 2026-10-05 margin entry above.
+
+## engineer — 2026-10-05 — Overlay activation and replaced host subtrees need explicit identity
+
+**What:** the first margin consumer (Nexus annotations) hit two gaps. An
+expanded note reacted to Enter, Space and the semantics tap but not to a
+pointer, so touch users could never activate it a second time to open the
+editor. And replacing one `HomericMarginComposer` with another in a single
+rebuild reused the old composer's elements and focus scope: the new field
+never took focus and the old field's state leaked into the new composer.
+
+**Fix:** the expanded card is wrapped, inside its `TapRegion`, in the same
+outermost opaque `GestureDetector(onTap:)` that resting notes use. Being the
+shallowest tap recognizer, it loses the arena to any descendant that claims
+the tap (a host button), and to the scroll view's drag once the pointer
+crosses the slop. A composer now has an identity: an optional host `id`,
+or `blockId` + `range` when both ids are null. A different composer gets a
+new `FocusScopeNode` and a generation key on its `FocusScope`, so its
+subtree is built fresh; the retired scope is disposed post-frame, the new
+one takes focus, and the pre-composer focus target is kept for removal.
+
+**Rule going forward:** every activation path the keyboard and semantics
+offer must also exist for pointers, tested with a touch gesture that has no
+preceding hover. When a host can swap one "open thing" for another of the
+same type, define identity in the API and key the subtree on it; a
+`Builder` that merely rebuilds is not a fresh instance. In widget tests,
+once a tap recognizer shares the arena with a drag, a single large `moveBy`
+is consumed crossing the slop and scrolls nothing; drag in steps.
+
+## engineer — 2026-10-05 — Mirror: a margin beside a column-wide scrollable needs its own scroll (Nexus margin notes)
+
+Mirrored from Nexus `LEARNINGS.md` (branch `t3code/margin-annotations-design`,
+margin-annotations U7). The re-parenting half of that entry is covered here by
+"Never read ancestor geometry while building" above.
+
+- **The space beside a centred editor does not scroll it.** The editor's
+  `Scrollable` is column-wide and `Align` hit-tests only its child, so a wheel
+  over either gutter moved nothing, before any margin existed. A host that
+  puts `HomericMarginLayer` beside the column must forward gutter scrolls
+  itself: a translucent full-width `Listener` that registers wheels with the
+  pointer-signal resolver (which honours the FIRST registration, so the prose
+  scrollable or an expanded note's own scroll view still wins where it is
+  hit), and drives `ScrollPosition.drag` with a fling for trackpads, which
+  send pan-zoom events rather than `PointerScrollEvent`s.
+- **Geometry assertions must outlast a host's entry transition.** Nexus scales
+  the column 0.97→1 over 1200 ms after an entry switch; a rect read 200 ms in
+  is ~1.7% small. Read geometry once any wrapping transform has settled.
+
+## engineer — 2026-10-05 — Mirror: a focused node that unmounts sends no blur (Nexus margin note editor)
+
+Mirrored from Nexus `LEARNINGS.md` (branch `t3code/margin-annotations-design`,
+margin-annotations U8). Relevant to every Homeric overlay that hosts a field
+(the margin composer, selection menus).
+
+- **Detaching a focused node notifies nobody.** `FocusAttachment.detach`
+  unfocuses the node and marks it detached: its own listeners and its
+  ancestors' `Focus.onFocusChange` never hear that focus left. A host that
+  saves on blur loses text when its composer is removed; flush on an explicit
+  close. An ancestor `onFocusChange` used as a "focus is inside X" flag goes
+  stale when a focused descendant unmounts; read `FocusManager.instance`
+  instead.
+- **`autofocus` is a no-op while the scope already has a focused child.** A
+  field mounted with `autofocus: true` beside a focused editor, or while
+  Homeric's selection menu is handing focus back to the paragraph, does not
+  take focus. Request focus a frame after mount.
+- **`addPostFrameCallback` does not ask for a frame**, restated from the
+  2026-10-03 caret entry: a restore scheduled by an event that changes no
+  widget state runs only at some unrelated later frame unless the caller also
+  calls `ensureVisualUpdate()`.
+
+## engineer — 2026-10-05 — Mirror: consuming margin geometry from a host (Nexus margin notes U9)
+
+Mirrored from Nexus `LEARNINGS.md` (branch `t3code/margin-annotations-design`,
+margin-annotations U9). The library-side points of that entry already live in
+the three 2026-10-05 margin entries above; these are the host-side ones.
+
+- **A note that is not placed cannot take focus.** `focusNote` returns false
+  for a note whose block is not mounted. A "go to the note" command must
+  first scroll the source in without moving the selection (Nexus's
+  `revealBlockRange`: scroll-only, verified against painted geometry, bounded
+  attempts), then retry `focusNote` for a bounded number of frames.
+  `revealCanonicalRange` would select the passage and break "Escape returns
+  the caret where it was".
+- **Do not fix the one-frame reflow lag with a per-frame solve.** Hosts see a
+  note land a frame after an edit reflows its block; that is the
+  signal-driven re-solve working, and solving every frame brings back the
+  jumps `MarginLayoutMemory` prevents.
+- **Feed the layer and any "detached notes" list from one partition.** Nexus
+  computes both from a single `marginNotePartition`, so a note whose passage
+  was deleted leaves the margin and appears below in the same frame, never in
+  both or neither.
+
+## engineer — 2026-10-05 — An overlay menu must join the editor's TextFieldTapRegion, and `tester.tap` cannot prove it
+
+- **Symptom (macOS app):** right-click menu Cut/Copy/Paste did nothing.
+  Pre-existing since 0963f3d (touch chrome added `TextFieldTapRegion
+  .onTapOutside -> _dismissContextMenu`); present in pinned b6bddcd.
+- **Cause:** `ContextMenuController` puts the menu in the root overlay,
+  outside the paragraph's `TextFieldTapRegion` group. A pointer-down on an
+  item is a "tap outside", which dismisses the menu, and the item unmounts
+  before pointer-up. Flutter's own `SelectionOverlay` wraps its toolbar in
+  `TextFieldTapRegion` for this reason; Homeric's `_showContextMenu` now does
+  too.
+- **Why the tests missed it:** `tester.tap` sends down and up with no frame
+  between them. The arena already holds the button's recognizer, so the tap
+  fires even though the menu is gone. Any overlay-activation test needs a
+  `createGesture(kind: mouse)` with a `pump()` between `down` and `up`.
+  Evidence: `test/editing/editable_paragraph_test.dart` ("a real mouse
+  click on a menu item survives frames between down and up"), plus Nexus
+  `test/widgets/journal_context_menu_clipboard_test.dart`.

@@ -178,6 +178,7 @@ class HomericMarginLayer extends StatefulWidget {
     this.sourceUnderlineThickness = 1,
     this.sourceTintColor = const Color(0x264A6FA5),
     this.focusColor = const Color(0x994A6FA5),
+    this.hoverScale = 1.04,
   })  : assert(noteWidth > 0),
         assert(lineHeight > 0),
         assert(minTapTargetHeight >= 0);
@@ -271,6 +272,11 @@ class HomericMarginLayer extends StatefulWidget {
 
   /// Colour of the focus outline around a focused resting note.
   final Color focusColor;
+
+  /// Scale of a resting note under a mouse pointer, grown from its left
+  /// edge. A hovered note also shows its source tint and a stronger
+  /// connector. Use 1 for no growth.
+  final double hoverScale;
 
   @override
   State<HomericMarginLayer> createState() => HomericMarginLayerState();
@@ -966,7 +972,9 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         final note = notesById[placed.id];
         if (note == null) continue;
         forms[placed.id] = placed.form;
-        final active = placed.id == expandedId || placed.id == focusedId;
+        final hovered = placed.id == _hoveredNoteId;
+        final active =
+            placed.id == expandedId || placed.id == focusedId || hovered;
         addIndicator(
           group.block.blockId,
           note.paintSourceIndicator ? placed.rects : const <Rect>[],
@@ -990,8 +998,13 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
                     math.min(group.block.right - group.block.dx, -6),
                     placed.anchor.center.dy,
                   ),
-                  color: widget.connectorColor,
-                  width: widget.connectorWidth,
+                  // A hovered note's connector comes forward with it.
+                  color: hovered
+                      ? widget.connectorColor.withValues(
+                          alpha: math.min(1, widget.connectorColor.a * 2),
+                        )
+                      : widget.connectorColor,
+                  width: widget.connectorWidth + (hovered ? 0.5 : 0),
                 ),
               ),
             ),
@@ -1133,6 +1146,15 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           ? Builder(builder: note.fullBuilder)
           : ClipRect(child: Builder(builder: note.compactBuilder)),
     );
+    // Under the pointer a note leans forward a little: slightly larger from
+    // its left edge, so its first letters stay on their line.
+    content = AnimatedScale(
+      scale: _hoveredNoteId == note.id ? widget.hoverScale : 1,
+      alignment: Alignment.centerLeft,
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
+      child: content,
+    );
     if (focused) {
       content = DecoratedBox(
         position: DecorationPosition.foreground,
@@ -1147,24 +1169,42 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       note,
       placed.order.toDouble(),
       expanded: false,
-      child: GestureDetector(
-        key: ValueKey<String>('homeric-margin-target-${note.id}'),
-        behavior: HitTestBehavior.opaque,
-        excludeFromSemantics: true,
-        onTap: () => _activate(note.id),
-        child: Stack(
-          children: <Widget>[
-            Positioned(
-              left: 0,
-              top: placed.top - placed.hitTop,
-              width: widget.noteWidth,
-              height: placed.height,
-              child: content,
-            ),
-          ],
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => _setHovered(note.id),
+        onExit: (_) => _clearHovered(note.id),
+        child: GestureDetector(
+          key: ValueKey<String>('homeric-margin-target-${note.id}'),
+          behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
+          onTap: () => _activate(note.id),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: <Widget>[
+              Positioned(
+                left: 0,
+                top: placed.top - placed.hitTop,
+                width: widget.noteWidth,
+                height: placed.height,
+                child: content,
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  String? _hoveredNoteId;
+
+  void _setHovered(String noteId) {
+    if (_hoveredNoteId == noteId || !mounted) return;
+    setState(() => _hoveredNoteId = noteId);
+  }
+
+  void _clearHovered(String noteId) {
+    if (_hoveredNoteId != noteId || !mounted) return;
+    setState(() => _hoveredNoteId = null);
   }
 
   Widget _expandedFrame({required Key key, required Widget child}) {
@@ -1501,16 +1541,38 @@ final class _ConnectorPainter extends CustomPainter {
   final Color color;
   final double width;
 
+  /// Largest radius of the elbow's two corners.
+  static const double _corner = 4;
+
+  /// An elbow: out from the note, up or down a riser midway across the gap,
+  /// then on to the source line. Both corners are rounded; when the two ends
+  /// are level it is a straight line.
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawLine(
-      from,
-      to,
-      Paint()
-        ..color = color
-        ..strokeWidth = width
-        ..isAntiAlias = true,
-    );
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = width
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..isAntiAlias = true;
+    final rise = to.dy - from.dy;
+    final run = to.dx - from.dx;
+    if (rise.abs() < 0.5 || run.abs() < 0.5) {
+      canvas.drawLine(from, to, paint);
+      return;
+    }
+    final riserX = from.dx + run / 2;
+    final radius = math.min(_corner, math.min(rise.abs(), run.abs() / 2) / 2);
+    final h = run.sign * radius;
+    final v = rise.sign * radius;
+    final path = Path()
+      ..moveTo(from.dx, from.dy)
+      ..lineTo(riserX - h, from.dy)
+      ..quadraticBezierTo(riserX, from.dy, riserX, from.dy + v)
+      ..lineTo(riserX, to.dy - v)
+      ..quadraticBezierTo(riserX, to.dy, riserX + h, to.dy)
+      ..lineTo(to.dx, to.dy);
+    canvas.drawPath(path, paint);
   }
 
   @override

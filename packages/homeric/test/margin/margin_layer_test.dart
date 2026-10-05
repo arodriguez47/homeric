@@ -396,20 +396,66 @@ void main() {
       final origin = block.globalOrigin!;
       // Painted in the margin's space: x from the margin's left edge, y from
       // the block's top.
+      final from = Offset(-2, n2.top - origin.dy + _line / 2);
+      final to = Offset(
+        origin.dx + block.blockRect!.right - _marginLeft,
+        anchor.center.dy,
+      );
+      expect(from.dy, isNot(closeTo(to.dy, 0.5)),
+          reason: 'precondition: the ends are not level, so an elbow is due');
       expect(
         _connectorFinder('n2'),
         paints
-          ..line(
-            p1: Offset(-2, n2.top - origin.dy + _line / 2),
-            p2: Offset(
-              origin.dx + block.blockRect!.right - _marginLeft,
-              anchor.center.dy,
-            ),
-          ),
+          ..something((method, arguments) {
+            if (method != #drawPath) return false;
+            final metric = (arguments[0] as Path).computeMetrics().single;
+            final start = metric.getTangentForOffset(0)!;
+            final middle = metric.getTangentForOffset(metric.length / 2)!;
+            final finish = metric.getTangentForOffset(metric.length)!;
+            // An elbow: it leaves the note and reaches the source line
+            // level, joined by one vertical riser midway across the gap.
+            return (start.position - from).distance < 0.01 &&
+                (finish.position - to).distance < 0.01 &&
+                start.vector.dy.abs() < 0.01 &&
+                finish.vector.dy.abs() < 0.01 &&
+                middle.vector.dx.abs() < 0.01 &&
+                (middle.position.dx - (from.dx + to.dx) / 2).abs() < 0.01;
+          }),
       );
       final end = origin.dy + anchor.center.dy;
       expect(end,
           inInclusiveRange(origin.dy + anchor.top, origin.dy + anchor.bottom));
+    });
+
+    testWidgets('a hovered note grows from its left edge and shows its source',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma']));
+      harness.host.notes = [
+        _note('n1', 'block-0', const BlockTextRange(0, 5)),
+      ];
+      await harness.pump(tester);
+      Finder scale() => find.ancestor(
+            of: find.text('full n1'),
+            matching: find.byType(AnimatedScale),
+          );
+      expect(tester.widget<AnimatedScale>(scale()).scale, 1,
+          reason: 'precondition: at rest');
+      final resting = harness.noteRect(tester, 'n1');
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(resting.center);
+      await tester.pump();
+      final hovered = tester.widget<AnimatedScale>(scale());
+      expect(hovered.scale, greaterThan(1));
+      expect(hovered.alignment, Alignment.centerLeft);
+      expect(harness.noteRect(tester, 'n1'), resting,
+          reason: 'growth is paint-only: the note keeps its layout');
+
+      await mouse.moveTo(Offset.zero);
+      await tester.pump();
+      expect(tester.widget<AnimatedScale>(scale()).scale, 1);
     });
 
     testWidgets('a crowded paragraph compacts; expanding one note moves none',

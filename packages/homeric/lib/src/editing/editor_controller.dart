@@ -69,6 +69,7 @@ final class HomericEditorCommand {
     this.replacementSelection,
     this.replacementComposing,
     this.blockMove,
+    this.edits,
   });
 
   /// Interception point for this command.
@@ -109,6 +110,12 @@ final class HomericEditorCommand {
 
   /// Captured move request for [HomericCommandKind.block].
   final BlockMoveRequest? blockMove;
+
+  /// The block-local edits a block-local insert or delete is about to apply,
+  /// in application order; null for every other command. A collapsed
+  /// [selection] cannot tell a backspace from a forward delete, the edit's
+  /// range can.
+  final List<CanonicalTextEdit>? edits;
 }
 
 /// The outcome returned by a [HomericCommandInterceptor].
@@ -1330,7 +1337,22 @@ class HomericEditorController extends ChangeNotifier {
         .any((edit) => edit.text.contains('\n') || edit.text.contains('\r'))) {
       return false;
     }
+    // One snapshot for interception and application, so an interceptor
+    // cannot see one batch while the controller applies another.
+    edits = List<CanonicalTextEdit>.unmodifiable(edits);
     if (edits.isNotEmpty) {
+      // Interceptors read `edits` as what is about to be applied, so a batch
+      // the built-in path would reject never reaches them.
+      final index = _document.indexOfBlockId(blockId)!;
+      var length = _document.blocks[index].contentLength;
+      for (final edit in edits) {
+        if (!_validEdit(edit, length)) return false;
+        length += edit.text.length - (edit.end - edit.start);
+      }
+      if (!_validBlockSelection(selection, length) ||
+          (composing != null && !_validBlockRange(composing, length))) {
+        return false;
+      }
       final inserts = edits.where((edit) => edit.text.isNotEmpty).toList();
       final interception = _interceptedResult(HomericEditorCommand(
         kind: inserts.isEmpty
@@ -1340,6 +1362,7 @@ class HomericEditorController extends ChangeNotifier {
         selection: _selection,
         blockId: blockId,
         text: inserts.map((edit) => edit.text).join(),
+        edits: edits,
       ));
       if (interception != null) return interception;
     }

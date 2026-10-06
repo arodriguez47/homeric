@@ -1105,3 +1105,30 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   Evidence: `test/editing/editable_paragraph_test.dart` ("a real mouse
   click on a menu item survives frames between down and up"), plus Nexus
   `test/widgets/journal_context_menu_clipboard_test.dart`.
+
+## engineer — 2026-10-06 — An edit at an inline slot needs the caret's side and the edit's range
+
+- **Symptom (Nexus journal):** a footnote marker is a slot painted after its
+  anchor character. Backspace with the caret drawn *after* the superscript
+  deleted the period *before* it, and text typed before the marker landed
+  after it.
+- **Cause, part 1:** one document offset has two caret stops at a slot
+  (`HomericCaretAffinity.upstream` before it, `downstream` after it). A
+  consumer rule that reads only the offset treats both stops the same.
+  Interceptors must read `selection.affinity` whenever the edit touches an
+  offset where a slot sits.
+- **Cause, part 2:** a block-local delete reached interceptors as `preDelete`
+  with `forward: null` and only the pre-edit selection. A collapsed selection
+  cannot tell backspace from forward delete, so a consumer had to guess which
+  character was going. `HomericEditorCommand.edits` now carries the
+  `CanonicalTextEdit`s `applyBlockEditBatch` is about to apply.
+- **Margin follow-ons from the same pass:** `HomericMarginLayer` takes a
+  `sourceHoveredNoteId` so a host can grow a note while its source text is
+  hovered; a pointer on a note outranks it. A focused resting note shows a
+  short rule in the gutter and grows like a hovered one. The old outline box
+  read as a form field around the text.
+- Evidence: `test/margin/margin_layer_test.dart` ("a note grows when its
+  source text is hovered", "a focused note shows a gutter rule, not a box,
+  and grows"); Nexus `test/widgets/journal_footnote_test.dart` ("typing and
+  deleting at a footnote marker follow the side of the marker the caret is
+  drawn on").

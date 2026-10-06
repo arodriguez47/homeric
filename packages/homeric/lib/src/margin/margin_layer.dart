@@ -179,6 +179,7 @@ class HomericMarginLayer extends StatefulWidget {
     this.sourceTintColor = const Color(0x264A6FA5),
     this.focusColor = const Color(0x994A6FA5),
     this.hoverScale = 1.04,
+    this.sourceHoveredNoteId,
   })  : assert(noteWidth > 0),
         assert(lineHeight > 0),
         assert(minTapTargetHeight >= 0);
@@ -270,13 +271,18 @@ class HomericMarginLayer extends StatefulWidget {
   /// composer.
   final Color sourceTintColor;
 
-  /// Colour of the focus outline around a focused resting note.
+  /// Colour of the focus rule beside a focused resting note.
   final Color focusColor;
 
   /// Scale of a resting note under a mouse pointer, grown from its left
   /// edge. A hovered note also shows its source tint and a stronger
   /// connector. Use 1 for no growth.
   final double hoverScale;
+
+  /// A note whose source range is under the pointer in the document. It
+  /// grows and lights exactly as if the note itself were hovered, so the
+  /// link reads from either end. A pointer on a note outranks it.
+  final String? sourceHoveredNoteId;
 
   @override
   State<HomericMarginLayer> createState() => HomericMarginLayerState();
@@ -359,6 +365,15 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   @override
   void didUpdateWidget(HomericMarginLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // A resting note removed or expanded under the pointer loses its
+    // MouseRegion with no guaranteed `onExit`; a stale hover would outrank
+    // every later source hover.
+    final hovered = _hoveredNoteId;
+    if (hovered != null &&
+        (hovered == widget.expandedNoteId ||
+            !widget.notes.any((note) => note.id == hovered))) {
+      _hoveredNoteId = null;
+    }
     if (oldWidget.expandedNoteId != widget.expandedNoteId) {
       _expansionChanged(oldWidget.expandedNoteId);
     }
@@ -641,7 +656,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   }
 
   void _noteFocusChanged(bool _) {
-    // The focused note's source range is tinted and its outline drawn.
+    // The focused note's source range is tinted and its focus rule drawn.
     if (mounted) setState(() {});
   }
 
@@ -993,7 +1008,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         final note = notesById[placed.id];
         if (note == null) continue;
         forms[placed.id] = placed.form;
-        final hovered = placed.id == _hoveredNoteId;
+        final hovered = placed.id == _effectiveHoveredNoteId;
         final active =
             placed.id == expandedId || placed.id == focusedId || hovered;
         addIndicator(
@@ -1167,25 +1182,48 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           ? Builder(builder: note.fullBuilder)
           : ClipRect(child: Builder(builder: note.compactBuilder)),
     );
-    // Under the pointer a note leans forward a little: slightly larger from
-    // its left edge, so its first letters stay on their line.
+    // Under the pointer, or while focused, a note leans forward a little:
+    // slightly larger from its left edge, so its first letters stay on
+    // their line.
+    final lifted = focused || _effectiveHoveredNoteId == note.id;
     content = AnimatedScale(
-      scale: _hoveredNoteId == note.id ? widget.hoverScale : 1,
+      scale: lifted ? widget.hoverScale : 1,
       alignment: Alignment.centerLeft,
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
       child: content,
     );
-    if (focused) {
-      content = DecoratedBox(
-        position: DecorationPosition.foreground,
-        decoration: BoxDecoration(
-          border: Border.all(color: widget.focusColor),
-          borderRadius: const BorderRadius.all(Radius.circular(2)),
+    // Focus is a short rule in the gutter to the note's left, the way a
+    // reader marks a gloss: a box drawn around the text read as a form field.
+    content = Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        content,
+        Positioned(
+          key: ValueKey<String>('homeric-margin-focus-${note.id}'),
+          // The layer clips at its edge: a narrow gutter pulls the rule in.
+          left: -math.min(_focusRuleGap + _focusRuleWidth, widget.marginLeft),
+          top: 2,
+          bottom: 2,
+          width: _focusRuleWidth,
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: focused ? 1 : 0,
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOut,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: widget.focusColor,
+                  borderRadius: const BorderRadius.all(
+                    Radius.circular(_focusRuleWidth / 2),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
-        child: content,
-      );
-    }
+      ],
+    );
     return _shell(
       note,
       placed.order.toDouble(),
@@ -1217,6 +1255,12 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   }
 
   String? _hoveredNoteId;
+
+  static const double _focusRuleWidth = 2;
+  static const double _focusRuleGap = 6;
+
+  String? get _effectiveHoveredNoteId =>
+      _hoveredNoteId ?? widget.sourceHoveredNoteId;
 
   void _setHovered(String noteId) {
     if (_hoveredNoteId == noteId || !mounted) return;

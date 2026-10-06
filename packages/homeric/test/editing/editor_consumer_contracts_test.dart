@@ -220,6 +220,43 @@ void main() {
       expect(controller.document, same(document));
     });
 
+    test('block-local edits reach interceptors only when they are valid', () {
+      final document = _document(['ab']);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+      );
+      addTearDown(controller.dispose);
+      final seen = <List<CanonicalTextEdit>?>[];
+      controller.addCommandInterceptor((command) {
+        seen.add(command.edits);
+        return HomericCommandInterception.ignored;
+      });
+
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [CanonicalTextEdit(1, 2, '')],
+          selection: const BlockTextSelection.collapsed(1),
+        ),
+        isTrue,
+      );
+      expect(seen.single!.single.start, 1,
+          reason: 'a backspace carries the range it deletes');
+
+      seen.clear();
+      expect(
+        controller.applyBlockEditBatch(
+          blockId: 'a',
+          edits: const [CanonicalTextEdit(0, 5, '')],
+          selection: const BlockTextSelection.collapsed(0),
+        ),
+        isFalse,
+      );
+      expect(seen, isEmpty,
+          reason: 'an out-of-range batch is rejected before interception');
+    });
+
     test('typed rejection stops the built-in command without a commit', () {
       final document = _document(['ab']);
       final controller = HomericEditorController(

@@ -69,6 +69,7 @@ final class HomericEditorCommand {
     this.replacementSelection,
     this.replacementComposing,
     this.blockMove,
+    this.edits,
   });
 
   /// Interception point for this command.
@@ -109,6 +110,12 @@ final class HomericEditorCommand {
 
   /// Captured move request for [HomericCommandKind.block].
   final BlockMoveRequest? blockMove;
+
+  /// The block-local edits a block-local insert or delete is about to apply,
+  /// in application order; null for every other command. A collapsed
+  /// [selection] cannot tell a backspace from a forward delete, the edit's
+  /// range can.
+  final List<CanonicalTextEdit>? edits;
 }
 
 /// The outcome returned by a [HomericCommandInterceptor].
@@ -1340,6 +1347,7 @@ class HomericEditorController extends ChangeNotifier {
         selection: _selection,
         blockId: blockId,
         text: inserts.map((edit) => edit.text).join(),
+        edits: List<CanonicalTextEdit>.unmodifiable(edits),
       ));
       if (interception != null) return interception;
     }

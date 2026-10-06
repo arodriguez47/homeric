@@ -458,6 +458,43 @@ void main() {
       expect(tester.widget<AnimatedScale>(scale()).scale, 1);
     });
 
+    testWidgets('a note grows when its source text is hovered', (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma']));
+      harness.host.notes = [
+        _note('n1', 'block-0', const BlockTextRange(0, 5)),
+        _note('n2', 'block-0', const BlockTextRange(6, 10)),
+      ];
+      await harness.pump(tester);
+      double scaleOf(String id) => tester
+          .widget<AnimatedScale>(find.ancestor(
+            of: find.text('full $id'),
+            matching: find.byType(AnimatedScale),
+          ))
+          .scale;
+      final resting = harness.noteRect(tester, 'n1');
+
+      harness.host.sourceHovered = 'n1';
+      await tester.pump();
+      expect(scaleOf('n1'), greaterThan(1));
+      expect(scaleOf('n2'), 1);
+      expect(harness.noteRect(tester, 'n1'), resting);
+
+      // A pointer on a note outranks the source hover.
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(harness.noteRect(tester, 'n2').center);
+      await tester.pump();
+      expect(scaleOf('n2'), greaterThan(1));
+      expect(scaleOf('n1'), 1);
+
+      await mouse.moveTo(Offset.zero);
+      harness.host.sourceHovered = null;
+      await tester.pump();
+      expect(scaleOf('n1'), 1);
+      expect(scaleOf('n2'), 1);
+    });
+
     testWidgets('a crowded paragraph compacts; expanding one note moves none',
         (tester) async {
       final harness = _Harness(_document(['alpha beta gamma', 'delta', 'eta']));
@@ -752,6 +789,46 @@ void main() {
           isNot(harness.blockFocus['block-0']));
       expect(harness.controller.selection, selection);
       expect(harness.layer.focusNote('missing'), isFalse);
+    });
+
+    testWidgets('a focused note shows a gutter rule, not a box, and grows',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta']));
+      harness.host.notes = [_note('a', 'block-0', const BlockTextRange(0, 5))];
+      await harness.pump(tester);
+      final rule = find.byKey(const ValueKey<String>('homeric-margin-focus-a'));
+      double opacity() => tester
+          .widget<AnimatedOpacity>(
+              find.descendant(of: rule, matching: find.byType(AnimatedOpacity)))
+          .opacity;
+      double scale() => tester
+          .widget<AnimatedScale>(find.ancestor(
+            of: find.text('full a'),
+            matching: find.byType(AnimatedScale),
+          ))
+          .scale;
+      expect(opacity(), 0);
+      expect(scale(), 1);
+
+      expect(harness.layer.focusNote('a'), isTrue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(opacity(), 1);
+      expect(scale(), greaterThan(1));
+      final note = harness.noteRect(tester, 'a');
+      expect(tester.getRect(rule).right, lessThan(note.left),
+          reason: 'the rule sits in the gutter, clear of the text');
+      expect(
+          find.ancestor(
+            of: find.text('full a'),
+            matching: find.byWidgetPredicate((widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).border != null),
+          ),
+          findsNothing,
+          reason: 'no outline box around the note');
     });
 
     testWidgets('a composer takes focus and returns it to the editor',
@@ -1439,6 +1516,13 @@ final class _Host extends ChangeNotifier {
     notifyListeners();
   }
 
+  String? _sourceHovered;
+  String? get sourceHovered => _sourceHovered;
+  set sourceHovered(String? value) {
+    _sourceHovered = value;
+    notifyListeners();
+  }
+
   HomericMarginComposer? _composer;
   HomericMarginComposer? get composer => _composer;
   set composer(HomericMarginComposer? value) {
@@ -1543,6 +1627,7 @@ final class _Harness {
                   noteWidth: _noteWidth,
                   lineHeight: lineHeight,
                   expandedNoteId: host.expanded,
+                  sourceHoveredNoteId: host.sourceHovered,
                   composer: host.composer,
                   onNoteActivated: (id, form) {
                     host.activated.add(id);

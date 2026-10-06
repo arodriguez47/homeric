@@ -528,6 +528,34 @@ void main() {
               'source hover forever');
     });
 
+    testWidgets('expanding a hovered note does not block source hover',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta', 'gamma delta']));
+      harness.host.notes = [
+        _note('n1', 'block-0', const BlockTextRange(0, 5)),
+        _note('n2', 'block-1', const BlockTextRange(0, 5)),
+      ];
+      await harness.pump(tester);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(harness.noteRect(tester, 'n1').center);
+      await tester.pump();
+
+      harness.host.expanded = 'n1';
+      await tester.pump();
+      harness.host.sourceHovered = 'n2';
+      await tester.pump();
+
+      final scale = tester.widget<AnimatedScale>(find.ancestor(
+        of: find.text('full n2'),
+        matching: find.byType(AnimatedScale),
+      ));
+      expect(scale.scale, greaterThan(1),
+          reason: 'MUTATION: the expanded note\'s stale hover outranks the '
+              'source hover');
+    });
+
     testWidgets('a crowded paragraph compacts; expanding one note moves none',
         (tester) async {
       final harness = _Harness(_document(['alpha beta gamma', 'delta', 'eta']));

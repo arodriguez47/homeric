@@ -1337,6 +1337,9 @@ class HomericEditorController extends ChangeNotifier {
         .any((edit) => edit.text.contains('\n') || edit.text.contains('\r'))) {
       return false;
     }
+    // One snapshot for interception and application, so an interceptor
+    // cannot see one batch while the controller applies another.
+    edits = List<CanonicalTextEdit>.unmodifiable(edits);
     if (edits.isNotEmpty) {
       // Interceptors read `edits` as what is about to be applied, so a batch
       // the built-in path would reject never reaches them.
@@ -1359,7 +1362,7 @@ class HomericEditorController extends ChangeNotifier {
         selection: _selection,
         blockId: blockId,
         text: inserts.map((edit) => edit.text).join(),
-        edits: List<CanonicalTextEdit>.unmodifiable(edits),
+        edits: edits,
       ));
       if (interception != null) return interception;
     }

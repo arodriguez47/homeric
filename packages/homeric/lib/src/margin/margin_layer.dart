@@ -365,10 +365,13 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   @override
   void didUpdateWidget(HomericMarginLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A note removed under the pointer gets no guaranteed `onExit`; a stale
-    // hover would outrank every later source hover.
+    // A resting note removed or expanded under the pointer loses its
+    // MouseRegion with no guaranteed `onExit`; a stale hover would outrank
+    // every later source hover.
     final hovered = _hoveredNoteId;
-    if (hovered != null && !widget.notes.any((note) => note.id == hovered)) {
+    if (hovered != null &&
+        (hovered == widget.expandedNoteId ||
+            !widget.notes.any((note) => note.id == hovered))) {
       _hoveredNoteId = null;
     }
     if (oldWidget.expandedNoteId != widget.expandedNoteId) {
@@ -1198,7 +1201,8 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         content,
         Positioned(
           key: ValueKey<String>('homeric-margin-focus-${note.id}'),
-          left: -_focusRuleGap - _focusRuleWidth,
+          // The layer clips at its edge: a narrow gutter pulls the rule in.
+          left: -math.min(_focusRuleGap + _focusRuleWidth, widget.marginLeft),
           top: 2,
           bottom: 2,
           width: _focusRuleWidth,

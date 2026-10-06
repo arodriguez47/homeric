@@ -1338,6 +1338,18 @@ class HomericEditorController extends ChangeNotifier {
       return false;
     }
     if (edits.isNotEmpty) {
+      // Interceptors read `edits` as what is about to be applied, so a batch
+      // the built-in path would reject never reaches them.
+      final index = _document.indexOfBlockId(blockId)!;
+      var length = _document.blocks[index].contentLength;
+      for (final edit in edits) {
+        if (!_validEdit(edit, length)) return false;
+        length += edit.text.length - (edit.end - edit.start);
+      }
+      if (!_validBlockSelection(selection, length) ||
+          (composing != null && !_validBlockRange(composing, length))) {
+        return false;
+      }
       final inserts = edits.where((edit) => edit.text.isNotEmpty).toList();
       final interception = _interceptedResult(HomericEditorCommand(
         kind: inserts.isEmpty

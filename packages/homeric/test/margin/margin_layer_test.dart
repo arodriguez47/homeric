@@ -495,6 +495,39 @@ void main() {
       expect(scaleOf('n2'), 1);
     });
 
+    testWidgets('removing a hovered note does not block source hover',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta', 'gamma delta']));
+      harness.host.notes = [
+        _note('n1', 'block-0', const BlockTextRange(0, 5)),
+        _note('n2', 'block-1', const BlockTextRange(0, 5)),
+      ];
+      await harness.pump(tester);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(harness.noteRect(tester, 'n1').center);
+      await tester.pump();
+
+      final n2 = harness.noteRect(tester, 'n2');
+      harness.host.notes = [
+        _note('n2', 'block-1', const BlockTextRange(0, 5)),
+      ];
+      await tester.pump();
+      expect(harness.noteRect(tester, 'n2'), n2,
+          reason: 'precondition: n2 does not move under the pointer');
+      harness.host.sourceHovered = 'n2';
+      await tester.pump();
+
+      final scale = tester.widget<AnimatedScale>(find.ancestor(
+        of: find.text('full n2'),
+        matching: find.byType(AnimatedScale),
+      ));
+      expect(scale.scale, greaterThan(1),
+          reason: 'MUTATION: a stale hover on the removed note outranks the '
+              'source hover forever');
+    });
+
     testWidgets('a crowded paragraph compacts; expanding one note moves none',
         (tester) async {
       final harness = _Harness(_document(['alpha beta gamma', 'delta', 'eta']));

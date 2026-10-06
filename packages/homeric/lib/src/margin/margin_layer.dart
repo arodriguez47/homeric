@@ -365,6 +365,12 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
   @override
   void didUpdateWidget(HomericMarginLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // A note removed under the pointer gets no guaranteed `onExit`; a stale
+    // hover would outrank every later source hover.
+    final hovered = _hoveredNoteId;
+    if (hovered != null && !widget.notes.any((note) => note.id == hovered)) {
+      _hoveredNoteId = null;
+    }
     if (oldWidget.expandedNoteId != widget.expandedNoteId) {
       _expansionChanged(oldWidget.expandedNoteId);
     }

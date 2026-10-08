@@ -34,11 +34,13 @@ export 'src/input/macos_history_bridge.dart';
 export 'src/input/text_input_session.dart';
 export 'src/model/attributes.dart';
 export 'src/model/block.dart';
+export 'src/model/block_attributes.dart';
 export 'src/model/document.dart';
 export 'src/model/document_codec.dart';
 export 'src/model/inline_run.dart';
 export 'src/model/position.dart';
 export 'src/model/selection.dart';
+export 'src/editing/mirror_render_hook.dart';
 export 'src/render/homeric_paragraph.dart'
     hide HomericParagraphLayoutCache, HomericParagraphLayoutCacheScope;
 export 'src/render/paint_layers.dart';

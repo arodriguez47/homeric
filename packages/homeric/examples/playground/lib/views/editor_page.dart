@@ -94,25 +94,14 @@ class _EditorPageState extends State<EditorPage> {
             onToggleDark: () => setState(() => _darkText = !_darkText),
             onFontSizeChanged: (value) => setState(() => _fontSize = value),
           ),
-          _HostBatchBar(
-            pastePolicy: _pastePolicy,
-            onPastePolicyChanged: (value) =>
-                setState(() => _pastePolicy = value),
-            onDemoMultiPaste: _demoMultiParagraphPaste,
-            attributeStyles: _attributeStyles,
-            onAttributeStylesChanged: (value) =>
-                setState(() => _attributeStyles = value),
-            onDemoAttributeStyles: _demoAttributeStyles,
-            blockGrabberWidth: _blockGrabberWidth,
-            onBlockGrabberWidthChanged: (value) =>
-                setState(() => _blockGrabberWidth = value),
-            markdownShortcuts: _markdownShortcuts,
-            onMarkdownShortcutsChanged: _setMarkdownShortcuts,
-            compact: _compact,
-            onCompactChanged: (value) => setState(() {
-              _compact = value;
-              if (value) _blockGrabberWidth = 0;
-            }),
+          // Single-line affordance — demos open in a dialog so the default
+          // viewport height (and mounted paragraph count) stays unchanged.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _openHostBatchDialog,
+              child: const Text('Host batch demos…'),
+            ),
           ),
           const Divider(height: 1),
           Expanded(
@@ -198,6 +187,64 @@ class _EditorPageState extends State<EditorPage> {
     controller.setSelection(HomericSelection.collapsed(caret));
     controller.replaceSelectionStructurally(
       'First pasted paragraph\nSecond pasted paragraph\nThird pasted paragraph',
+    );
+  }
+
+  Future<void> _openHostBatchDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void apply(VoidCallback update) {
+              setState(update);
+              setDialogState(() {});
+            }
+
+            return AlertDialog(
+              title: const Text('Host batch demos'),
+              content: SizedBox(
+                width: 420,
+                child: _HostBatchBar(
+                  pastePolicy: _pastePolicy,
+                  onPastePolicyChanged: (value) =>
+                      apply(() => _pastePolicy = value),
+                  onDemoMultiPaste: () {
+                    Navigator.of(dialogContext).pop();
+                    _demoMultiParagraphPaste();
+                  },
+                  attributeStyles: _attributeStyles,
+                  onAttributeStylesChanged: (value) =>
+                      apply(() => _attributeStyles = value),
+                  onDemoAttributeStyles: () {
+                    Navigator.of(dialogContext).pop();
+                    _demoAttributeStyles();
+                  },
+                  blockGrabberWidth: _blockGrabberWidth,
+                  onBlockGrabberWidthChanged: (value) =>
+                      apply(() => _blockGrabberWidth = value),
+                  markdownShortcuts: _markdownShortcuts,
+                  onMarkdownShortcutsChanged: (value) {
+                    _setMarkdownShortcuts(value);
+                    setDialogState(() {});
+                  },
+                  compact: _compact,
+                  onCompactChanged: (value) => apply(() {
+                    _compact = value;
+                    if (value) _blockGrabberWidth = 0;
+                  }),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

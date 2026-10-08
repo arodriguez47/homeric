@@ -19,6 +19,7 @@ export 'src/editing/editor_clipboard.dart'
         HomericClipboardFailure,
         HomericClipboardOperation,
         HomericHostEvent,
+        HomericPastePolicy,
         HomericPasteRejected,
         SystemHomericClipboard;
 export 'src/editing/editable_paragraph.dart';

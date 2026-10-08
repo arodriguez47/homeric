@@ -51,6 +51,20 @@ final class HomericPasteRejected extends HomericHostEvent {
   const HomericPasteRejected();
 }
 
+/// Controls whether a clipboard paste may expand into multiple blocks.
+///
+/// The default ([expandBlocks]) matches Homeric's historical structural paste
+/// path: newline-separated segments become sibling blocks. Hosts that want to
+/// keep a single-block paste surface can opt into [singleBlock], which emits
+/// [HomericPasteRejected] when the clipboard text would create extra blocks.
+enum HomericPastePolicy {
+  /// Split newline-separated paste into sibling blocks (default).
+  expandBlocks,
+
+  /// Reject pastes whose text contains a line separator.
+  singleBlock,
+}
+
 /// Coordinates stale-safe clipboard work for one mounted editor host.
 ///
 /// Every operation captures the controller state and a monotonically newer
@@ -65,6 +79,7 @@ final class HomericEditorClipboard {
     required this.adapter,
     required this.isHostCurrent,
     this.onEvent,
+    this.pastePolicy = HomericPastePolicy.expandBlocks,
   });
 
   final HomericEditorController controller;
@@ -72,6 +87,9 @@ final class HomericEditorClipboard {
   final HomericClipboardAdapter adapter;
   final bool Function() isHostCurrent;
   final void Function(HomericHostEvent event)? onEvent;
+
+  /// Paste expansion policy. Defaults to [HomericPastePolicy.expandBlocks].
+  final HomericPastePolicy pastePolicy;
 
   int _generation = 0;
   bool _disposed = false;
@@ -112,10 +130,20 @@ final class HomericEditorClipboard {
       return;
     }
     if (!_isCurrent(witness) || text == null || text.isEmpty) return;
+    if (pastePolicy == HomericPastePolicy.singleBlock &&
+        _containsLineSeparator(text)) {
+      if (_isCurrent(witness)) {
+        onEvent?.call(const HomericPasteRejected());
+      }
+      return;
+    }
     if (!controller.replaceSelectionStructurally(text) && _isCurrent(witness)) {
       onEvent?.call(const HomericPasteRejected());
     }
   }
+
+  static bool _containsLineSeparator(String text) =>
+      text.contains('\n') || text.contains('\r');
 
   _ClipboardWitness? _capture({required bool requireExpandedSelection}) {
     final selection = controller.selection;

@@ -57,6 +57,7 @@ class EditorPage extends StatefulWidget {
 class _EditorPageState extends State<EditorPage> {
   bool _darkText = false;
   double _fontSize = 18;
+  HomericPastePolicy _pastePolicy = HomericPastePolicy.expandBlocks;
   final GlobalKey<HomericEditableDocumentState> _ownDocumentKey =
       GlobalKey<HomericEditableDocumentState>();
 
@@ -82,6 +83,12 @@ class _EditorPageState extends State<EditorPage> {
             onToggleDark: () => setState(() => _darkText = !_darkText),
             onFontSizeChanged: (value) => setState(() => _fontSize = value),
           ),
+          _HostBatchBar(
+            pastePolicy: _pastePolicy,
+            onPastePolicyChanged: (value) =>
+                setState(() => _pastePolicy = value),
+            onDemoMultiPaste: _demoMultiParagraphPaste,
+          ),
           const Divider(height: 1),
           Expanded(
             child: _MarginDemo(
@@ -96,7 +103,7 @@ class _EditorPageState extends State<EditorPage> {
                 padding: const EdgeInsets.all(16),
                 cacheExtent: widget.cacheExtent,
                 estimatedBlockHeight: 54,
-                layoutRevision: (_darkText, _fontSize),
+                layoutRevision: (_darkText, _fontSize, _pastePolicy),
                 touchSelectionConfiguration:
                     const HomericTouchSelectionConfiguration.adaptive(),
                 blockBuilder: (context, block, focusNode) => Padding(
@@ -107,6 +114,7 @@ class _EditorPageState extends State<EditorPage> {
                     block: block,
                     focusNode: focusNode,
                     baseStyle: _baseStyle,
+                    pastePolicy: _pastePolicy,
                   ),
                 ),
               ),
@@ -114,6 +122,18 @@ class _EditorPageState extends State<EditorPage> {
           ),
         ],
       ),
+    );
+  }
+
+  void _demoMultiParagraphPaste() {
+    final controller = widget.viewModel.editorController;
+    final document = controller.document;
+    if (document.isEmpty) return;
+    final first = document.blocks.first;
+    final caret = document.positionAt(0, first.contentLength);
+    controller.setSelection(HomericSelection.collapsed(caret));
+    controller.replaceSelectionStructurally(
+      'First pasted paragraph\nSecond pasted paragraph\nThird pasted paragraph',
     );
   }
 }
@@ -416,6 +436,53 @@ class _ThemeBar extends StatelessWidget {
   }
 }
 
+/// Host-facing batch demos (paste policy and later opt-ins).
+class _HostBatchBar extends StatelessWidget {
+  const _HostBatchBar({
+    required this.pastePolicy,
+    required this.onPastePolicyChanged,
+    required this.onDemoMultiPaste,
+  });
+
+  final HomericPastePolicy pastePolicy;
+  final ValueChanged<HomericPastePolicy> onPastePolicyChanged;
+  final VoidCallback onDemoMultiPaste;
+
+  @override
+  Widget build(BuildContext context) {
+    final expand = pastePolicy == HomericPastePolicy.expandBlocks;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 4,
+        children: [
+          const Text('Host batch:'),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Expand multi-paste'),
+              Switch(
+                value: expand,
+                onChanged: (value) => onPastePolicyChanged(
+                  value
+                      ? HomericPastePolicy.expandBlocks
+                      : HomericPastePolicy.singleBlock,
+                ),
+              ),
+            ],
+          ),
+          TextButton(
+            onPressed: onDemoMultiPaste,
+            child: const Text('Demo multi-paragraph paste'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// One block's public editable host with per-block paint derivation.
 class _BlockView extends StatelessWidget {
   const _BlockView({
@@ -424,12 +491,14 @@ class _BlockView extends StatelessWidget {
     required this.block,
     required this.focusNode,
     required this.baseStyle,
+    required this.pastePolicy,
   });
 
   final DocumentViewModel viewModel;
   final Block block;
   final FocusNode focusNode;
   final TextStyle baseStyle;
+  final HomericPastePolicy pastePolicy;
 
   @override
   Widget build(BuildContext context) {
@@ -449,14 +518,21 @@ class _BlockView extends StatelessWidget {
       inactiveSelectionColor: const Color(0x224F64C8),
       composingColor: const Color(0xFF7E57C2),
       spellCheckProvider: const _PlaygroundSpellCheckProvider(),
-      onHostEvent: (event) => _showHostEvent(context, event),
+      pastePolicy: pastePolicy,
+      onHostEvent: (event) => _showHostEvent(context, event, pastePolicy),
     );
   }
 }
 
-void _showHostEvent(BuildContext context, HomericHostEvent event) {
+void _showHostEvent(
+  BuildContext context,
+  HomericHostEvent event,
+  HomericPastePolicy pastePolicy,
+) {
   final message = switch (event) {
-    HomericPasteRejected() => 'Paste supports one paragraph at a time.',
+    HomericPasteRejected() => pastePolicy == HomericPastePolicy.singleBlock
+        ? 'Paste rejected: single-block policy (multi-paragraph paste disabled).'
+        : 'Paste rejected by the editor.',
     HomericClipboardFailure(operation: final operation) =>
       '${switch (operation) {
         HomericClipboardOperation.copy => 'Copy',

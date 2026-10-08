@@ -20,6 +20,7 @@ import '../transform/mapping.dart';
 import '../transform/replace_step.dart';
 import '../transform/step_map.dart' show Mappable, MapResult;
 import '../transform/transaction.dart';
+import '../model/document_codec.dart';
 import 'markdown_list_indent.dart';
 import 'selection_snapshot.dart';
 
@@ -706,6 +707,26 @@ class HomericEditorController extends ChangeNotifier {
     if (current == null) return null;
     return _buildSelectionSnapshot(_document, current);
   }
+
+  /// Synchronous plain-text projection of the current document.
+  ///
+  /// Blocks are joined with `\n`. Safe to call from [dispose] / route pop —
+  /// reflects the last committed keystroke without waiting on a listener
+  /// tick. Remains readable after disposal.
+  String get plainTextSnapshot =>
+      _document.blocks.map((block) => block.text).join('\n');
+
+  /// Synchronous Homeric JSON v:1 encoding of the current document.
+  ///
+  /// Safe to call from [dispose] / route pop. Remains readable after
+  /// disposal so hosts can drop debounce buffers (e.g. sprintnotes'
+  /// ~350ms `onDocumentChanged` + `touchRevision` pending flush).
+  Map<String, Object?> encodeSnapshot() =>
+      HomericDocumentCodec.encode(_document);
+
+  /// Synchronous JSON string form of [encodeSnapshot].
+  String encodeJsonSnapshot({bool indent = false}) =>
+      HomericDocumentCodec.encodeJson(_document, indent: indent);
 
   /// Most recent typed command rejection, cleared by the next dispatch.
   HomericCommandRejected? get lastCommandRejection => _lastCommandRejection;

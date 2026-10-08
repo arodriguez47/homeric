@@ -53,12 +53,15 @@ final class HomericPasteRejected extends HomericHostEvent {
 
 /// Controls whether a clipboard paste may expand into multiple blocks.
 ///
-/// The default ([expandBlocks]) matches Homeric's historical structural paste
-/// path: newline-separated segments become sibling blocks. Hosts that want to
-/// keep a single-block paste surface can opt into [singleBlock], which emits
-/// [HomericPasteRejected] when the clipboard text would create extra blocks.
+/// Verified at pin `fe2089b1` and on this branch: the public clipboard path
+/// (`HomericEditorClipboard.paste` → `replaceSelectionStructurally`) already
+/// expands `'A\n\nB'` mid-document. [HomericPasteRejected] fires only when
+/// that call returns false (read-only, composition open, mutation policy,
+/// invalid selection, or a failed structural step) — not because the text is
+/// multi-paragraph. [expandBlocks] documents that default. [singleBlock] is
+/// an opt-in for hosts that want a single-block paste surface.
 enum HomericPastePolicy {
-  /// Split newline-separated paste into sibling blocks (default).
+  /// Split newline-separated paste into sibling blocks (default; pin behavior).
   expandBlocks,
 
   /// Reject pastes whose text contains a line separator.

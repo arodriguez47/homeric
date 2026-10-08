@@ -180,11 +180,42 @@ class _EditorPageState extends State<EditorPage> {
 
   void _demoMultiParagraphPaste() {
     final controller = widget.viewModel.editorController;
-    final document = controller.document;
-    if (document.isEmpty) return;
-    final first = document.blocks.first;
-    final caret = document.positionAt(0, first.contentLength);
-    controller.setSelection(HomericSelection.collapsed(caret));
+    // Paste into a dedicated empty paragraph so fragments are not glued onto
+    // the title block (honest before/after for the host-batch demo).
+    final empty = Block(
+      id: 'paste-demo',
+      type: 'paragraph',
+      runs: [InlineRun('')],
+    );
+    final withoutPrior = controller.document.blocks
+        .where((block) => block.id != 'paste-demo')
+        .toList();
+    final next = Document([...withoutPrior, empty]);
+    final tx = Transaction(controller.document);
+    tx.step(ReplaceStep(
+      0,
+      controller.document.size,
+      Slice(next.blocks),
+    ));
+    if (!controller.applyTransaction(tx)) return;
+    final index = controller.document.indexOfBlockId('paste-demo');
+    if (index == null) return;
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(index, 0)),
+    );
+    if (_pastePolicy == HomericPastePolicy.singleBlock) {
+      // Surface HomericPasteRejected the same way a real paste would.
+      ScaffoldMessenger.of(context)
+        ..removeCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Paste rejected: single-block policy (multi-paragraph paste disabled).',
+            ),
+          ),
+        );
+      return;
+    }
     controller.replaceSelectionStructurally(
       'First pasted paragraph\nSecond pasted paragraph\nThird pasted paragraph',
     );

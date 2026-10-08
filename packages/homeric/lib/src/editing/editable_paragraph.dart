@@ -324,9 +324,9 @@ class HomericEditableParagraph extends StatefulWidget {
 
   /// Whether paste may expand into multiple blocks.
   ///
-  /// Defaults to [HomericPastePolicy.expandBlocks] (unchanged historical
-  /// behavior). Set [HomericPastePolicy.singleBlock] to reject multi-line
-  /// pastes with [HomericPasteRejected].
+  /// Defaults to [HomericPastePolicy.expandBlocks] (pin `fe2089b1` behavior).
+  /// Set [HomericPastePolicy.singleBlock] to reject multi-line pastes with
+  /// [HomericPasteRejected].
   final HomericPastePolicy pastePolicy;
 
   /// Receives typed clipboard rejection and failure feedback.

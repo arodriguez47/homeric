@@ -32,8 +32,7 @@ import 'inline_run.dart';
 /// when swapping to this codec.
 final class HomericDocumentCodecException extends FormatException {
   /// Creates an exception describing a codec failure.
-  HomericDocumentCodecException(String message, [dynamic source, int? offset])
-      : super(message, source, offset);
+  HomericDocumentCodecException(super.message, [super.source, super.offset]);
 
   @override
   String toString() => 'HomericDocumentCodecException: $message';

@@ -60,11 +60,19 @@ class _EditorPageState extends State<EditorPage> {
   HomericPastePolicy _pastePolicy = HomericPastePolicy.expandBlocks;
   bool _attributeStyles = false;
   double _blockGrabberWidth = kHomericBlockGrabberWidth;
+  bool _markdownShortcuts = false;
+  VoidCallback? _uninstallMarkdownShortcuts;
   final GlobalKey<HomericEditableDocumentState> _ownDocumentKey =
       GlobalKey<HomericEditableDocumentState>();
 
   GlobalKey<HomericEditableDocumentState> get _documentKey =>
       widget.documentKey ?? _ownDocumentKey;
+
+  @override
+  void dispose() {
+    _uninstallMarkdownShortcuts?.call();
+    super.dispose();
+  }
 
   TextStyle get _baseStyle => TextStyle(
         fontSize: _fontSize,
@@ -97,6 +105,8 @@ class _EditorPageState extends State<EditorPage> {
             blockGrabberWidth: _blockGrabberWidth,
             onBlockGrabberWidthChanged: (value) =>
                 setState(() => _blockGrabberWidth = value),
+            markdownShortcuts: _markdownShortcuts,
+            onMarkdownShortcutsChanged: _setMarkdownShortcuts,
           ),
           const Divider(height: 1),
           Expanded(
@@ -152,6 +162,18 @@ class _EditorPageState extends State<EditorPage> {
     controller.replaceSelectionStructurally(
       'First pasted paragraph\nSecond pasted paragraph\nThird pasted paragraph',
     );
+  }
+
+  void _setMarkdownShortcuts(bool enabled) {
+    _uninstallMarkdownShortcuts?.call();
+    _uninstallMarkdownShortcuts = null;
+    if (enabled) {
+      _uninstallMarkdownShortcuts = const HomericMarkdownShortcutPolicy()
+          .installOn(widget.viewModel.editorController);
+      // Shortcuts write run attributes — paint them with the stock sheet.
+      _attributeStyles = true;
+    }
+    setState(() => _markdownShortcuts = enabled);
   }
 
   void _demoAttributeStyles() {
@@ -490,6 +512,8 @@ class _HostBatchBar extends StatelessWidget {
     required this.onDemoAttributeStyles,
     required this.blockGrabberWidth,
     required this.onBlockGrabberWidthChanged,
+    required this.markdownShortcuts,
+    required this.onMarkdownShortcutsChanged,
   });
 
   final HomericPastePolicy pastePolicy;
@@ -500,6 +524,8 @@ class _HostBatchBar extends StatelessWidget {
   final VoidCallback onDemoAttributeStyles;
   final double blockGrabberWidth;
   final ValueChanged<double> onBlockGrabberWidthChanged;
+  final bool markdownShortcuts;
+  final ValueChanged<bool> onMarkdownShortcutsChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -554,6 +580,16 @@ class _HostBatchBar extends StatelessWidget {
                 onChanged: (value) => onBlockGrabberWidthChanged(
                   value ? kHomericBlockGrabberWidth : 0,
                 ),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Markdown shortcuts'),
+              Switch(
+                value: markdownShortcuts,
+                onChanged: onMarkdownShortcutsChanged,
               ),
             ],
           ),

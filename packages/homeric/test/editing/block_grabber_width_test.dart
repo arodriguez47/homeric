@@ -3,7 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
 void main() {
-  testWidgets('default blockGrabberWidth remains 44', (tester) async {
+  testWidgets('default blockGrabberWidth remains 44 with drag listener',
+      (tester) async {
     final controller = HomericEditorController(
       document: Document([
         Block(id: 'a', type: 'paragraph', runs: [InlineRun('one')]),
@@ -46,9 +47,11 @@ void main() {
     expect(document.blockGrabberWidth, 44);
     expect(find.text('⋮'), findsWidgets);
     expect(find.bySemanticsLabel(RegExp(r'Move block')), findsWidgets);
+    expect(find.byType(ReorderableDragStartListener), findsWidgets);
   });
 
-  testWidgets('blockGrabberWidth 0 collapses column and skips semantics',
+  testWidgets(
+      'blockGrabberWidth 0 collapses column, skips drag listener and move semantics',
       (tester) async {
     final controller = HomericEditorController(
       document: Document([
@@ -85,5 +88,6 @@ void main() {
 
     expect(find.text('⋮'), findsNothing);
     expect(find.bySemanticsLabel(RegExp(r'Move block')), findsNothing);
+    expect(find.byType(ReorderableDragStartListener), findsNothing);
   });
 }

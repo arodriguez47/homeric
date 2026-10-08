@@ -292,7 +292,8 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   void _demoAttributeStyles() {
-    setState(() => _attributeStyles = true);
+    // Do not force styles on — the Attribute styles switch is the only
+    // paint toggle so before/after shots stay honest.
     final controller = widget.viewModel.editorController;
     final demo = Block(
       id: 'attr-demo',

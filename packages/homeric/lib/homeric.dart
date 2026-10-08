@@ -12,6 +12,8 @@ export 'src/editing/attribute_style_sheet.dart';
 export 'src/editing/editor_controller.dart';
 export 'src/editing/editable_document.dart'
     hide homericPhysicalSelectionEndpoint;
+export 'src/editing/selection_snapshot.dart';
+
 export 'src/editing/spell_check.dart'
     show HomericSpellCheckProvider, HomericSpellCheckRequest;
 export 'src/editing/editor_clipboard.dart'

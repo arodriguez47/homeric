@@ -21,6 +21,7 @@ import '../transform/replace_step.dart';
 import '../transform/step_map.dart' show Mappable, MapResult;
 import '../transform/transaction.dart';
 import 'markdown_list_indent.dart';
+import 'selection_snapshot.dart';
 
 /// Identifies the canonical command that produced a committed document change.
 enum HomericCommitOrigin {
@@ -619,6 +620,9 @@ class HomericEditorController extends ChangeNotifier {
   final List<_HistoryEntry> _redoStack = <_HistoryEntry>[];
   final StreamController<HomericCommittedChange> _committedChanges =
       StreamController<HomericCommittedChange>.broadcast(sync: true);
+  final StreamController<HomericSelectionSnapshot?> _selectionChanges =
+      StreamController<HomericSelectionSnapshot?>.broadcast(sync: true);
+  HomericSelectionSnapshot? _lastEmittedSelectionSnapshot;
   final List<HomericCommandInterceptor> _commandInterceptors =
       <HomericCommandInterceptor>[];
   _EditorSnapshot? _compositionStart;
@@ -684,6 +688,24 @@ class HomericEditorController extends ChangeNotifier {
   /// callback are rejected; schedule follow-up mutations after publication.
   Stream<HomericCommittedChange> get committedChanges =>
       _committedChanges.stream;
+
+  /// Synchronous selection-snapshot events for host promote-to-note flows.
+  ///
+  /// Emits whenever [selectionSnapshot] changes identity (including to
+  /// `null` when selection is cleared). Delivered synchronously; mutations
+  /// from a callback are rejected like [committedChanges].
+  Stream<HomericSelectionSnapshot?> get selectionChanges =>
+      _selectionChanges.stream;
+
+  /// Current selection as plain text plus per-block spans, or `null` when
+  /// there is no active selection.
+  ///
+  /// Safe to read after [dispose] — the last known selection is retained.
+  HomericSelectionSnapshot? get selectionSnapshot {
+    final current = _selection;
+    if (current == null) return null;
+    return _buildSelectionSnapshot(_document, current);
+  }
 
   /// Most recent typed command rejection, cleared by the next dispatch.
   HomericCommandRejected? get lastCommandRejection => _lastCommandRejection;
@@ -2116,6 +2138,7 @@ class HomericEditorController extends ChangeNotifier {
           origin: committedOrigin,
         ));
       }
+      _publishSelectionSnapshot();
       if (!_disposePending) notifyListeners();
     } finally {
       _notifyingTransition = false;
@@ -2124,6 +2147,57 @@ class HomericEditorController extends ChangeNotifier {
         super.dispose();
       }
     }
+  }
+
+  void _publishSelectionSnapshot() {
+    if (_selectionChanges.isClosed) return;
+    final next = selectionSnapshot;
+    if (next == _lastEmittedSelectionSnapshot) return;
+    _lastEmittedSelectionSnapshot = next;
+    _selectionChanges.add(next);
+  }
+
+  static HomericSelectionSnapshot _buildSelectionSnapshot(
+    Document document,
+    HomericSelection selection,
+  ) {
+    if (selection.isCollapsed) {
+      return HomericSelectionSnapshot(
+        plainText: '',
+        spans: const <HomericBlockSpan>[],
+        selection: selection,
+      );
+    }
+    final start = document.resolve(selection.start);
+    final end = document.resolve(selection.end);
+    if (start is! InlinePosition || end is! InlinePosition) {
+      return HomericSelectionSnapshot(
+        plainText: '',
+        spans: const <HomericBlockSpan>[],
+        selection: selection,
+      );
+    }
+    final spans = <HomericBlockSpan>[];
+    final slices = <String>[];
+    for (var index = start.blockIndex; index <= end.blockIndex; index++) {
+      final block = document.blocks[index];
+      final localStart = index == start.blockIndex ? start.offset : 0;
+      final localEnd =
+          index == end.blockIndex ? end.offset : block.contentLength;
+      spans.add(HomericBlockSpan(
+        blockId: block.id,
+        start: localStart,
+        end: localEnd,
+      ));
+      slices.add(
+        localStart < localEnd ? block.text.substring(localStart, localEnd) : '',
+      );
+    }
+    return HomericSelectionSnapshot(
+      plainText: slices.join('\n'),
+      spans: List<HomericBlockSpan>.unmodifiable(spans),
+      selection: selection,
+    );
   }
 
   static bool _canonicalTextDiffers(Document before, Document after) {
@@ -2189,6 +2263,7 @@ class HomericEditorController extends ChangeNotifier {
     _disposePending = false;
     _finishComposition(notify: false);
     _committedChanges.close();
+    _selectionChanges.close();
   }
 
   static bool _validEdit(CanonicalTextEdit edit, int length) =>

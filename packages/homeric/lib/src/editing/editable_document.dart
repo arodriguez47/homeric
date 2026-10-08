@@ -46,6 +46,9 @@ typedef HomericEditableBlockBuilder = Widget Function(
 /// remains fully visible for products that want an explicit affordance;
 /// setting [idleOpacity] to zero creates a hover-only desktop handle without
 /// changing drag or accessibility behavior.
+/// Default logical width of the block reorder grabber column.
+const double kHomericBlockGrabberWidth = 44;
+
 final class HomericBlockGrabberStyle {
   const HomericBlockGrabberStyle({
     this.idleOpacity = 1,
@@ -614,6 +617,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.selectionMenuItemsBuilder,
   })  : blockBuilder = null,
         blockGrabberStyle = const HomericBlockGrabberStyle(),
+        blockGrabberWidth = kHomericBlockGrabberWidth,
         blockGrabberCenterY = null,
         scrollController = null,
         padding = EdgeInsets.zero,
@@ -629,6 +633,7 @@ class HomericEditableDocument extends StatefulWidget {
     required this.inputSession,
     required this.blockBuilder,
     this.blockGrabberCenterY,
+    this.blockGrabberWidth = kHomericBlockGrabberWidth,
     this.scrollController,
     this.padding = EdgeInsets.zero,
     this.scrollPadding,
@@ -646,6 +651,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.selectionMenuItemsBuilder,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
+        assert(blockGrabberWidth >= 0),
         child = null;
 
   final HomericEditorController controller;
@@ -689,13 +695,21 @@ class HomericEditableDocument extends StatefulWidget {
   /// Presentation applied to every document edge grabber.
   final HomericBlockGrabberStyle blockGrabberStyle;
 
+  /// Logical width of the reorder grabber column.
+  ///
+  /// Defaults to [kHomericBlockGrabberWidth] (`44`). Set to `0` to collapse
+  /// the column entirely: the drag listener, grabber semantics, and layout
+  /// slot are skipped. Non-zero widths keep a square hit target of that size.
+  final double blockGrabberWidth;
+
   /// Resolves the grabber's visual center, in logical pixels from the row top.
   ///
-  /// Defaults to 22. The result must be finite and nonnegative. The drag
-  /// target remains 44 by 44 pixels; centers below 22 move only the glyph.
-  /// Keep this callback stable across builds to retain cached row heights.
-  /// When its captured layout state changes, update [layoutRevision] even if
-  /// the callback itself is unchanged.
+  /// Defaults to half of [blockGrabberWidth] (22 when width is 44). The result
+  /// must be finite and nonnegative. The drag target is
+  /// [blockGrabberWidth] × [blockGrabberWidth]; centers below half-width move
+  /// only the glyph. Keep this callback stable across builds to retain cached
+  /// row heights. When its captured layout state changes, update
+  /// [layoutRevision] even if the callback itself is unchanged.
   final double Function(BuildContext context, Block block)? blockGrabberCenterY;
 
   /// Touch-selection policy shared by every mounted paragraph.
@@ -2793,6 +2807,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                     _layoutWidth,
                     widget.layoutRevision,
                     widget.blockGrabberCenterY,
+                    widget.blockGrabberWidth,
                   ),
                 );
                 return _DocumentBlockRow(
@@ -2810,6 +2825,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                           widget.inputSession.activeBlockId == block.id),
                   canReorder: () => canReorderBlock(block.id),
                   grabberStyle: widget.blockGrabberStyle,
+                  grabberWidth: widget.blockGrabberWidth,
                   grabberCenterY: widget.blockGrabberCenterY,
                   onMove: (delta) => moveBlockBy(block.id, delta),
                   onHeight: _recordHeight,
@@ -2980,6 +2996,7 @@ class _DocumentBlockRow extends StatefulWidget {
     required this.keepAlive,
     required this.canReorder,
     required this.grabberStyle,
+    required this.grabberWidth,
     required this.grabberCenterY,
     required this.onMove,
     required this.onHeight,
@@ -2998,6 +3015,7 @@ class _DocumentBlockRow extends StatefulWidget {
   final ValueGetter<bool> keepAlive;
   final ValueGetter<bool> canReorder;
   final HomericBlockGrabberStyle grabberStyle;
+  final double grabberWidth;
   final double Function(BuildContext context, Block block)? grabberCenterY;
   final ValueChanged<int> onMove;
   final void Function(BlockHeightWitness witness, double height) onHeight;
@@ -3095,10 +3113,32 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final grabberWidth = widget.grabberWidth;
+    final content = CompositedTransformTarget(
+      key: _contentKey,
+      link: layerLink,
+      child: HomericParagraphLayoutCacheScope(
+        cache: widget.paragraphLayoutCache,
+        cacheKey: widget.block.id,
+        child: widget.builder(context, widget.block, _focusNode),
+      ),
+    );
+    if (grabberWidth <= 0) {
+      // Collapsed column: no layout slot, drag listener, or move semantics.
+      return _MeasureNaturalHeight(
+        witness: widget.witness,
+        onHeight: widget.onHeight,
+        onLayoutChanged: widget.onLayoutChanged,
+        child: content,
+      );
+    }
+
     final inheritedColor =
         DefaultTextStyle.of(context).style.color ?? const Color(0xFF000000);
     final canReorder = widget.canReorder();
-    final centerY = widget.grabberCenterY?.call(context, widget.block) ?? 22;
+    final halfWidth = grabberWidth / 2;
+    final centerY =
+        widget.grabberCenterY?.call(context, widget.block) ?? halfWidth;
     assert(centerY.isFinite && centerY >= 0,
         'The block grabber center must be finite and nonnegative.');
     final hoverChangesOpacity =
@@ -3153,7 +3193,9 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
               'Move block, block ${widget.index + 1} of ${widget.totalCount}',
           customSemanticsActions: actions,
           child: Padding(
-            padding: EdgeInsets.only(top: centerY > 22 ? centerY - 22 : 0),
+            padding: EdgeInsets.only(
+              top: centerY > halfWidth ? centerY - halfWidth : 0,
+            ),
             child: ReorderableDragStartListener(
               index: widget.index,
               enabled: canReorder,
@@ -3161,11 +3203,14 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
                 cursor:
                     canReorder ? SystemMouseCursors.grab : MouseCursor.defer,
                 child: SizedBox(
-                  width: 44,
-                  height: 44,
+                  width: grabberWidth,
+                  height: grabberWidth,
                   child: Center(
                     child: Transform.translate(
-                      offset: Offset(0, centerY < 22 ? centerY - 22 : 0),
+                      offset: Offset(
+                        0,
+                        centerY < halfWidth ? centerY - halfWidth : 0,
+                      ),
                       child: grabber,
                     ),
                   ),
@@ -3174,17 +3219,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
             ),
           ),
         ),
-        Expanded(
-          child: CompositedTransformTarget(
-            key: _contentKey,
-            link: layerLink,
-            child: HomericParagraphLayoutCacheScope(
-              cache: widget.paragraphLayoutCache,
-              cacheKey: widget.block.id,
-              child: widget.builder(context, widget.block, _focusNode),
-            ),
-          ),
-        ),
+        Expanded(child: content),
       ],
     );
     return _MeasureNaturalHeight(

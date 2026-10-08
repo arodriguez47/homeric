@@ -59,6 +59,7 @@ class _EditorPageState extends State<EditorPage> {
   double _fontSize = 18;
   HomericPastePolicy _pastePolicy = HomericPastePolicy.expandBlocks;
   bool _attributeStyles = false;
+  double _blockGrabberWidth = kHomericBlockGrabberWidth;
   final GlobalKey<HomericEditableDocumentState> _ownDocumentKey =
       GlobalKey<HomericEditableDocumentState>();
 
@@ -93,6 +94,9 @@ class _EditorPageState extends State<EditorPage> {
             onAttributeStylesChanged: (value) =>
                 setState(() => _attributeStyles = value),
             onDemoAttributeStyles: _demoAttributeStyles,
+            blockGrabberWidth: _blockGrabberWidth,
+            onBlockGrabberWidthChanged: (value) =>
+                setState(() => _blockGrabberWidth = value),
           ),
           const Divider(height: 1),
           Expanded(
@@ -108,11 +112,13 @@ class _EditorPageState extends State<EditorPage> {
                 padding: const EdgeInsets.all(16),
                 cacheExtent: widget.cacheExtent,
                 estimatedBlockHeight: 54,
+                blockGrabberWidth: _blockGrabberWidth,
                 layoutRevision: (
                   _darkText,
                   _fontSize,
                   _pastePolicy,
                   _attributeStyles,
+                  _blockGrabberWidth,
                 ),
                 touchSelectionConfiguration:
                     const HomericTouchSelectionConfiguration.adaptive(),
@@ -482,6 +488,8 @@ class _HostBatchBar extends StatelessWidget {
     required this.attributeStyles,
     required this.onAttributeStylesChanged,
     required this.onDemoAttributeStyles,
+    required this.blockGrabberWidth,
+    required this.onBlockGrabberWidthChanged,
   });
 
   final HomericPastePolicy pastePolicy;
@@ -490,10 +498,13 @@ class _HostBatchBar extends StatelessWidget {
   final bool attributeStyles;
   final ValueChanged<bool> onAttributeStylesChanged;
   final VoidCallback onDemoAttributeStyles;
+  final double blockGrabberWidth;
+  final ValueChanged<double> onBlockGrabberWidthChanged;
 
   @override
   Widget build(BuildContext context) {
     final expand = pastePolicy == HomericPastePolicy.expandBlocks;
+    final grabberVisible = blockGrabberWidth > 0;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Wrap(
@@ -533,6 +544,18 @@ class _HostBatchBar extends StatelessWidget {
           TextButton(
             onPressed: onDemoAttributeStyles,
             child: const Text('Demo bold/italic/code'),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(grabberVisible ? 'Grabber 44' : 'Grabber collapsed'),
+              Switch(
+                value: grabberVisible,
+                onChanged: (value) => onBlockGrabberWidthChanged(
+                  value ? kHomericBlockGrabberWidth : 0,
+                ),
+              ),
+            ],
           ),
         ],
       ),

@@ -40,7 +40,7 @@ HomericContentExtent measureDocumentContent(
   assert(maxWidth >= 0);
   assert(paragraphSpacing >= 0);
   if (document.isEmpty) {
-    return HomericContentExtent(size: Size(0, 0), maxWidth: maxWidth);
+    return HomericContentExtent(size: Size.zero, maxWidth: maxWidth);
   }
   var height = 0.0;
   var width = 0.0;

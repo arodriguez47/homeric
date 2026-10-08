@@ -42,6 +42,7 @@ export 'src/model/position.dart';
 export 'src/model/selection.dart';
 export 'src/editing/mirror_render_hook.dart';
 export 'src/editing/markdown_shortcut_policy.dart';
+export 'src/editing/content_measure.dart';
 export 'src/render/homeric_paragraph.dart'
     hide HomericParagraphLayoutCache, HomericParagraphLayoutCacheScope;
 export 'src/render/paint_layers.dart';

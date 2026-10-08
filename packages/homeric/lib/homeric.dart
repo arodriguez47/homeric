@@ -8,6 +8,7 @@ library homeric;
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';
 export 'src/decoration/markdown_mark_visibility.dart';
+export 'src/editing/attribute_style_sheet.dart';
 export 'src/editing/editor_controller.dart';
 export 'src/editing/editable_document.dart'
     hide homericPhysicalSelectionEndpoint;

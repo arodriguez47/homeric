@@ -58,6 +58,7 @@ class _EditorPageState extends State<EditorPage> {
   bool _darkText = false;
   double _fontSize = 18;
   HomericPastePolicy _pastePolicy = HomericPastePolicy.expandBlocks;
+  bool _attributeStyles = false;
   final GlobalKey<HomericEditableDocumentState> _ownDocumentKey =
       GlobalKey<HomericEditableDocumentState>();
 
@@ -88,6 +89,10 @@ class _EditorPageState extends State<EditorPage> {
             onPastePolicyChanged: (value) =>
                 setState(() => _pastePolicy = value),
             onDemoMultiPaste: _demoMultiParagraphPaste,
+            attributeStyles: _attributeStyles,
+            onAttributeStylesChanged: (value) =>
+                setState(() => _attributeStyles = value),
+            onDemoAttributeStyles: _demoAttributeStyles,
           ),
           const Divider(height: 1),
           Expanded(
@@ -103,7 +108,12 @@ class _EditorPageState extends State<EditorPage> {
                 padding: const EdgeInsets.all(16),
                 cacheExtent: widget.cacheExtent,
                 estimatedBlockHeight: 54,
-                layoutRevision: (_darkText, _fontSize, _pastePolicy),
+                layoutRevision: (
+                  _darkText,
+                  _fontSize,
+                  _pastePolicy,
+                  _attributeStyles,
+                ),
                 touchSelectionConfiguration:
                     const HomericTouchSelectionConfiguration.adaptive(),
                 blockBuilder: (context, block, focusNode) => Padding(
@@ -115,6 +125,7 @@ class _EditorPageState extends State<EditorPage> {
                     focusNode: focusNode,
                     baseStyle: _baseStyle,
                     pastePolicy: _pastePolicy,
+                    attributeStyles: _attributeStyles,
                   ),
                 ),
               ),
@@ -135,6 +146,32 @@ class _EditorPageState extends State<EditorPage> {
     controller.replaceSelectionStructurally(
       'First pasted paragraph\nSecond pasted paragraph\nThird pasted paragraph',
     );
+  }
+
+  void _demoAttributeStyles() {
+    setState(() => _attributeStyles = true);
+    final controller = widget.viewModel.editorController;
+    final demo = Block(
+      id: 'attr-demo',
+      type: 'paragraph',
+      runs: [
+        InlineRun('Stock styles: '),
+        InlineRun('bold', attributes: const <String, Object?>{'bold': true}),
+        InlineRun(', '),
+        InlineRun('italic',
+            attributes: const <String, Object?>{'italic': true}),
+        InlineRun(', and '),
+        InlineRun('code', attributes: const <String, Object?>{'code': true}),
+        InlineRun('.'),
+      ],
+    );
+    final tx = Transaction(controller.document);
+    tx.step(ReplaceStep(
+      controller.document.size,
+      controller.document.size,
+      Slice(<Block>[demo]),
+    ));
+    controller.applyTransaction(tx);
   }
 }
 
@@ -442,11 +479,17 @@ class _HostBatchBar extends StatelessWidget {
     required this.pastePolicy,
     required this.onPastePolicyChanged,
     required this.onDemoMultiPaste,
+    required this.attributeStyles,
+    required this.onAttributeStylesChanged,
+    required this.onDemoAttributeStyles,
   });
 
   final HomericPastePolicy pastePolicy;
   final ValueChanged<HomericPastePolicy> onPastePolicyChanged;
   final VoidCallback onDemoMultiPaste;
+  final bool attributeStyles;
+  final ValueChanged<bool> onAttributeStylesChanged;
+  final VoidCallback onDemoAttributeStyles;
 
   @override
   Widget build(BuildContext context) {
@@ -477,6 +520,20 @@ class _HostBatchBar extends StatelessWidget {
             onPressed: onDemoMultiPaste,
             child: const Text('Demo multi-paragraph paste'),
           ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Attribute styles'),
+              Switch(
+                value: attributeStyles,
+                onChanged: onAttributeStylesChanged,
+              ),
+            ],
+          ),
+          TextButton(
+            onPressed: onDemoAttributeStyles,
+            child: const Text('Demo bold/italic/code'),
+          ),
         ],
       ),
     );
@@ -492,6 +549,7 @@ class _BlockView extends StatelessWidget {
     required this.focusNode,
     required this.baseStyle,
     required this.pastePolicy,
+    required this.attributeStyles,
   });
 
   final DocumentViewModel viewModel;
@@ -499,6 +557,9 @@ class _BlockView extends StatelessWidget {
   final FocusNode focusNode;
   final TextStyle baseStyle;
   final HomericPastePolicy pastePolicy;
+  final bool attributeStyles;
+
+  static const _attributeSheet = HomericAttributeStyleSheet.standard;
 
   @override
   Widget build(BuildContext context) {
@@ -510,7 +571,15 @@ class _BlockView extends StatelessWidget {
       blockId: block.id,
       focusNode: focusNode,
       baseStyle: baseStyle,
-      resolveStyle: (run) => _resolveRunStyle(run, baseStyle),
+      resolveStyle: (run) {
+        final styled = _resolveRunStyle(run, baseStyle);
+        return attributeStyles
+            ? _attributeSheet.resolveStyle(run, base: styled)
+            : styled;
+      },
+      deriveDecorations: attributeStyles
+          ? (liveBlock) => _attributeSheet.decorationsFor(liveBlock)
+          : null,
       paintLayers: layers,
       slotBuilder: (slot) => _ChipWidget(slot: slot),
       caretColor: Colors.blueAccent,

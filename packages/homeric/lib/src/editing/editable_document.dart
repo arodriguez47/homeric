@@ -49,6 +49,12 @@ typedef HomericEditableBlockBuilder = Widget Function(
 /// Default logical width of the block reorder grabber column.
 const double kHomericBlockGrabberWidth = 44;
 
+/// Document padding used by [HomericEditableDocument.compact].
+const EdgeInsets kHomericCompactDocumentPadding = EdgeInsets.all(8);
+
+/// Suggested per-block bottom inset for compact / chrome-less hosts.
+const EdgeInsets kHomericCompactParagraphInsets = EdgeInsets.only(bottom: 4);
+
 final class HomericBlockGrabberStyle {
   const HomericBlockGrabberStyle({
     this.idleOpacity = 1,
@@ -649,6 +655,37 @@ class HomericEditableDocument extends StatefulWidget {
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
     this.selectionMenuItemsBuilder,
+  })  : assert(cacheExtent >= 0),
+        assert(estimatedBlockHeight > 0),
+        assert(blockGrabberWidth >= 0),
+        child = null;
+
+  /// Chrome-less compact preset: collapsed grabber column and tighter padding.
+  ///
+  /// Pairs with [kHomericCompactParagraphInsets] in the host [blockBuilder]
+  /// for card-style surfaces. Defaults otherwise match [.builder].
+  const HomericEditableDocument.compact({
+    super.key,
+    required this.controller,
+    required this.inputSession,
+    required this.blockBuilder,
+    this.blockGrabberCenterY,
+    this.scrollController,
+    this.scrollPadding,
+    this.cacheExtent = 250,
+    this.estimatedBlockHeight = 36,
+    this.layoutRevision,
+    this.typewriterFocus = false,
+    this.commandBindings = const <HomericDocumentCommandBinding>[],
+    this.onMoveBlock,
+    this.onMoveRejected,
+    this.onCommandRejected,
+    this.blockGrabberStyle = const HomericBlockGrabberStyle(),
+    this.touchSelectionConfiguration =
+        const HomericTouchSelectionConfiguration.adaptive(),
+    this.selectionMenuItemsBuilder,
+    this.padding = kHomericCompactDocumentPadding,
+    this.blockGrabberWidth = 0,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
         assert(blockGrabberWidth >= 0),

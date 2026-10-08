@@ -62,6 +62,7 @@ class _EditorPageState extends State<EditorPage> {
   double _blockGrabberWidth = kHomericBlockGrabberWidth;
   bool _markdownShortcuts = false;
   VoidCallback? _uninstallMarkdownShortcuts;
+  bool _compact = false;
   final GlobalKey<HomericEditableDocumentState> _ownDocumentKey =
       GlobalKey<HomericEditableDocumentState>();
 
@@ -107,6 +108,11 @@ class _EditorPageState extends State<EditorPage> {
                 setState(() => _blockGrabberWidth = value),
             markdownShortcuts: _markdownShortcuts,
             onMarkdownShortcutsChanged: _setMarkdownShortcuts,
+            compact: _compact,
+            onCompactChanged: (value) => setState(() {
+              _compact = value;
+              if (value) _blockGrabberWidth = 0;
+            }),
           ),
           const Divider(height: 1),
           Expanded(
@@ -114,37 +120,68 @@ class _EditorPageState extends State<EditorPage> {
               enabled: widget.marginDemo,
               documentKey: _documentKey,
               viewModel: widget.viewModel,
-              editor: HomericEditableDocument.builder(
-                key: _documentKey,
-                controller: widget.viewModel.editorController,
-                inputSession: widget.viewModel.inputSession,
-                scrollController: widget.scrollController,
-                padding: const EdgeInsets.all(16),
-                cacheExtent: widget.cacheExtent,
-                estimatedBlockHeight: 54,
-                blockGrabberWidth: _blockGrabberWidth,
-                layoutRevision: (
-                  _darkText,
-                  _fontSize,
-                  _pastePolicy,
-                  _attributeStyles,
-                  _blockGrabberWidth,
-                ),
-                touchSelectionConfiguration:
-                    const HomericTouchSelectionConfiguration.adaptive(),
-                blockBuilder: (context, block, focusNode) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _BlockView(
-                    key: ValueKey(block.id),
-                    viewModel: widget.viewModel,
-                    block: block,
-                    focusNode: focusNode,
-                    baseStyle: _baseStyle,
-                    pastePolicy: _pastePolicy,
-                    attributeStyles: _attributeStyles,
-                  ),
-                ),
-              ),
+              editor: _compact
+                  ? HomericEditableDocument.compact(
+                      key: _documentKey,
+                      controller: widget.viewModel.editorController,
+                      inputSession: widget.viewModel.inputSession,
+                      scrollController: widget.scrollController,
+                      cacheExtent: widget.cacheExtent,
+                      layoutRevision: (
+                        _darkText,
+                        _fontSize,
+                        _pastePolicy,
+                        _attributeStyles,
+                        _blockGrabberWidth,
+                        _compact,
+                      ),
+                      touchSelectionConfiguration:
+                          const HomericTouchSelectionConfiguration.adaptive(),
+                      blockBuilder: (context, block, focusNode) => Padding(
+                        padding: kHomericCompactParagraphInsets,
+                        child: _BlockView(
+                          key: ValueKey(block.id),
+                          viewModel: widget.viewModel,
+                          block: block,
+                          focusNode: focusNode,
+                          baseStyle: _baseStyle,
+                          pastePolicy: _pastePolicy,
+                          attributeStyles: _attributeStyles,
+                        ),
+                      ),
+                    )
+                  : HomericEditableDocument.builder(
+                      key: _documentKey,
+                      controller: widget.viewModel.editorController,
+                      inputSession: widget.viewModel.inputSession,
+                      scrollController: widget.scrollController,
+                      padding: const EdgeInsets.all(16),
+                      cacheExtent: widget.cacheExtent,
+                      estimatedBlockHeight: 54,
+                      blockGrabberWidth: _blockGrabberWidth,
+                      layoutRevision: (
+                        _darkText,
+                        _fontSize,
+                        _pastePolicy,
+                        _attributeStyles,
+                        _blockGrabberWidth,
+                        _compact,
+                      ),
+                      touchSelectionConfiguration:
+                          const HomericTouchSelectionConfiguration.adaptive(),
+                      blockBuilder: (context, block, focusNode) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _BlockView(
+                          key: ValueKey(block.id),
+                          viewModel: widget.viewModel,
+                          block: block,
+                          focusNode: focusNode,
+                          baseStyle: _baseStyle,
+                          pastePolicy: _pastePolicy,
+                          attributeStyles: _attributeStyles,
+                        ),
+                      ),
+                    ),
             ),
           ),
         ],
@@ -514,6 +551,8 @@ class _HostBatchBar extends StatelessWidget {
     required this.onBlockGrabberWidthChanged,
     required this.markdownShortcuts,
     required this.onMarkdownShortcutsChanged,
+    required this.compact,
+    required this.onCompactChanged,
   });
 
   final HomericPastePolicy pastePolicy;
@@ -526,6 +565,8 @@ class _HostBatchBar extends StatelessWidget {
   final ValueChanged<double> onBlockGrabberWidthChanged;
   final bool markdownShortcuts;
   final ValueChanged<bool> onMarkdownShortcutsChanged;
+  final bool compact;
+  final ValueChanged<bool> onCompactChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -590,6 +631,16 @@ class _HostBatchBar extends StatelessWidget {
               Switch(
                 value: markdownShortcuts,
                 onChanged: onMarkdownShortcutsChanged,
+              ),
+            ],
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Compact preset'),
+              Switch(
+                value: compact,
+                onChanged: onCompactChanged,
               ),
             ],
           ),

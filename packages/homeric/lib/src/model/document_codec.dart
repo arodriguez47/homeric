@@ -1,9 +1,21 @@
 /// Public JSON document codec (format version 1).
 ///
-/// Wire-compatible with the sprintnotes host codec shape stored in Drift
-/// `documentJson`: a top-level `v: 1` envelope with `blocks` carrying
-/// `id`, `type`, `attributes`, and `runs` (each run has `text` +
-/// `attributes`). Pure Dart — no Flutter / `dart:ui`.
+/// Wire-compatible with the sprintnotes host codec
+/// (`lib/services/homeric_document.dart` on branch
+/// `cursor/firebase-macos-desktop-f483`): a top-level `v: 1` envelope with
+/// `blocks` carrying `id`, `type`, `attributes`, and `runs` (each run has
+/// `text` + `attributes`). Pure Dart — no Flutter / `dart:ui`.
+///
+/// Sprintnotes parity notes:
+/// - [HomericDocumentCodecException] extends [FormatException] so
+///   `documentFromStored()` can `catch (FormatException)` and fall back to
+///   plain-text migration.
+/// - An empty `blocks` array decodes to one empty paragraph with
+///   `runs: [InlineRun('')]`.
+/// - Missing or empty `runs` on a block become `[InlineRun('')]`.
+/// - Encode always writes `attributes` maps and normalizes empty content to
+///   one empty run so the wire shape stays
+///   `{v:1, blocks:[{id,type,attributes,runs:[{text,attributes}]}]}`.
 library;
 
 import 'dart:convert';
@@ -14,59 +26,55 @@ import 'document.dart';
 import 'inline_run.dart';
 
 /// Thrown when [HomericDocumentCodec.decode] / [decodeJson] rejects input.
-final class HomericDocumentCodecException implements Exception {
+///
+/// Extends [FormatException] so host migration paths that catch
+/// [FormatException] (e.g. sprintnotes `documentFromStored`) keep working
+/// when swapping to this codec.
+final class HomericDocumentCodecException extends FormatException {
   /// Creates an exception describing a codec failure.
-  HomericDocumentCodecException(this.message);
-
-  /// Human-readable reason the payload was rejected.
-  final String message;
+  HomericDocumentCodecException(String message, [dynamic source, int? offset])
+      : super(message, source, offset);
 
   @override
   String toString() => 'HomericDocumentCodecException: $message';
 }
 
 /// Encodes and decodes [Document] values as Homeric JSON format version 1.
-///
-/// The JSON object shape is:
-/// ```json
-/// {
-///   "v": 1,
-///   "blocks": [
-///     {
-///       "id": "blk_1",
-///       "type": "paragraph",
-///       "attributes": {},
-///       "runs": [
-///         {"text": "Hello", "attributes": {"bold": true}}
-///       ]
-///     }
-///   ]
-/// }
-/// ```
-///
-/// Attribute bags must stay in the JSON domain ([Attributes]). Empty
-/// attribute maps and empty run lists are always written so hosts can round-
-/// trip without inventing sentinel values.
 final class HomericDocumentCodec {
   HomericDocumentCodec._();
 
   /// Current wire-format version.
   static const int formatVersion = 1;
 
+  /// Default block type written for the empty-document migration.
+  static const String defaultBlockType = 'paragraph';
+
   /// Encodes [document] to a JSON-compatible map (`v` + `blocks`).
+  ///
+  /// Empty documents encode as a single empty paragraph so the wire form
+  /// always carries at least one block (sprintnotes store shape).
   static Map<String, Object?> encode(Document document) {
+    final blocks = document.blocks.isEmpty
+        ? <Block>[
+            Block(
+              id: 'block_0',
+              type: defaultBlockType,
+              runs: <InlineRun>[InlineRun('')],
+            ),
+          ]
+        : document.blocks;
     return <String, Object?>{
       'v': formatVersion,
       'blocks': <Object?>[
-        for (final block in document.blocks) _encodeBlock(block),
+        for (final block in blocks) _encodeBlock(block),
       ],
     };
   }
 
   /// Decodes a JSON-compatible [payload] produced by [encode].
   ///
-  /// Throws [HomericDocumentCodecException] when the payload is not a valid
-  /// format-version-1 document.
+  /// Throws [HomericDocumentCodecException] (a [FormatException]) when the
+  /// payload is not a valid format-version-1 document.
   static Document decode(Object? payload) {
     if (payload is! Map) {
       throw HomericDocumentCodecException(
@@ -86,9 +94,18 @@ final class HomericDocumentCodec {
         'blocks must be a JSON array (at root.blocks)',
       );
     }
+    if (blocksRaw.isEmpty) {
+      return Document([
+        Block(
+          id: 'block_0',
+          type: defaultBlockType,
+          runs: <InlineRun>[InlineRun('')],
+        ),
+      ]);
+    }
     final blocks = <Block>[];
     for (var i = 0; i < blocksRaw.length; i++) {
-      blocks.add(_decodeBlock(blocksRaw[i], 'root.blocks[$i]'));
+      blocks.add(_decodeBlock(blocksRaw[i], 'root.blocks[$i]', i));
     }
     return Document(blocks);
   }
@@ -107,18 +124,24 @@ final class HomericDocumentCodec {
     try {
       decoded = jsonDecode(source);
     } on FormatException catch (error) {
-      throw HomericDocumentCodecException('invalid JSON: ${error.message}');
+      throw HomericDocumentCodecException(
+        'invalid JSON: ${error.message}',
+        error.source,
+        error.offset,
+      );
     }
     return decode(decoded);
   }
 
   static Map<String, Object?> _encodeBlock(Block block) {
+    final runs =
+        block.runs.isEmpty ? <InlineRun>[InlineRun('')] : block.runs;
     return <String, Object?>{
       'id': block.id,
       'type': block.type,
       'attributes': _encodeAttributes(block.attributes),
       'runs': <Object?>[
-        for (final run in block.runs) _encodeRun(run),
+        for (final run in runs) _encodeRun(run),
       ],
     };
   }
@@ -156,7 +179,7 @@ final class HomericDocumentCodec {
     };
   }
 
-  static Block _decodeBlock(Object? raw, String path) {
+  static Block _decodeBlock(Object? raw, String path, int index) {
     if (raw is! Map) {
       throw HomericDocumentCodecException(
         'block must be a JSON object (at $path)',
@@ -177,8 +200,13 @@ final class HomericDocumentCodec {
     }
     final attributes = _decodeAttributes(map['attributes'], '$path.attributes');
     final runsRaw = map['runs'];
-    if (runsRaw == null) {
-      return Block(id: id, type: type, attributes: attributes);
+    if (runsRaw == null || (runsRaw is List && runsRaw.isEmpty)) {
+      return Block(
+        id: id,
+        type: type,
+        attributes: attributes,
+        runs: <InlineRun>[InlineRun('')],
+      );
     }
     if (runsRaw is! List) {
       throw HomericDocumentCodecException(

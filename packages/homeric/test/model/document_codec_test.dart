@@ -24,7 +24,8 @@ void main() {
       expect(caught, same(error));
     });
 
-    test('sprintnotes canonical fixture decodes and re-encodes byte-identically',
+    test(
+        'sprintnotes canonical fixture decodes and re-encodes byte-identically',
         () {
       final document =
           HomericDocumentCodec.decodeJson(sprintnotesCanonicalFixture);
@@ -103,7 +104,8 @@ void main() {
       expect(json, contains('"runs":[{"text":"x","attributes":{}}]'));
     });
 
-    test('rejects unsupported versions and malformed payloads as FormatException',
+    test(
+        'rejects unsupported versions and malformed payloads as FormatException',
         () {
       expect(
         () => HomericDocumentCodec.decode(

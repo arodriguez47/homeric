@@ -133,8 +133,7 @@ final class HomericDocumentCodec {
   }
 
   static Map<String, Object?> _encodeBlock(Block block) {
-    final runs =
-        block.runs.isEmpty ? <InlineRun>[InlineRun('')] : block.runs;
+    final runs = block.runs.isEmpty ? <InlineRun>[InlineRun('')] : block.runs;
     return <String, Object?>{
       'id': block.id,
       'type': block.type,

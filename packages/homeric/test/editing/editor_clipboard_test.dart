@@ -154,6 +154,53 @@ void main() {
     controller.dispose();
   });
 
+  test('singleBlock paste policy rejects multi-line clipboard text', () async {
+    final events = <HomericHostEvent>[];
+    final controller = HomericEditorController(
+      document: _document('ab'),
+      selection: const HomericSelection.collapsed(2),
+    );
+    final clipboard = HomericEditorClipboard(
+      controller: controller,
+      blockId: 'b',
+      adapter: _FakeClipboard(readValue: 'X\nY'),
+      isHostCurrent: () => true,
+      onEvent: events.add,
+      pastePolicy: HomericPastePolicy.singleBlock,
+    );
+    addTearDown(clipboard.dispose);
+    addTearDown(controller.dispose);
+
+    await clipboard.paste();
+
+    expect(controller.document.blocks.single.text, 'ab');
+    expect(controller.document.blockCount, 1);
+    expect(events, <HomericHostEvent>[const HomericPasteRejected()]);
+  });
+
+  test('expandBlocks paste policy remains the default multi-block path',
+      () async {
+    final controller = HomericEditorController(
+      document: _document('ab'),
+      // Position 2 is content offset 1 (between 'a' and 'b').
+      selection: const HomericSelection.collapsed(2),
+    );
+    final clipboard = HomericEditorClipboard(
+      controller: controller,
+      blockId: 'b',
+      adapter: _FakeClipboard(readValue: 'X\nY'),
+      isHostCurrent: () => true,
+    );
+    addTearDown(clipboard.dispose);
+    addTearDown(controller.dispose);
+
+    expect(clipboard.pastePolicy, HomericPastePolicy.expandBlocks);
+    await clipboard.paste();
+
+    expect(controller.document.blocks.map((block) => block.text),
+        <String>['aX', 'Yb']);
+  });
+
   test('structurally rejected paste emits typed host feedback', () async {
     final events = <HomericHostEvent>[];
     final controller = HomericEditorController(

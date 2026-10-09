@@ -51,6 +51,23 @@ final class HomericPasteRejected extends HomericHostEvent {
   const HomericPasteRejected();
 }
 
+/// Controls whether a clipboard paste may expand into multiple blocks.
+///
+/// Verified at pin `fe2089b1` and on this branch: the public clipboard path
+/// (`HomericEditorClipboard.paste` → `replaceSelectionStructurally`) already
+/// expands `'A\n\nB'` mid-document. [HomericPasteRejected] fires only when
+/// that call returns false (read-only, composition open, mutation policy,
+/// invalid selection, or a failed structural step) — not because the text is
+/// multi-paragraph. [expandBlocks] documents that default. [singleBlock] is
+/// an opt-in for hosts that want a single-block paste surface.
+enum HomericPastePolicy {
+  /// Split newline-separated paste into sibling blocks (default; pin behavior).
+  expandBlocks,
+
+  /// Reject pastes whose text contains a line separator.
+  singleBlock,
+}
+
 /// Coordinates stale-safe clipboard work for one mounted editor host.
 ///
 /// Every operation captures the controller state and a monotonically newer
@@ -65,6 +82,7 @@ final class HomericEditorClipboard {
     required this.adapter,
     required this.isHostCurrent,
     this.onEvent,
+    this.pastePolicy = HomericPastePolicy.expandBlocks,
   });
 
   final HomericEditorController controller;
@@ -72,6 +90,9 @@ final class HomericEditorClipboard {
   final HomericClipboardAdapter adapter;
   final bool Function() isHostCurrent;
   final void Function(HomericHostEvent event)? onEvent;
+
+  /// Paste expansion policy. Defaults to [HomericPastePolicy.expandBlocks].
+  final HomericPastePolicy pastePolicy;
 
   int _generation = 0;
   bool _disposed = false;
@@ -112,10 +133,20 @@ final class HomericEditorClipboard {
       return;
     }
     if (!_isCurrent(witness) || text == null || text.isEmpty) return;
+    if (pastePolicy == HomericPastePolicy.singleBlock &&
+        _containsLineSeparator(text)) {
+      if (_isCurrent(witness)) {
+        onEvent?.call(const HomericPasteRejected());
+      }
+      return;
+    }
     if (!controller.replaceSelectionStructurally(text) && _isCurrent(witness)) {
       onEvent?.call(const HomericPasteRejected());
     }
   }
+
+  static bool _containsLineSeparator(String text) =>
+      text.contains('\n') || text.contains('\r');
 
   _ClipboardWitness? _capture({required bool requireExpandedSelection}) {
     final selection = controller.selection;

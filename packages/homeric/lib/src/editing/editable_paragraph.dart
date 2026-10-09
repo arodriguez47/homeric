@@ -208,6 +208,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.composingColor,
     this.caretWidth = 1.5,
     this.clipboard = const SystemHomericClipboard(),
+    this.pastePolicy = HomericPastePolicy.expandBlocks,
     this.onHostEvent,
     this.onShowToolbar,
     this.spellCheckProvider,
@@ -320,6 +321,13 @@ class HomericEditableParagraph extends StatefulWidget {
 
   /// Injectable plain-text clipboard boundary.
   final HomericClipboardAdapter clipboard;
+
+  /// Whether paste may expand into multiple blocks.
+  ///
+  /// Defaults to [HomericPastePolicy.expandBlocks] (pin `fe2089b1` behavior).
+  /// Set [HomericPastePolicy.singleBlock] to reject multi-line pastes with
+  /// [HomericPasteRejected].
+  final HomericPastePolicy pastePolicy;
 
   /// Receives typed clipboard rejection and failure feedback.
   final ValueChanged<HomericHostEvent>? onHostEvent;
@@ -546,7 +554,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         sessionChanged ||
         blockChanged ||
         focusNodeChanged ||
-        !identical(oldWidget.clipboard, widget.clipboard);
+        !identical(oldWidget.clipboard, widget.clipboard) ||
+        oldWidget.pastePolicy != widget.pastePolicy;
     final oldDelegate = _commandDelegate;
     if (hadFocus &&
         (controllerChanged ||
@@ -634,6 +643,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       adapter: widget.clipboard,
       isHostCurrent: () => _isHostEpochCurrent(epoch),
       onEvent: (event) => widget.onHostEvent?.call(event),
+      pastePolicy: widget.pastePolicy,
     );
   }
 

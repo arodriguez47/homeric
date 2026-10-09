@@ -475,8 +475,7 @@ void main() {
 
       editor.onHostEvent!(const HomericPasteRejected());
       await tester.pump();
-      expect(
-          find.text('Paste supports one paragraph at a time.'), findsOneWidget);
+      expect(find.text('Paste rejected by the editor.'), findsOneWidget);
       expect(find.byType(SnackBar), findsOneWidget);
 
       editor.onHostEvent!(HomericClipboardFailure(

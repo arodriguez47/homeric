@@ -8,9 +8,12 @@ library homeric;
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';
 export 'src/decoration/markdown_mark_visibility.dart';
+export 'src/editing/attribute_style_sheet.dart';
 export 'src/editing/editor_controller.dart';
 export 'src/editing/editable_document.dart'
     hide homericPhysicalSelectionEndpoint;
+export 'src/editing/selection_snapshot.dart';
+
 export 'src/editing/spell_check.dart'
     show HomericSpellCheckProvider, HomericSpellCheckRequest;
 export 'src/editing/editor_clipboard.dart'
@@ -19,6 +22,7 @@ export 'src/editing/editor_clipboard.dart'
         HomericClipboardFailure,
         HomericClipboardOperation,
         HomericHostEvent,
+        HomericPastePolicy,
         HomericPasteRejected,
         SystemHomericClipboard;
 export 'src/editing/editable_paragraph.dart';
@@ -30,10 +34,15 @@ export 'src/input/macos_history_bridge.dart';
 export 'src/input/text_input_session.dart';
 export 'src/model/attributes.dart';
 export 'src/model/block.dart';
+export 'src/model/block_attributes.dart';
 export 'src/model/document.dart';
+export 'src/model/document_codec.dart';
 export 'src/model/inline_run.dart';
 export 'src/model/position.dart';
 export 'src/model/selection.dart';
+export 'src/editing/mirror_render_hook.dart';
+export 'src/editing/markdown_shortcut_policy.dart';
+export 'src/editing/content_measure.dart';
 export 'src/render/homeric_paragraph.dart'
     hide HomericParagraphLayoutCache, HomericParagraphLayoutCacheScope;
 export 'src/render/paint_layers.dart';

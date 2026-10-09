@@ -14,6 +14,7 @@ import '../model/block.dart';
 import '../model/inline_run.dart';
 import '../model/position.dart';
 import '../transform/replace_step.dart';
+import '../transform/run_ops.dart';
 import '../transform/transaction.dart';
 import 'editor_controller.dart';
 
@@ -108,10 +109,13 @@ final class HomericMarkdownShortcutPolicy {
               type: block.type,
               attributes: block.attributes,
               runs: <InlineRun>[
-                InlineRun(
-                  inner,
-                  attributes: <String, Object?>{match.key: true},
-                ),
+                for (final run in sliceRuns(block.runs, innerStart, closeStart))
+                  run.copyWith(
+                    attributes: <String, Object?>{
+                      ...run.attributes,
+                      match.key: true,
+                    },
+                  ),
               ],
             ),
           ],

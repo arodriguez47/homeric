@@ -1132,3 +1132,26 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   and grows"); Nexus `test/widgets/journal_footnote_test.dart` ("typing and
   deleting at a footnote marker follow the side of the marker the caret is
   drawn on").
+
+## engineer — 2026-10-09 — Mirror: `placeholderText` is focus-gated (Nexus values view)
+
+- **Lesson (Nexus `LEARNINGS.md`, branch `claude/nexus-values-view-redesign-dec04d`):**
+  `HomericEditableParagraph.placeholderText` paints only while the block is
+  empty, holds a local selection, has focus, owns input, and is not
+  read-only. A widget test asserting a placeholder must focus the editor
+  first.
+- **Verified against `main` at bf609da** (`editable_paragraph.dart`,
+  `placeholderVisible` in `build`). The Nexus note pins c242dc2, which is
+  not reachable from Homeric's `origin`; the gate itself dates from 1babe47.
+- **Shape:** one line (`maxLines: 1`, `softWrap: false`, clipped), laid
+  over `blockRect` inside `IgnorePointer`, keyed
+  `homeric-placeholder-<blockId>`. It never enters content, layout,
+  selection geometry, clipboard, or history.
+- **Correction to the Nexus wording:** the placeholder is not absent from
+  semantics. Its `RichText` sits in `ExcludeSemantics`, but the same string
+  is the `hint` of the editable's own semantics node while visible. Assert
+  on that node's `hint`, not on a separate label.
+- Evidence: `test/editing/editable_paragraph_test.dart` ("placeholder is
+  layout-neutral, pointer-transparent, and uses the editable semantics
+  node", "placeholder visibility follows eligibility and one real input
+  history unit").

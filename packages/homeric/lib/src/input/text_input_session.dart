@@ -963,6 +963,10 @@ Intent? homericIntentForMacOSSelector(String selectorName) {
       return const UndoTextIntent(SelectionChangedCause.keyboard);
     case 'redo:':
       return const RedoTextIntent(SelectionChangedCause.keyboard);
+    // Ctrl+K. Flutter leaves the Emacs kill unmapped; Homeric deletes to the
+    // end of the visual line, which is the paragraph end for unwrapped text.
+    case 'deleteToEndOfParagraph:':
+      return const DeleteToLineBreakIntent(forward: true);
     default:
       return intentForMacOSSelector(selectorName);
   }

@@ -1,0 +1,103 @@
+import 'package:flutter/material.dart' hide Decoration;
+import 'package:flutter_test/flutter_test.dart';
+import 'package:homeric/homeric.dart';
+
+void main() {
+  Future<HomericEditorController> pump(
+    WidgetTester tester, {
+    required HomericBlockGrabberAlignment alignment,
+    TextStyle style = const TextStyle(fontSize: 20, height: 1.7),
+    EdgeInsets padding = EdgeInsets.zero,
+  }) async {
+    final controller = HomericEditorController(
+      document: Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('First line')]),
+        Block(id: 'b', type: 'paragraph', runs: [InlineRun('Second')]),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: HomericEditableDocument.builder(
+          controller: controller,
+          inputSession: session,
+          blockGrabberStyle: HomericBlockGrabberStyle(
+            alignment: alignment,
+            textStyle: const TextStyle(fontSize: 14, height: 1),
+          ),
+          blockBuilder: (context, block, focusNode) => Padding(
+            padding: padding,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => style,
+              baseStyle: style,
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    return controller;
+  }
+
+  // Baselines may only be read during layout; tests read them afterwards.
+  double baselineOf(RenderBox box) {
+    RenderObject.debugCheckingIntrinsics = true;
+    try {
+      return box.getDistanceToBaseline(TextBaseline.alphabetic)!;
+    } finally {
+      RenderObject.debugCheckingIntrinsics = false;
+    }
+  }
+
+  double glyphBaseline(WidgetTester tester) {
+    final glyph = tester.renderObject<RenderBox>(find.text('⋮').first);
+    return glyph.localToGlobal(Offset.zero).dy + baselineOf(glyph);
+  }
+
+  double firstLineBaseline(WidgetTester tester) {
+    final box =
+        tester.renderObject<RenderBox>(find.byType(HomericParagraph).first);
+    return box.localToGlobal(Offset.zero).dy + baselineOf(box);
+  }
+
+  testWidgets('firstBaseline puts the grabber glyph on the text baseline',
+      (tester) async {
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.firstBaseline,
+      padding: const EdgeInsets.only(top: 18),
+    );
+
+    expect(glyphBaseline(tester), closeTo(firstLineBaseline(tester), 0.01));
+  });
+
+  testWidgets('firstBaseline does not move the text', (tester) async {
+    await pump(tester, alignment: HomericBlockGrabberAlignment.center);
+    final centred = firstLineBaseline(tester);
+
+    await pump(tester, alignment: HomericBlockGrabberAlignment.firstBaseline);
+
+    expect(firstLineBaseline(tester), centred);
+  });
+
+  testWidgets('center keeps the glyph off the baseline (regression guard)',
+      (tester) async {
+    // Deeper first-line spacing than the default 22px centre allows for.
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      padding: const EdgeInsets.only(top: 18),
+    );
+
+    expect(
+      (glyphBaseline(tester) - firstLineBaseline(tester)).abs(),
+      greaterThan(1),
+    );
+  });
+}

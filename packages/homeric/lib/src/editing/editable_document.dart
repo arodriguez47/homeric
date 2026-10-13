@@ -55,14 +55,31 @@ const EdgeInsets kHomericCompactDocumentPadding = EdgeInsets.all(8);
 /// Suggested per-block bottom inset for compact / chrome-less hosts.
 const EdgeInsets kHomericCompactParagraphInsets = EdgeInsets.only(bottom: 4);
 
+/// How the grabber glyph is placed against its block's first line.
+enum HomericBlockGrabberAlignment {
+  /// The glyph is centred on `blockGrabberCenterY` (half the column width by
+  /// default).
+  center,
+
+  /// The glyph sits on the block's first text baseline, so its foot lines up
+  /// with the bottom of the first line's letters whatever the font, size or
+  /// line height. `blockGrabberCenterY` is ignored; a block that reports no
+  /// baseline (an image, a divider) falls back to [center].
+  firstBaseline,
+}
+
 final class HomericBlockGrabberStyle {
   const HomericBlockGrabberStyle({
     this.idleOpacity = 1,
     this.hoverOpacity = 1,
     this.fadeDuration = const Duration(milliseconds: 100),
     this.textStyle,
+    this.alignment = HomericBlockGrabberAlignment.center,
   })  : assert(idleOpacity >= 0 && idleOpacity <= 1),
         assert(hoverOpacity >= 0 && hoverOpacity <= 1);
+
+  /// Vertical placement of the glyph. Changing it changes row layout.
+  final HomericBlockGrabberAlignment alignment;
 
   /// Glyph opacity while the pointer is outside this block's handle.
   final double idleOpacity;
@@ -2781,8 +2798,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     EdgeInsetsGeometry padding,
   ) {
     _layoutWidth = constraints.maxWidth;
-    final globalLayoutSignature =
-        (_layoutWidth, widget.layoutRevision, widget.blockGrabberCenterY);
+    final globalLayoutSignature = (
+      _layoutWidth,
+      widget.layoutRevision,
+      widget.blockGrabberCenterY,
+      widget.blockGrabberStyle.alignment,
+    );
     if (_globalLayoutSignature != globalLayoutSignature) {
       _globalLayoutSignature = globalLayoutSignature;
       _heightCache.invalidateAll();
@@ -2845,6 +2866,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                     widget.layoutRevision,
                     widget.blockGrabberCenterY,
                     widget.blockGrabberWidth,
+                    widget.blockGrabberStyle.alignment,
                   ),
                 );
                 return _DocumentBlockRow(
@@ -3218,10 +3240,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
         child: grabber,
       );
     }
-    final row = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Semantics(
+    Widget grabberSlot({required bool shiftByCenter}) => Semantics(
           container: true,
           excludeSemantics: true,
           button: true,
@@ -3231,7 +3250,9 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           customSemanticsActions: actions,
           child: Padding(
             padding: EdgeInsets.only(
-              top: centerY > halfWidth ? centerY - halfWidth : 0,
+              top: shiftByCenter && centerY > halfWidth
+                  ? centerY - halfWidth
+                  : 0,
             ),
             child: ReorderableDragStartListener(
               index: widget.index,
@@ -3243,22 +3264,41 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
                   width: grabberWidth,
                   height: grabberWidth,
                   child: Center(
-                    child: Transform.translate(
-                      offset: Offset(
-                        0,
-                        centerY < halfWidth ? centerY - halfWidth : 0,
-                      ),
-                      child: grabber,
-                    ),
+                    child: shiftByCenter
+                        ? Transform.translate(
+                            offset: Offset(
+                              0,
+                              centerY < halfWidth ? centerY - halfWidth : 0,
+                            ),
+                            child: grabber,
+                          )
+                        : grabber,
                   ),
                 ),
               ),
             ),
           ),
-        ),
-        Expanded(child: content),
-      ],
-    );
+        );
+    final Widget row;
+    if (widget.grabberStyle.alignment ==
+        HomericBlockGrabberAlignment.firstBaseline) {
+      row = _BaselineGrabberRow(
+        grabberWidth: grabberWidth,
+        fallbackCenterY: centerY,
+        children: <Widget>[
+          grabberSlot(shiftByCenter: false),
+          content,
+        ],
+      );
+    } else {
+      row = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          grabberSlot(shiftByCenter: true),
+          Expanded(child: content),
+        ],
+      );
+    }
     return _MeasureNaturalHeight(
       witness: widget.witness,
       onHeight: widget.onHeight,
@@ -3278,6 +3318,151 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           : row,
     );
   }
+}
+
+/// Lays out a block row whose grabber sits on the content's first baseline.
+///
+/// The content is laid out first at its full column width and keeps its own
+/// position; only the grabber moves, so switching alignment never reflows the
+/// text. Children: `[grabber, content]`.
+class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
+  const _BaselineGrabberRow({
+    required this.grabberWidth,
+    required this.fallbackCenterY,
+    required super.children,
+  }) : assert(children.length == 2);
+
+  final double grabberWidth;
+  final double fallbackCenterY;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderBaselineGrabberRow(grabberWidth, fallbackCenterY);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderBaselineGrabberRow renderObject,
+  ) {
+    renderObject
+      ..grabberWidth = grabberWidth
+      ..fallbackCenterY = fallbackCenterY;
+  }
+}
+
+class _BaselineGrabberRowParentData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderBaselineGrabberRow extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _BaselineGrabberRowParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox,
+            _BaselineGrabberRowParentData> {
+  _RenderBaselineGrabberRow(this._grabberWidth, this._fallbackCenterY);
+
+  double _grabberWidth;
+  set grabberWidth(double value) {
+    if (value == _grabberWidth) return;
+    _grabberWidth = value;
+    markNeedsLayout();
+  }
+
+  double _fallbackCenterY;
+  set fallbackCenterY(double value) {
+    if (value == _fallbackCenterY) return;
+    _fallbackCenterY = value;
+    markNeedsLayout();
+  }
+
+  RenderBox get _grabber => firstChild!;
+  RenderBox get _content => lastChild!;
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _BaselineGrabberRowParentData) {
+      child.parentData = _BaselineGrabberRowParentData();
+    }
+  }
+
+  @override
+  double computeMinIntrinsicHeight(double width) => math.max(
+        _content.getMinIntrinsicHeight(math.max(0, width - _grabberWidth)),
+        _grabberWidth,
+      );
+
+  @override
+  double computeMaxIntrinsicHeight(double width) => math.max(
+        _content.getMaxIntrinsicHeight(math.max(0, width - _grabberWidth)),
+        _grabberWidth,
+      );
+
+  @override
+  double computeMinIntrinsicWidth(double height) =>
+      _grabberWidth + _content.getMinIntrinsicWidth(height);
+
+  @override
+  double computeMaxIntrinsicWidth(double height) =>
+      _grabberWidth + _content.getMaxIntrinsicWidth(height);
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) {
+    final data = _content.parentData! as _BaselineGrabberRowParentData;
+    final distance = _content.getDistanceToActualBaseline(baseline);
+    return distance == null ? null : distance + data.offset.dy;
+  }
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) {
+    final contentSize = _content.getDryLayout(BoxConstraints.tightFor(
+      width: math.max(0, constraints.maxWidth - _grabberWidth),
+    ));
+    return constraints.constrain(Size(
+      constraints.maxWidth,
+      math.max(contentSize.height, _grabberWidth),
+    ));
+  }
+
+  @override
+  void performLayout() {
+    final width = constraints.maxWidth;
+    // Tight width, unbounded height: what `Expanded` hands the content in
+    // the centred row, so both alignments lay the text out identically.
+    _content.layout(
+      BoxConstraints.tightFor(width: math.max(0, width - _grabberWidth)),
+      parentUsesSize: true,
+    );
+    _grabber.layout(
+      BoxConstraints.tightFor(width: _grabberWidth, height: _grabberWidth),
+      parentUsesSize: true,
+    );
+    final contentBaseline =
+        _content.getDistanceToBaseline(TextBaseline.alphabetic, onlyReal: true);
+    final grabberBaseline =
+        _grabber.getDistanceToBaseline(TextBaseline.alphabetic, onlyReal: true);
+    final double grabberTop;
+    if (contentBaseline != null && grabberBaseline != null) {
+      grabberTop = contentBaseline - grabberBaseline;
+    } else {
+      grabberTop = _fallbackCenterY - _grabberWidth / 2;
+    }
+    (_content.parentData! as _BaselineGrabberRowParentData).offset =
+        Offset(_grabberWidth, 0);
+    // A grabber pushed above the row keeps its glyph on the baseline; only
+    // the part of its hit box above the row stops taking pointers.
+    (_grabber.parentData! as _BaselineGrabberRowParentData).offset =
+        Offset(0, grabberTop);
+    size = constraints.constrain(Size(
+      width,
+      math.max(_content.size.height, math.max(0, grabberTop) + _grabberWidth),
+    ));
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
 }
 
 class _MeasureNaturalHeight extends SingleChildRenderObjectWidget {

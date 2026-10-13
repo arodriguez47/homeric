@@ -51,6 +51,9 @@ const double _kTolerance = 1e-3;
 /// Placements therefore depend on the order in which blocks were seen, not
 /// only on the current input. That is the point: what is on screen stays
 /// put until the writer changes something.
+///
+/// One memory serves one column of notes. `HomericMarginLayer` keeps one per
+/// margin side, so a change on one side never reopens the other.
 final class MarginLayoutMemory {
   List<_Retained>? _previous;
   _Parameters? _parameters;

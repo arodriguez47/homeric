@@ -13,6 +13,15 @@ const _marginLeft = 420.0;
 const _noteWidth = 200.0;
 const _line = 20.0;
 
+// Geometry for notes on both sides: left notes 10..150, text 160..560,
+// right notes 570..770.
+const _sidesEditorLeft = 160.0;
+const _sidesLayerWidth = 800.0;
+const _sidesMarginLeft = 570.0;
+const _leftMarginRight = 150.0;
+const _leftNoteWidth = 140.0;
+const _left = HomericMarginSide.left;
+
 void main() {
   group('tracking (AE1)', () {
     testWidgets('a note sits beside its range after the first layout',
@@ -1441,6 +1450,260 @@ void main() {
     });
   });
 
+  group('both margins', () {
+    testWidgets('notes and composers default to the right margin',
+        (tester) async {
+      expect(_note('n', 'block-0', const BlockTextRange(0, 1)).side,
+          HomericMarginSide.right);
+      expect(
+        HomericMarginComposer(
+          blockId: 'block-0',
+          range: const BlockTextRange(0, 1),
+          builder: (context) => const SizedBox(),
+        ).side,
+        HomericMarginSide.right,
+      );
+
+      final harness = _Harness(_document(['alpha beta gamma']))
+        ..useBothMargins();
+      harness.host.notes = [_note('n', 'block-0', const BlockTextRange(0, 5))];
+      await harness.pump(tester);
+
+      final rect = harness.noteRect(tester, 'n');
+      expect(rect.left, _sidesMarginLeft);
+      expect(rect.width, _noteWidth);
+      expect(
+          tester.renderObject<RenderParagraph>(find.text('full n')).textAlign,
+          TextAlign.start,
+          reason: 'right notes keep the host\'s own alignment');
+    });
+
+    testWidgets('a left note sits in the left margin aligned toward the text',
+        (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma', 'delta']))
+        ..useBothMargins();
+      const range = BlockTextRange(6, 10);
+      harness.host.notes = [
+        _note('l', 'block-0', range, side: _left),
+        _note('r', 'block-0', range),
+      ];
+      await harness.pump(tester);
+
+      final left = harness.noteRect(tester, 'l');
+      expect(left.right, _leftMarginRight);
+      expect(left.width, _leftNoteWidth);
+      expect(left.top, harness.rangeTop('block-0', range));
+      expect(
+          left.right, lessThan(harness.rangeFirstLine('block-0', range).left));
+      expect(
+          tester.renderObject<RenderParagraph>(find.text('full l')).textAlign,
+          TextAlign.right);
+      final right = harness.noteRect(tester, 'r');
+      expect(right.left, _sidesMarginLeft);
+      expect(right.top, left.top);
+      expect(find.byKey(const ValueKey<String>('homeric-margin-group-block-0')),
+          findsOneWidget);
+      expect(
+          find.byKey(
+              const ValueKey<String>('homeric-margin-group-left-block-0')),
+          findsOneWidget);
+    });
+
+    testWidgets('each margin avoids only its own notes', (tester) async {
+      final harness = _Harness(_document(['alpha beta gamma']))
+        ..useBothMargins();
+      harness.host.notes = [
+        _note('l1', 'block-0', const BlockTextRange(0, 5),
+            fullHeight: 30, side: _left),
+        _note('l2', 'block-0', const BlockTextRange(6, 10), side: _left),
+        _note('r1', 'block-0', const BlockTextRange(0, 5), fullHeight: 30),
+        _note('r2', 'block-0', const BlockTextRange(11, 16)),
+      ];
+      await harness.pump(tester);
+
+      final l1 = harness.noteRect(tester, 'l1');
+      final l2 = harness.noteRect(tester, 'l2');
+      final r1 = harness.noteRect(tester, 'r1');
+      final r2 = harness.noteRect(tester, 'r2');
+      final anchor = harness.rangeTop('block-0', const BlockTextRange(0, 5));
+      expect(l1.top, anchor);
+      expect(r1.top, anchor, reason: 'not pushed by the left note');
+      expect(l2.top, l1.bottom + 8, reason: 'stacked under its own side');
+      expect(r2.top, r1.bottom + 8);
+      expect(find.text('full l2'), findsOneWidget);
+
+      // The displaced left note's connector leaves its right edge for the
+      // block's left edge.
+      final block = harness.state.documentGeometry.block('block-0')!;
+      final origin = block.globalOrigin!;
+      final from = Offset(_leftNoteWidth + 2, l2.top - origin.dy + _line / 2);
+      final to = Offset(
+        origin.dx + block.blockRect!.left - l2.left,
+        block.rectsForRange(const BlockTextRange(6, 10))!.first.center.dy,
+      );
+      expect(to.dx, greaterThan(from.dx));
+      expect(
+        _connectorFinder('l2'),
+        paints
+          ..something((method, arguments) {
+            if (method != #drawPath) return false;
+            final metric = (arguments[0] as Path).computeMetrics().single;
+            final start = metric.getTangentForOffset(0)!.position;
+            final finish = metric.getTangentForOffset(metric.length)!.position;
+            return (start - from).distance < 0.01 &&
+                (finish - to).distance < 0.01;
+          }),
+      );
+    });
+
+    testWidgets(
+        'a focused left note draws its rule to its right and grows from its '
+        'right edge', (tester) async {
+      final harness = _Harness(_document(['alpha beta', 'gamma delta']))
+        ..useBothMargins();
+      harness.host.notes = [
+        _note('l', 'block-0', const BlockTextRange(0, 5), side: _left),
+        _note('m', 'block-1', const BlockTextRange(0, 5), side: _left),
+      ];
+      await harness.pump(tester);
+      final rule = find.byKey(const ValueKey<String>('homeric-margin-focus-l'));
+      AnimatedScale scaleOf(String id) =>
+          tester.widget<AnimatedScale>(find.ancestor(
+            of: find.text('full $id'),
+            matching: find.byType(AnimatedScale),
+          ));
+
+      expect(harness.layer.focusNote('l'), isTrue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final note = harness.noteRect(tester, 'l');
+      final ruleRect = tester.getRect(rule);
+      expect(ruleRect.left, greaterThan(note.right),
+          reason: 'the rule sits in the gutter on the document side');
+      expect(ruleRect.right, lessThanOrEqualTo(_sidesEditorLeft),
+          reason: 'clear of the text');
+      expect(scaleOf('l').scale, greaterThan(1));
+      expect(scaleOf('l').alignment, Alignment.centerRight);
+
+      // Source-text hover reaches a left note the same way.
+      harness.host.sourceHovered = 'm';
+      await tester.pump();
+      expect(scaleOf('m').scale, greaterThan(1));
+      expect(scaleOf('m').alignment, Alignment.centerRight);
+      harness.host.sourceHovered = null;
+      await tester.pump();
+      expect(scaleOf('m').scale, 1);
+    });
+
+    testWidgets(
+        'an expanded left note and a left composer clamp inside the '
+        'viewport; Escape and an outside tap dismiss', (tester) async {
+      final harness = _Harness(
+        _document([for (var index = 0; index < 30; index++) 'row $index']),
+      )..useBothMargins();
+      await harness.pump(tester);
+      final mounted = harness.state.documentGeometry.mountedBlockIds!;
+      final near = mounted.lastWhere(
+        (id) => harness.blockTop(id) < _viewportHeight - 30,
+      );
+      harness.host.notes = [
+        _note('l', near, const BlockTextRange(0, 3),
+            fullHeight: 200, side: _left),
+      ];
+      await tester.pump();
+      await tester.pump();
+
+      harness.host.expanded = 'l';
+      await tester.pump();
+      await tester.pump();
+      final card = tester.getRect(_expandedFinder('l'));
+      expect(card.height, 216);
+      expect(card.bottom, _viewportHeight - 8);
+      expect(card.right, _leftMarginRight + 8);
+      expect(card.width, _leftNoteWidth + 16);
+      expect(harness.layer.focusedNoteId, 'l');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      expect(harness.host.dismissed, 1);
+      await tester
+          .tapAt(const Offset(_sidesLayerWidth - 10, _viewportHeight - 10));
+      expect(harness.host.dismissed, 2);
+      harness.host.expanded = null;
+      await tester.pump();
+
+      harness.host.composer = HomericMarginComposer(
+        blockId: 'block-2',
+        range: const BlockTextRange(0, 3),
+        side: _left,
+        builder: (context) =>
+            const SizedBox(height: 40, child: Text('composing')),
+      );
+      await tester.pump();
+      await tester.pump();
+      final composer = tester.getRect(
+          find.byKey(const ValueKey<String>('homeric-margin-composer')));
+      expect(composer.right, _leftMarginRight + 8);
+      expect(composer.width, _leftNoteWidth + 16);
+      expect(composer.top + 8,
+          harness.rangeTop('block-2', const BlockTextRange(0, 3)));
+      expect(
+          tester
+              .renderObject<RenderParagraph>(find.text('composing'))
+              .textAlign,
+          TextAlign.right);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      expect(harness.host.dismissed, 3);
+    });
+
+    testWidgets(
+        'each margin keeps its own memory: a left edit does not re-solve '
+        'a kept right note', (tester) async {
+      final harness = _Harness(
+        _document([for (var index = 0; index < 60; index++) 'row $index']),
+      )..useBothMargins();
+      await harness.pump(tester, cacheExtent: 0);
+      final mounted = harness.state.documentGeometry.mountedBlockIds!;
+      final aId = mounted.last;
+      final aIndex = int.parse(aId.split('-').last);
+      final bId = 'block-${aIndex + 1}';
+      const range = BlockTextRange(0, 3);
+      List<HomericMarginNote> notes(double leftHeight) => [
+            _note('a', aId, range, fullHeight: 100),
+            _note('b', bId, range),
+            _note('l', aId, range, fullHeight: leftHeight, side: _left),
+          ];
+      harness.host.notes = notes(_line);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('full a'), findsOneWidget);
+
+      // Mount B below: A is kept full although a fresh solve would compact
+      // it (see "a neighbour mounting below ...").
+      final aBlockTop = harness.blockTop(aId);
+      final rowPitch = aBlockTop - harness.blockTop('block-${aIndex - 1}');
+      harness.scrollController
+          .jumpTo(aBlockTop + rowPitch - _viewportHeight + 2);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(harness.state.documentGeometry.mountedBlockIds, contains(bId));
+      expect(find.text('full a'), findsOneWidget);
+      final aKept = harness.noteRect(tester, 'a');
+
+      // Resizing the left note on A changes A's notes. One shared memory
+      // would reopen A and compact its right note under B's anchor.
+      harness.host.notes = notes(2 * _line);
+      await tester.pump();
+      await tester.pump();
+
+      expect(harness.noteRect(tester, 'l').height, 2 * _line);
+      expect(find.text('full a'), findsOneWidget,
+          reason: 'MUTATION: a shared memory re-solves the right margin');
+      expect(harness.noteRect(tester, 'a'), aKept);
+    });
+  });
+
   group('layout neutrality', () {
     testWidgets('twenty notes leave the paragraph width and lines unchanged',
         (tester) async {
@@ -1621,6 +1884,24 @@ final class _Harness {
   double transformScale = 1;
   EdgeInsets viewInsets = EdgeInsets.zero;
 
+  /// Horizontal geometry; [useBothMargins] moves the editor right to make
+  /// room for a left margin.
+  double editorLeft = 0;
+  double layerWidth = _layerWidth;
+  double marginLeft = _marginLeft;
+  double? leftMarginRight;
+  double? leftNoteWidth;
+
+  /// Left notes end at [_leftMarginRight], 10 px before the text at
+  /// [_sidesEditorLeft]; right notes start at [_sidesMarginLeft].
+  void useBothMargins() {
+    editorLeft = _sidesEditorLeft;
+    layerWidth = _sidesLayerWidth;
+    marginLeft = _sidesMarginLeft;
+    leftMarginRight = _leftMarginRight;
+    leftNoteWidth = _leftNoteWidth;
+  }
+
   HomericEditableDocumentState get state => documentKey.currentState!;
   HomericMarginLayerState get layer => layerKey.currentState!;
 
@@ -1642,7 +1923,7 @@ final class _Harness {
       controller.dispose();
     });
     final editor = Positioned(
-      left: 0,
+      left: editorLeft,
       top: 0,
       width: _editorWidth,
       height: _viewportHeight,
@@ -1672,7 +1953,7 @@ final class _Harness {
     final layer = Positioned(
       left: 0,
       top: 0,
-      width: _layerWidth,
+      width: layerWidth,
       height: _viewportHeight,
       child: ValueListenableBuilder<bool>(
         valueListenable: showLayer,
@@ -1684,8 +1965,10 @@ final class _Harness {
                   key: layerKey,
                   documentKey: documentKey,
                   notes: host.notes,
-                  marginLeft: _marginLeft,
+                  marginLeft: marginLeft,
                   noteWidth: _noteWidth,
+                  leftMarginRight: leftMarginRight,
+                  leftNoteWidth: leftNoteWidth,
                   lineHeight: lineHeight,
                   expandedNoteId: host.expanded,
                   sourceHoveredNoteId: host.sourceHovered,
@@ -1752,11 +2035,13 @@ HomericMarginNote _note(
   double fullHeight = _line,
   bool indicator = false,
   String? label,
+  HomericMarginSide side = HomericMarginSide.right,
 }) =>
     HomericMarginNote(
       id: id,
       blockId: blockId,
       range: range,
+      side: side,
       semanticsLabel: label,
       paintSourceIndicator: indicator,
       fullBuilder: (context) => SizedBox(

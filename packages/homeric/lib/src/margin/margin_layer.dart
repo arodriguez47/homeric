@@ -19,6 +19,22 @@ import '../editing/editor_controller.dart' show BlockTextRange;
 import 'margin_layout_memory.dart';
 import 'margin_layout_solver.dart';
 
+/// Which margin of the document a note or composer sits in.
+///
+/// Sides are physical, like [HomericMarginLayer.marginLeft]: the layer's
+/// geometry is in its own left-to-right coordinates whatever the text
+/// direction of the blocks beside it.
+enum HomericMarginSide {
+  /// The margin to the document's left, set by
+  /// [HomericMarginLayer.leftMarginRight]. Notes there are aligned toward
+  /// the text: their right edges line up and their text is right-aligned.
+  left,
+
+  /// The margin to the document's right, set by
+  /// [HomericMarginLayer.marginLeft]. The default side.
+  right,
+}
+
 /// One host note shown in a [HomericMarginLayer].
 ///
 /// The layer calls [fullBuilder] more than once per frame (it measures the
@@ -36,6 +52,7 @@ final class HomericMarginNote {
     required this.compactBuilder,
     this.semanticsLabel,
     this.paintSourceIndicator = false,
+    this.side = HomericMarginSide.right,
   });
 
   /// Host identifier, unique within one layer.
@@ -64,6 +81,9 @@ final class HomericMarginNote {
   /// Whether the layer underlines [range] in the prose, for hosts whose
   /// document carries no mark of their own for it.
   final bool paintSourceIndicator;
+
+  /// The margin the note sits in. Notes avoid only notes on the same side.
+  final HomericMarginSide side;
 }
 
 /// Signature of [HomericMarginLayer.onNoteActivated]: the activated note and
@@ -91,6 +111,7 @@ final class HomericMarginComposer {
     required this.range,
     required this.builder,
     this.semanticsLabel,
+    this.side = HomericMarginSide.right,
   });
 
   /// Host identity of this composer, for example the id of the note being
@@ -118,6 +139,9 @@ final class HomericMarginComposer {
 
   /// Accessible label of the composer region.
   final String? semanticsLabel;
+
+  /// The margin the composer opens in, at the width of that side's notes.
+  final HomericMarginSide side;
 }
 
 /// Places host notes in a margin beside a [HomericEditableDocument].
@@ -127,8 +151,12 @@ final class HomericMarginComposer {
 /// the viewport that expanded notes are clamped to, and it must paint after
 /// the editor because each block's notes follow that block's
 /// [HomericMountedBlockGeometry.layerLink]. Horizontal geometry is in the
-/// layer's own coordinates: notes start [marginLeft] from the layer's left
-/// edge and are [noteWidth] wide.
+/// layer's own coordinates: notes on [HomericMarginSide.right], the default,
+/// start [marginLeft] from the layer's left edge and are [noteWidth] wide.
+/// Notes on [HomericMarginSide.left] end [leftMarginRight] from the layer's
+/// left edge and are [leftNoteWidth] wide. Each side is placed on its own:
+/// notes avoid only the notes in the same margin, and each side keeps its
+/// own [MarginLayoutMemory].
 ///
 /// Scrolling and block movement are tracked at composite time, in the frame
 /// they happen. Positions inside a block and collisions between blocks are
@@ -180,7 +208,10 @@ class HomericMarginLayer extends StatefulWidget {
     this.focusColor = const Color(0x994A6FA5),
     this.hoverScale = 1.04,
     this.sourceHoveredNoteId,
+    this.leftMarginRight,
+    this.leftNoteWidth,
   })  : assert(noteWidth > 0),
+        assert(leftNoteWidth == null || leftNoteWidth > 0),
         assert(lineHeight > 0),
         assert(minTapTargetHeight >= 0);
 
@@ -191,11 +222,23 @@ class HomericMarginLayer extends StatefulWidget {
   /// not mounted, or whose range is outside the block, are not built.
   final List<HomericMarginNote> notes;
 
-  /// Distance from the layer's left edge to the notes' left edge.
+  /// Distance from the layer's left edge to the left edge of the notes on
+  /// [HomericMarginSide.right], the edge nearest the text.
   final double marginLeft;
 
-  /// Width every note is laid out at.
+  /// Width every note on [HomericMarginSide.right] is laid out at, and on
+  /// [HomericMarginSide.left] when [leftNoteWidth] is null.
   final double noteWidth;
+
+  /// Distance from the layer's left edge to the right edge of the notes on
+  /// [HomericMarginSide.left], the edge nearest the text. It mirrors
+  /// [marginLeft]. Required when any note or the composer is on the left;
+  /// while it is null, left notes are not built.
+  final double? leftMarginRight;
+
+  /// Width notes on [HomericMarginSide.left] are laid out at; [noteWidth]
+  /// when null.
+  final double? leftNoteWidth;
 
   /// Height of one note line in logical pixels, already text-scaled. It is
   /// the unit of the solver thresholds and the height of a compact preview.
@@ -271,12 +314,14 @@ class HomericMarginLayer extends StatefulWidget {
   /// composer.
   final Color sourceTintColor;
 
-  /// Colour of the focus rule beside a focused resting note.
+  /// Colour of the focus rule beside a focused resting note, drawn in the
+  /// gutter between the note and the text.
   final Color focusColor;
 
-  /// Scale of a resting note under a mouse pointer, grown from its left
-  /// edge. A hovered note also shows its source tint and a stronger
-  /// connector. Use 1 for no growth.
+  /// Scale of a resting note under a mouse pointer, grown from the edge
+  /// nearest the text: a right note's left edge, a left note's right edge.
+  /// A hovered note also shows its source tint and a stronger connector.
+  /// Use 1 for no growth.
   final double hoverScale;
 
   /// A note whose source range is under the pointer in the document. It
@@ -297,7 +342,12 @@ class HomericMarginLayer extends StatefulWidget {
 /// callback.
 class HomericMarginLayerState extends State<HomericMarginLayer> {
   HomericEditableDocumentState? _document;
-  final MarginLayoutMemory _memory = MarginLayoutMemory();
+
+  /// One memory per margin: a change on one side never reopens the other.
+  final Map<HomericMarginSide, MarginLayoutMemory> _memories =
+      <HomericMarginSide, MarginLayoutMemory>{
+    for (final side in HomericMarginSide.values) side: MarginLayoutMemory(),
+  };
   final _MeasureSink _sink = _MeasureSink();
   final Map<String, FocusNode> _focusNodes = <String, FocusNode>{};
   final Map<String, GlobalKey> _shellKeys = <String, GlobalKey>{};
@@ -670,6 +720,12 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
               '"${note.id}".');
         }
       }
+      if (widget.leftMarginRight == null &&
+          (widget.notes.any((note) => note.side == HomericMarginSide.left) ||
+              widget.composer?.side == HomericMarginSide.left)) {
+        throw FlutterError('HomericMarginLayer: a note or composer is on '
+            'HomericMarginSide.left but leftMarginRight is null.');
+      }
       return true;
     }());
     _attachDocument();
@@ -689,12 +745,15 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
               child: IgnorePointer(
                 child: _Measurer(
                   sink: _sink,
-                  width: widget.noteWidth,
                   children: <Widget>[
                     for (final note in snapshot.measured)
                       _MeasureSlot(
                         id: note.id,
-                        child: Builder(builder: note.fullBuilder),
+                        width: _noteWidth(note.side),
+                        child: _alignedToText(
+                          note.side,
+                          Builder(builder: note.fullBuilder),
+                        ),
                       ),
                   ],
                 ),
@@ -741,9 +800,13 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     _ComposerInputs? composerInputs;
     for (final blockId in mounted) {
       final notes = notesByBlock[blockId];
-      final hasComposer = composer?.blockId == blockId;
+      final hasComposer = composer != null &&
+          composer.blockId == blockId &&
+          _notesLeft(composer.side) != null;
       if (notes == null && !hasComposer) continue;
-      if (notes != null) measured.addAll(notes);
+      if (notes != null) {
+        measured.addAll(notes.where((note) => _notesLeft(note.side) != null));
+      }
       final block = geometry.block(blockId);
       final link = block?.layerLink;
       final origin = frame.blockOrigins[blockId];
@@ -755,27 +818,36 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         pending.add(blockId);
         continue;
       }
-      final placement = _BlockPlacement(
-        blockId: blockId,
-        link: link,
-        dx: widget.marginLeft - origin.dx,
-        top: origin.dy,
-        right: rect.right,
-      );
-      final inputs = <_NoteInputs>[];
-      for (final note in notes ?? const <HomericMarginNote>[]) {
-        final anchor = _anchorFor(block, note.range);
-        if (anchor != null) {
-          inputs.add(_NoteInputs(note, anchor.anchor, anchor.rects));
+      final placements = <HomericMarginSide, _BlockPlacement>{
+        for (final side in HomericMarginSide.values)
+          if (_notesLeft(side) case final left?)
+            side: _BlockPlacement(
+              blockId: blockId,
+              side: side,
+              link: link,
+              dx: left - origin.dx,
+              top: origin.dy,
+              left: rect.left,
+              right: rect.right,
+            ),
+      };
+      for (final entry in placements.entries) {
+        final inputs = <_NoteInputs>[];
+        for (final note in notes ?? const <HomericMarginNote>[]) {
+          if (note.side != entry.key) continue;
+          final anchor = _anchorFor(block, note.range);
+          if (anchor != null) {
+            inputs.add(_NoteInputs(note, anchor.anchor, anchor.rects));
+          }
         }
+        if (inputs.isNotEmpty) blocks.add(_BlockInputs(entry.value, inputs));
       }
-      if (inputs.isNotEmpty) blocks.add(_BlockInputs(placement, inputs));
       if (hasComposer) {
-        final anchor = _anchorFor(block, composer!.range);
+        final anchor = _anchorFor(block, composer.range);
         if (anchor != null) {
           composerInputs = _ComposerInputs(
             composer: composer,
-            block: placement,
+            block: placements[composer.side]!,
             blockIndex: mounted.indexOf(blockId),
             anchor: anchor.anchor,
             rects: anchor.rects,
@@ -812,6 +884,29 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
       keyboardOverlap: keyboardOverlap,
     );
   }
+
+  /// Width of the notes on [side].
+  double _noteWidth(HomericMarginSide side) => switch (side) {
+        HomericMarginSide.left => widget.leftNoteWidth ?? widget.noteWidth,
+        HomericMarginSide.right => widget.noteWidth,
+      };
+
+  /// Layer x of the left edge of the notes on [side], or null when the
+  /// layer has no geometry for that margin.
+  double? _notesLeft(HomericMarginSide side) => switch (side) {
+        HomericMarginSide.left => switch (widget.leftMarginRight) {
+            final right? => right - _noteWidth(side),
+            null => null,
+          },
+        HomericMarginSide.right => widget.marginLeft,
+      };
+
+  /// Aligns host text in a note on [side] toward the document: a left
+  /// note's text is right-aligned unless the host sets its own alignment.
+  static Widget _alignedToText(HomericMarginSide side, Widget child) =>
+      side == HomericMarginSide.left
+          ? DefaultTextStyle.merge(textAlign: TextAlign.right, child: child)
+          : child;
 
   static ({Rect anchor, List<Rect> rects})? _anchorFor(
     HomericMountedBlockGeometry block,
@@ -861,7 +956,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         size.height - padding.vertical - snapshot.keyboardOverlap,
       ),
     );
-    return _build(presentation, viewport, notesById);
+    return _build(presentation, viewport, notesById, size.width);
   }
 
   _Presentation _solve(
@@ -870,68 +965,97 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     Map<String, HomericMarginNote> notesById,
   ) {
     final inputsById = <String, _NoteInputs>{};
-    final blocksById = <String, _BlockInputs>{};
-    final solverInput = <MarginBlockInput>[];
-    for (final block in snapshot.blocks) {
-      blocksById[block.placement.blockId] = block;
-      final notes = <MarginNoteInput>[];
-      for (final input in block.notes) {
-        final height = heights[input.note.id];
-        if (height == null) continue;
-        inputsById[input.note.id] = input;
-        notes.add(MarginNoteInput(
-          id: input.note.id,
-          anchorTop: block.placement.top + input.anchor.top,
-          rangeStart: input.note.range.start,
-          fullHeight: height,
-          compactHeight: widget.lineHeight,
-        ));
-      }
-      solverInput.add(MarginBlockInput(
-        blockId: block.placement.blockId,
-        top: block.placement.top,
-        notes: notes,
-      ));
-    }
-    final placements = _memory.solve(
-      solverInput,
-      lineHeight: widget.lineHeight,
-      gap: widget.gap,
-      maxShiftLines: widget.maxShiftLines,
-      maxFullLines: widget.maxFullLines,
-      isUnmounted: snapshot.isUnmounted,
-    );
-
-    // Tap targets grow around each note without moving it, and stop halfway
-    // to the neighbouring note in the column.
-    final ordered = [...placements]..sort((a, b) => a.top.compareTo(b.top));
+    final blocksBySide = <(HomericMarginSide, String), _BlockInputs>{};
+    final placements = <MarginNotePlacement>[];
+    final sides = <String, HomericMarginSide>{};
     final hitTops = <String, double>{};
     final hitBottoms = <String, double>{};
-    for (var index = 0; index < ordered.length; index++) {
-      final placement = ordered[index];
-      final pad =
-          math.max(0.0, (widget.minTapTargetHeight - placement.height) / 2);
-      var top = placement.top - pad;
-      var bottom = placement.bottom + pad;
-      if (index > 0) {
-        final previous = ordered[index - 1];
-        top = math.max(top, (previous.bottom + placement.top) / 2);
+    // Each margin is its own column: solved, remembered and given tap
+    // targets apart from the other.
+    for (final side in HomericMarginSide.values) {
+      final solverInput = <MarginBlockInput>[];
+      for (final block in snapshot.blocks) {
+        if (block.placement.side != side) continue;
+        blocksBySide[(side, block.placement.blockId)] = block;
+        final notes = <MarginNoteInput>[];
+        for (final input in block.notes) {
+          final height = heights[input.note.id];
+          if (height == null) continue;
+          inputsById[input.note.id] = input;
+          notes.add(MarginNoteInput(
+            id: input.note.id,
+            anchorTop: block.placement.top + input.anchor.top,
+            rangeStart: input.note.range.start,
+            fullHeight: height,
+            compactHeight: widget.lineHeight,
+          ));
+        }
+        solverInput.add(MarginBlockInput(
+          blockId: block.placement.blockId,
+          top: block.placement.top,
+          notes: notes,
+        ));
       }
-      if (index + 1 < ordered.length) {
-        final next = ordered[index + 1];
-        bottom = math.min(bottom, (placement.bottom + next.top) / 2);
+      final solved = _memories[side]!.solve(
+        solverInput,
+        lineHeight: widget.lineHeight,
+        gap: widget.gap,
+        maxShiftLines: widget.maxShiftLines,
+        maxFullLines: widget.maxFullLines,
+        isUnmounted: snapshot.isUnmounted,
+      );
+      for (final placement in solved) {
+        sides[placement.id] = side;
       }
-      hitTops[placement.id] = math.min(top, placement.top);
-      hitBottoms[placement.id] = math.max(bottom, placement.bottom);
+      placements.addAll(solved);
+
+      // Tap targets grow around each note without moving it, and stop
+      // halfway to the neighbouring note in the column.
+      final ordered = [...solved]..sort((a, b) => a.top.compareTo(b.top));
+      for (var index = 0; index < ordered.length; index++) {
+        final placement = ordered[index];
+        final pad =
+            math.max(0.0, (widget.minTapTargetHeight - placement.height) / 2);
+        var top = placement.top - pad;
+        var bottom = placement.bottom + pad;
+        if (index > 0) {
+          final previous = ordered[index - 1];
+          top = math.max(top, (previous.bottom + placement.top) / 2);
+        }
+        if (index + 1 < ordered.length) {
+          final next = ordered[index + 1];
+          bottom = math.min(bottom, (placement.bottom + next.top) / 2);
+        }
+        hitTops[placement.id] = math.min(top, placement.top);
+        hitBottoms[placement.id] = math.max(bottom, placement.bottom);
+      }
     }
 
-    final groups = <String, _PlacedGroup>{};
+    // Focus traversal reads both margins in document order: by block, then
+    // by anchor, the left note first on a shared line. A single side keeps
+    // the solver's order.
+    final position = <String, int>{
+      for (var index = 0; index < placements.length; index++)
+        placements[index].id: index,
+    };
+    placements.sort((a, b) {
+      final byBlock = (snapshot.blockOrder[a.blockId] ?? 0)
+          .compareTo(snapshot.blockOrder[b.blockId] ?? 0);
+      if (byBlock != 0) return byBlock;
+      final byAnchor = a.anchorTop.compareTo(b.anchorTop);
+      if (byAnchor != 0) return byAnchor;
+      final bySide = sides[a.id]!.index.compareTo(sides[b.id]!.index);
+      if (bySide != 0) return bySide;
+      return position[a.id]!.compareTo(position[b.id]!);
+    });
+
+    final groups = <(HomericMarginSide, String), _PlacedGroup>{};
     for (var index = 0; index < placements.length; index++) {
       final placement = placements[index];
-      final block = blocksById[placement.blockId]!.placement;
+      final key = (sides[placement.id]!, placement.blockId);
+      final block = blocksBySide[key]!.placement;
       final input = inputsById[placement.id]!;
-      final group =
-          groups[placement.blockId] ??= _PlacedGroup(block, <_PlacedNote>[]);
+      final group = groups[key] ??= _PlacedGroup(block, <_PlacedNote>[]);
       group.notes.add(_PlacedNote(
         id: placement.id,
         order: index,
@@ -982,6 +1106,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     _Presentation presentation,
     _Viewport viewport,
     Map<String, HomericMarginNote> notesById,
+    double layerWidth,
   ) {
     final forms = <String, MarginNoteForm>{};
     final expandedId = widget.expandedNoteId;
@@ -1003,6 +1128,9 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     final links = <String, _BlockPlacement>{};
     for (final group in presentation.groups) {
       links[group.block.blockId] = group.block;
+      final side = group.block.side;
+      final left = side == HomericMarginSide.left;
+      final width = _noteWidth(side);
       final slots = <Widget>[];
       for (final placed in group.notes) {
         final note = notesById[placed.id];
@@ -1025,13 +1153,17 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
             child: IgnorePointer(
               child: CustomPaint(
                 key: ValueKey<String>('homeric-margin-connector-${placed.id}'),
+                // From the note's edge facing the text to the block's edge
+                // facing the note, at least a short run across the gutter.
                 painter: _ConnectorPainter(
                   from: Offset(
-                    -2,
+                    left ? width + 2 : -2,
                     placed.top + math.min(widget.lineHeight, placed.height) / 2,
                   ),
                   to: Offset(
-                    math.min(group.block.right - group.block.dx, -6),
+                    left
+                        ? math.max(group.block.left - group.block.dx, width + 6)
+                        : math.min(group.block.right - group.block.dx, -6),
                     placed.anchor.center.dy,
                   ),
                   // A hovered note's connector comes forward with it.
@@ -1050,10 +1182,11 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         slots.add(_CanvasSlot(
           left: 0,
           top: placed.hitTop,
-          width: widget.noteWidth,
+          width: width,
           height: placed.hitBottom - placed.hitTop,
-          child:
-              expanded ? const SizedBox.shrink() : _restingNote(note, placed),
+          child: expanded
+              ? const SizedBox.shrink()
+              : _restingNote(note, placed, layerWidth),
         ));
         if (expanded) {
           overlay = _overlayFollower(
@@ -1070,7 +1203,9 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
         }
       }
       followers.add(CompositedTransformFollower(
-        key: ValueKey<String>('homeric-margin-group-${group.block.blockId}'),
+        key: ValueKey<String>(left
+            ? 'homeric-margin-group-left-${group.block.blockId}'
+            : 'homeric-margin-group-${group.block.blockId}'),
         link: group.block.link,
         showWhenUnlinked: false,
         offset: Offset(group.block.dx, 0),
@@ -1171,38 +1306,53 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
     );
   }
 
-  Widget _restingNote(HomericMarginNote note, _PlacedNote placed) {
+  Widget _restingNote(
+    HomericMarginNote note,
+    _PlacedNote placed,
+    double layerWidth,
+  ) {
     final focused = _focusNodes[note.id]?.hasFocus ?? false;
     final full = placed.form == MarginNoteForm.full;
+    final left = note.side == HomericMarginSide.left;
+    final width = _noteWidth(note.side);
     Widget content = SizedBox(
       key: ValueKey<String>('homeric-margin-note-${note.id}'),
-      width: widget.noteWidth,
+      width: width,
       height: placed.height,
-      child: full
-          ? Builder(builder: note.fullBuilder)
-          : ClipRect(child: Builder(builder: note.compactBuilder)),
+      child: _alignedToText(
+        note.side,
+        full
+            ? Builder(builder: note.fullBuilder)
+            : ClipRect(child: Builder(builder: note.compactBuilder)),
+      ),
     );
     // Under the pointer, or while focused, a note leans forward a little:
-    // slightly larger from its left edge, so its first letters stay on
-    // their line.
+    // slightly larger from the edge nearest the text, so the letters there
+    // stay on their line.
     final lifted = focused || _effectiveHoveredNoteId == note.id;
     content = AnimatedScale(
       scale: lifted ? widget.hoverScale : 1,
-      alignment: Alignment.centerLeft,
+      alignment: left ? Alignment.centerRight : Alignment.centerLeft,
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
       child: content,
     );
-    // Focus is a short rule in the gutter to the note's left, the way a
-    // reader marks a gloss: a box drawn around the text read as a form field.
+    // Focus is a short rule in the gutter between the note and the text,
+    // the way a reader marks a gloss: a box drawn around the text read as a
+    // form field. The layer clips at its edges: a narrow gutter pulls the
+    // rule in.
+    final ruleOffset = -math.min(
+      _focusRuleGap + _focusRuleWidth,
+      left ? layerWidth - widget.leftMarginRight! : widget.marginLeft,
+    );
     content = Stack(
       clipBehavior: Clip.none,
       children: <Widget>[
         content,
         Positioned(
           key: ValueKey<String>('homeric-margin-focus-${note.id}'),
-          // The layer clips at its edge: a narrow gutter pulls the rule in.
-          left: -math.min(_focusRuleGap + _focusRuleWidth, widget.marginLeft),
+          left: left ? null : ruleOffset,
+          right: left ? ruleOffset : null,
           top: 2,
           bottom: 2,
           width: _focusRuleWidth,
@@ -1243,7 +1393,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
               Positioned(
                 left: 0,
                 top: placed.top - placed.hitTop,
-                width: widget.noteWidth,
+                width: width,
                 height: placed.height,
                 child: content,
               ),
@@ -1302,8 +1452,11 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
               padding: widget.expandedPadding,
               child: SingleChildScrollView(
                 child: SizedBox(
-                  width: widget.noteWidth,
-                  child: Builder(builder: note.fullBuilder),
+                  width: _noteWidth(note.side),
+                  child: _alignedToText(
+                    note.side,
+                    Builder(builder: note.fullBuilder),
+                  ),
                 ),
               ),
             ),
@@ -1327,8 +1480,11 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
                 padding: widget.expandedPadding,
                 child: SingleChildScrollView(
                   child: SizedBox(
-                    width: widget.noteWidth,
-                    child: Builder(builder: composer.builder),
+                    width: _noteWidth(composer.side),
+                    child: _alignedToText(
+                      composer.side,
+                      Builder(builder: composer.builder),
+                    ),
                   ),
                 ),
               ),
@@ -1356,7 +1512,7 @@ class HomericMarginLayerState extends State<HomericMarginLayer> {
           _CanvasSlot(
             left: -padding.left,
             top: top - padding.top,
-            width: widget.noteWidth + padding.horizontal,
+            width: _noteWidth(block.side) + padding.horizontal,
             maxHeight: viewport.maxHeight,
             clampTop: viewport.top - block.top,
             clampBottom: viewport.bottom - block.top,
@@ -1414,20 +1570,29 @@ typedef _Viewport = ({double top, double bottom, double maxHeight});
 final class _BlockPlacement {
   const _BlockPlacement({
     required this.blockId,
+    required this.side,
     required this.link,
     required this.dx,
     required this.top,
+    required this.left,
     required this.right,
   });
 
   final String blockId;
+
+  /// The margin this placement puts the block's notes in.
+  final HomericMarginSide side;
   final LayerLink link;
 
-  /// Follower x offset that puts block-local x = [dx] at the margin's left.
+  /// Follower x offset that puts block-local x = [dx] at the left edge of
+  /// [side]'s notes.
   final double dx;
 
   /// Top of the block in the layer when read, the solver's shared space.
   final double top;
+
+  /// Block-local left edge of the block.
+  final double left;
 
   /// Block-local right edge of the block.
   final double right;
@@ -1789,18 +1954,28 @@ class _RenderMarginStage extends RenderBox
 
 final class _MeasureParentData extends ContainerBoxParentData<RenderBox> {
   String? id;
+  double width = 0;
 }
 
 class _MeasureSlot extends ParentDataWidget<_MeasureParentData> {
-  const _MeasureSlot({required this.id, required super.child});
+  const _MeasureSlot({
+    required this.id,
+    required this.width,
+    required super.child,
+  });
 
   final String id;
+
+  /// Width the note is measured at: its side's note width.
+  final double width;
 
   @override
   void applyParentData(RenderObject renderObject) {
     final parentData = renderObject.parentData! as _MeasureParentData;
-    if (parentData.id != id) {
-      parentData.id = id;
+    if (parentData.id != id || parentData.width != width) {
+      parentData
+        ..id = id
+        ..width = width;
       renderObject.parent?.markNeedsLayout();
     }
   }
@@ -1810,40 +1985,25 @@ class _MeasureSlot extends ParentDataWidget<_MeasureParentData> {
 }
 
 class _Measurer extends MultiChildRenderObjectWidget {
-  const _Measurer({
-    required this.sink,
-    required this.width,
-    required super.children,
-  });
+  const _Measurer({required this.sink, required super.children});
 
   final _MeasureSink sink;
-  final double width;
 
   @override
   _RenderMeasurer createRenderObject(BuildContext context) =>
-      _RenderMeasurer(sink, width);
+      _RenderMeasurer(sink);
 
   @override
   void updateRenderObject(BuildContext context, _RenderMeasurer renderObject) {
-    renderObject
-      ..sink = sink
-      ..width = width;
+    renderObject.sink = sink;
   }
 }
 
 class _RenderMeasurer extends RenderBox
     with ContainerRenderObjectMixin<RenderBox, _MeasureParentData> {
-  _RenderMeasurer(this.sink, this._width);
+  _RenderMeasurer(this.sink);
 
   _MeasureSink sink;
-
-  double get width => _width;
-  double _width;
-  set width(double value) {
-    if (value == _width) return;
-    _width = value;
-    markNeedsLayout();
-  }
 
   @override
   void setupParentData(RenderBox child) {
@@ -1859,7 +2019,7 @@ class _RenderMeasurer extends RenderBox
     while (child != null) {
       final parentData = child.parentData! as _MeasureParentData;
       child.layout(
-        BoxConstraints.tightFor(width: _width),
+        BoxConstraints.tightFor(width: parentData.width),
         parentUsesSize: true,
       );
       final id = parentData.id;

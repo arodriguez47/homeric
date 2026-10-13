@@ -320,7 +320,8 @@ class _EditorPageState extends State<EditorPage> {
 }
 
 /// Margin-notes demo: a [HomericMarginLayer] beside the editor with sparse,
-/// colliding and crowded notes, one note per annotation underline from the
+/// colliding and crowded notes, a second voice in a left margin when the
+/// window is wide enough, one note per annotation underline from the
 /// decoration panel, expansion on tap, and a composer for the current
 /// selection. Notes live only in this widget; it is a consumer of
 /// `package:homeric/margin.dart`, not part of the editor.
@@ -344,16 +345,24 @@ class _MarginDemo extends StatefulWidget {
 class _MarginDemoState extends State<_MarginDemo> {
   static const double _gap = 24;
   static const double _noteWidth = 220;
+  static const double _leftNoteWidth = 160;
   static const Color _ink = Color(0xFF2F5D9E);
 
-  final List<({String id, String blockId, BlockTextRange range, String text})>
-      _notes = [
+  final List<
+      ({
+        String id,
+        String blockId,
+        BlockTextRange range,
+        String text,
+        HomericMarginSide side,
+      })> _notes = [
     // Sparse: one note on the heading's misspelling.
     (
       id: 'typo',
       blockId: 'heading',
       range: const BlockTextRange(8, 17),
       text: 'Spelled this way on purpose: the spell-check demo needs it.',
+      side: HomericMarginSide.right,
     ),
     // Colliding: two notes on the first line of one paragraph.
     (
@@ -361,12 +370,23 @@ class _MarginDemoState extends State<_MarginDemo> {
       blockId: 'intro',
       range: const BlockTextRange(19, 27),
       text: 'Markdown markers fold away when delimiters are hidden.',
+      side: HomericMarginSide.right,
     ),
     (
       id: 'hidden',
       blockId: 'intro',
       range: const BlockTextRange(39, 49),
       text: 'A second voice, shifted below the first with a connector.',
+      side: HomericMarginSide.right,
+    ),
+    // Left margin: another voice on the same line, which never pushes the
+    // notes on the right.
+    (
+      id: 'aside',
+      blockId: 'intro',
+      range: const BlockTextRange(0, 4),
+      text: 'A voice in the left margin, aligned toward the text.',
+      side: HomericMarginSide.left,
     ),
     // Crowded: three long notes on a one-line paragraph turn compact.
     for (var index = 0; index < 3; index++)
@@ -378,6 +398,7 @@ class _MarginDemoState extends State<_MarginDemo> {
             'paragraph cannot all fit in full, so the paragraph shows '
             'one-line previews. Tap a preview to read it in full over its '
             'neighbours; Escape or a tap elsewhere closes it again.',
+        side: HomericMarginSide.right,
       ),
   ];
 
@@ -403,7 +424,8 @@ class _MarginDemoState extends State<_MarginDemo> {
 
   HomericMarginNote _note(
       String id, String blockId, BlockTextRange range, String text,
-      {bool indicator = false}) {
+      {bool indicator = false,
+      HomericMarginSide side = HomericMarginSide.right}) {
     const style = TextStyle(
       fontSize: 14,
       height: 1.4,
@@ -416,6 +438,7 @@ class _MarginDemoState extends State<_MarginDemo> {
       range: range,
       semanticsLabel: 'Margin note: $text',
       paintSourceIndicator: indicator,
+      side: side,
       fullBuilder: (context) => Text(text, style: style),
       compactBuilder: (context) => Text(
         text,
@@ -426,11 +449,13 @@ class _MarginDemoState extends State<_MarginDemo> {
     );
   }
 
-  List<HomericMarginNote> get _allNotes => [
+  List<HomericMarginNote> _allNotes({required bool leftMargin}) => [
         for (final note in _notes)
-          _note(note.id, note.blockId, note.range, note.text,
-              indicator:
-                  note.id.startsWith('typo') || note.id.startsWith('created')),
+          if (leftMargin || note.side == HomericMarginSide.right)
+            _note(note.id, note.blockId, note.range, note.text,
+                indicator:
+                    note.id.startsWith('typo') || note.id.startsWith('created'),
+                side: note.side),
         // One note per annotation underline added in the decoration panel;
         // the underline is already the in-document mark.
         for (final decoration in widget.viewModel.decorations.decorations)
@@ -519,6 +544,7 @@ class _MarginDemoState extends State<_MarginDemo> {
           blockId: blockId,
           range: range,
           text: text,
+          side: HomericMarginSide.right,
         ));
       }
       _composer = null;
@@ -529,13 +555,17 @@ class _MarginDemoState extends State<_MarginDemo> {
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.editor;
     return LayoutBuilder(builder: (context, constraints) {
-      final editorWidth = constraints.maxWidth - _gap - _noteWidth - 16;
-      if (editorWidth < 320) return widget.editor;
+      final rightOnly = constraints.maxWidth - _gap - _noteWidth - 16;
+      if (rightOnly < 320) return widget.editor;
+      // A left margin only when the editor keeps 320 px beside it.
+      final leftMargin = rightOnly - _leftNoteWidth - _gap >= 320;
+      final editorLeft = leftMargin ? _leftNoteWidth + _gap : 0.0;
+      final editorWidth = rightOnly - editorLeft;
       final lineHeight = MediaQuery.textScalerOf(context).scale(14) * 1.4;
       return Stack(
         children: [
           Positioned(
-            left: 0,
+            left: editorLeft,
             top: 0,
             bottom: 0,
             width: editorWidth,
@@ -545,10 +575,13 @@ class _MarginDemoState extends State<_MarginDemo> {
           Positioned.fill(
             child: HomericMarginLayer(
               documentKey: widget.documentKey,
-              notes: _allNotes,
-              // The editor's 16 px padding ends its text column early.
-              marginLeft: editorWidth - 16 + _gap,
+              notes: _allNotes(leftMargin: leftMargin),
+              // The editor's 16 px padding ends its text column early and
+              // starts it late.
+              marginLeft: editorLeft + editorWidth - 16 + _gap,
               noteWidth: _noteWidth,
+              leftMarginRight: leftMargin ? editorLeft + 16 - _gap : null,
+              leftNoteWidth: _leftNoteWidth,
               lineHeight: lineHeight,
               expandedNoteId: _expanded,
               composer: _composer,

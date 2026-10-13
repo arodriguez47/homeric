@@ -30,6 +30,12 @@ void main() {
       findsOneWidget,
       reason: 'the colliding note is displaced',
     );
+    // A second voice in the left margin shares the line with the right
+    // notes without pushing them.
+    expect(note('aside'), findsOneWidget);
+    expect(tester.getRect(note('aside')).right,
+        lessThan(tester.getRect(note('bold')).left));
+    expect(tester.getRect(note('aside')).top, tester.getRect(note('bold')).top);
     expect(note('crowd-0'), findsOneWidget);
     expect(tester.getSize(note('crowd-0')).height, closeTo(14 * 1.4, 0.01),
         reason: 'the crowded paragraph shows previews');

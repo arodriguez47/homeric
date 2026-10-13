@@ -1255,6 +1255,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       if (_documentHost != null)
         const SingleActivator(LogicalKeyboardKey.numpadEnter):
             const HomericInsertParagraphBreakIntent(),
+      // Option+Up/Down jump between paragraph edges in native Apple text
+      // views. Flutter's default maps them to line edges, which duplicates
+      // Cmd+Left/Right and leaves no paragraph jump at all.
+      if (_isApplePlatform) ...{
+        const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true):
+            const ExtendSelectionToNextParagraphBoundaryIntent(
+                forward: false, collapseSelection: true),
+        const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true):
+            const ExtendSelectionToNextParagraphBoundaryIntent(
+                forward: true, collapseSelection: true),
+      },
       const SingleActivator(LogicalKeyboardKey.tab):
           const _TraverseIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true):
@@ -1412,6 +1423,41 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           _HostAction<DeleteToNextWordBoundaryIntent>(
         enabled: (_) => _canMutateActions,
         invoke: (intent) => _deleteByWord(forward: intent.forward),
+      ),
+      // Cmd+Backspace / Cmd+Delete on macOS, Ctrl+K (deleteToEndOfParagraph:)
+      // and the matching AppKit selectors: delete to the visual line edge.
+      DeleteToLineBreakIntent: _HostAction<DeleteToLineBreakIntent>(
+        enabled: (_) => _canMutateActions,
+        invoke: (intent) => _deleteToLineBoundary(forward: intent.forward),
+      ),
+      // Option+Up/Down on macOS: caret to the start/end of the paragraph.
+      ExtendSelectionToNextParagraphBoundaryIntent:
+          _HostAction<ExtendSelectionToNextParagraphBoundaryIntent>(
+        enabled: (_) => _canUseSelectionActions,
+        invoke: (intent) {
+          // AppKit may follow the handled chord with its own line-edge
+          // selector, which would undo a step into the next paragraph.
+          widget.inputSession.suppressNextSelector(intent.forward
+              ? 'moveToEndOfParagraph:'
+              : 'moveToBeginningOfParagraph:');
+          return _moveToParagraphBoundary(
+            forward: intent.forward,
+            collapseSelection: intent.collapseSelection,
+          );
+        },
+      ),
+      ExtendSelectionToNextParagraphBoundaryOrCaretLocationIntent: _HostAction<
+          ExtendSelectionToNextParagraphBoundaryOrCaretLocationIntent>(
+        enabled: (_) => _canUseSelectionActions,
+        invoke: (intent) => _moveToParagraphBoundary(
+          forward: intent.forward,
+          collapseSelection: intent.collapseSelection,
+        ),
+      ),
+      // Ctrl+T on macOS (transpose:).
+      TransposeCharactersIntent: _HostAction<TransposeCharactersIntent>(
+        enabled: (_) => _canMutateActions,
+        invoke: (_) => _transposeCharacters(),
       ),
       CopySelectionTextIntent: _HostAction<CopySelectionTextIntent>(
         enabled: (intent) =>
@@ -3165,7 +3211,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         .value;
     final start = forward ? local.head : result.position.value;
     final end = forward ? result.position.value : local.head;
-    if (start == end) return null;
+    if (start == end) {
+      // At a paragraph edge the word delete joins the neighbouring block,
+      // the way a native text view treats the line break as one character.
+      return _deleteAcrossBoundary(forward: forward, at: local.head);
+    }
     _controller.applyBlockEditBatch(
       blockId: widget.blockId,
       edits: <CanonicalTextEdit>[CanonicalTextEdit(start, end, '')],
@@ -3173,6 +3223,110 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
     return null;
   }
+
+  /// Deletes from the caret to the edge of its visual line (macOS
+  /// Cmd+Backspace / Cmd+Delete). A caret already at that edge deletes one
+  /// character instead, so repeated presses keep eating backwards through
+  /// paragraph breaks the way TextEdit and Notes do.
+  Object? _deleteToLineBoundary({required bool forward}) {
+    final local = _localSelection();
+    if (local == null) return null;
+    if (!local.isCollapsed) {
+      _controller.deleteBackward();
+      return null;
+    }
+    final geometry = _currentGeometry();
+    if (geometry == null) return null;
+    final boundary = geometry
+        .lineBoundaryAt(
+          DocOffset(local.head),
+          assoc: _assoc(local.affinity),
+        )
+        .value;
+    final start = forward ? local.head : boundary.start.value;
+    final end = forward ? boundary.end.value : local.head;
+    if (start >= end) {
+      return _deleteAcrossBoundary(forward: forward, at: local.head);
+    }
+    _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[CanonicalTextEdit(start, end, '')],
+      selection: BlockTextSelection.collapsed(start),
+    );
+    return null;
+  }
+
+  /// Falls back to a single-character delete when a range delete is empty.
+  ///
+  /// Only at the block's own edge, where that delete is the structural join;
+  /// mid-block an empty range means the platform reported no boundary, and
+  /// deleting a character there would surprise the writer.
+  Object? _deleteAcrossBoundary({required bool forward, required int at}) {
+    final length = _block?.text.length;
+    if (length == null) return null;
+    if (forward ? at < length : at > 0) return null;
+    return forward ? _controller.deleteForward() : _controller.deleteBackward();
+  }
+
+  /// Moves (or extends) the caret to the start or end of this paragraph.
+  /// Already there, it steps one position on, into the neighbouring block.
+  Object? _moveToParagraphBoundary({
+    required bool forward,
+    required bool collapseSelection,
+  }) {
+    final local = _localSelection();
+    final block = _block;
+    if (local == null || block == null) return null;
+    final target = forward ? block.text.length : 0;
+    if (local.head == target) {
+      return _moveCaret(_MoveCaretIntent(
+        forward ? CaretMovementDirection.right : CaretMovementDirection.left,
+        !collapseSelection,
+      ));
+    }
+    _setLocalSelection(
+      collapseSelection ? target : local.anchor,
+      target,
+      affinity: forward
+          ? HomericCaretAffinity.upstream
+          : HomericCaretAffinity.downstream,
+      resetPreferredX: true,
+    );
+    return null;
+  }
+
+  /// Swaps the characters either side of a collapsed caret (macOS Ctrl+T).
+  /// At the end of a paragraph it swaps the last two, as AppKit does.
+  Object? _transposeCharacters() {
+    final local = _localSelection();
+    final block = _block;
+    if (local == null || block == null || !local.isCollapsed) return null;
+    final text = block.text;
+    if (text.length < 2 || local.head == 0) return null;
+    final end = local.head < text.length ? local.head + 1 : local.head;
+    final start = end - 2;
+    final first = text.substring(start, start + 1);
+    final second = text.substring(start + 1, end);
+    // Never split a surrogate pair; the swap would corrupt both glyphs.
+    if (_isSurrogate(first.codeUnitAt(0)) ||
+        _isSurrogate(second.codeUnitAt(0))) {
+      return null;
+    }
+    _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[
+        CanonicalTextEdit(start, end, '$second$first'),
+      ],
+      selection: BlockTextSelection.collapsed(end),
+    );
+    return null;
+  }
+
+  static bool get _isApplePlatform =>
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+
+  static bool _isSurrogate(int codeUnit) => (codeUnit & 0xF800) == 0xD800;
 
   ParagraphGeometry? _currentGeometry() {
     final render = _renderParagraph;

@@ -1155,3 +1155,27 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   layout-neutral, pointer-transparent, and uses the editable semantics
   node", "placeholder visibility follows eligibility and one real input
   history unit").
+
+## engineer — 2026-10-13 — A row decoration aligns to the first baseline, never to the line box
+
+- **Lesson:** centring a glyph (the block grabber) on the first line's box
+  leaves it floating against the text, because body text sits on its
+  baseline, low in a tall (1.7×) line box, and the glyph's own font has
+  different ascent/descent. Any host formula for "line centre" also breaks
+  per font, scale and block kind. Read the content's real first baseline
+  in layout and put the glyph's baseline there instead.
+- **Shape (Homeric):** `HomericBlockGrabberStyle(alignment:
+  HomericBlockGrabberAlignment.firstBaseline)` swaps the row's `Row` for a
+  two-child render box that lays the content out first (same tight width,
+  unbounded height as `Expanded`), then offsets only the grabber by
+  `contentBaseline - grabberBaseline`. Text never moves; a block without a
+  baseline falls back to `blockGrabberCenterY`.
+- **Gotcha:** inside `performLayout` read baselines with
+  `child.getDistanceToBaseline(baseline, onlyReal: true)`;
+  `getDistanceToActualBaseline` asserts outside a baseline pass. Tests that
+  read a baseline after layout wrap it in
+  `RenderObject.debugCheckingIntrinsics = true`.
+- Evidence: Homeric `test/editing/block_grabber_baseline_test.dart`; Nexus
+  `test/widgets/homeric_journal_editor_session_test.dart` ("grabber sits on
+  the first text baseline", every block kind at 1× and 2× text scale; fails
+  by 40-90px with `center`).

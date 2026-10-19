@@ -1202,3 +1202,24 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
 - Evidence: Homeric `test/writing/smart_punctuation_test.dart`; Nexus
   `test/utils/homeric_journal_typed_breaks_test.dart` ("Homeric smart
   punctuation in the journal").
+
+## writing-module — 2026-10-19 — Syntax and presentation live in the writing module too
+
+- **What moved:** typed note syntax (`HomericSyntax`: markdown, `[[links]]`,
+  `#tags`, to-dos, dividers, asides, comments, annotations, footnotes,
+  strikes, drop caps, images), wrap keys, footnote punctuation, typography,
+  list glyphs, writing width and focus dimming. Apps keep their own chrome:
+  margins, bubbles, the `[[` card menu, footnote placement, settings.
+- **Shape:** decoration specs stay opaque. `HomericSyntax` emits
+  `HomericMarkSpec` kinds and slot specs; each host styles them in
+  `resolveStyle` / `slotBuilder` and paints washes with its own
+  `HomericSyntaxPaint` colours. Options switch each form off per app.
+- **Rule:** a host that stores marks as attributes (Histos's `nexus_*`)
+  adapts at its edge rather than converting stored notes. Linked titles read
+  whole (`HomericWikiLinks.readable` cuts only when a host passes
+  `maxTitle`); writers shorten links with `|words`.
+- **Gotcha:** setting the drag grabber width to 0 inside a card changes card
+  heights, so a host that hides the grabber keeps its width and clips it.
+- Evidence: `test/writing/writing_features_test.dart`,
+  `test/writing/note_marks_test.dart`; Sprintnotes
+  `test/writing_focus_test.dart`.

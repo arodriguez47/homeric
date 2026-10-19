@@ -1179,3 +1179,26 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   `test/widgets/homeric_journal_editor_session_test.dart` ("grabber sits on
   the first text baseline", every block kind at 1× and 2× text scale; fails
   by 40-90px with `center`).
+
+## engineer — 2026-10-19 — Writing features live in Homeric as opt-in plugins, not in each app
+
+- **Lesson:** the same writing detail built inside one app never reaches the
+  next. Histos had `--` em dashes and Sprintnotes rebuilt them, while only
+  Sprintnotes got curly quotes and the ellipsis. A writing rule that does not
+  depend on an app's data model belongs in Homeric's `package:homeric/writing.dart`
+  as a `HomericWritingFeature`. `HomericWritingKit.standard()` installs every
+  host-free feature, so an app on the standard kit gains a new one by bumping
+  Homeric and opts out by id (`without: {'smartPunctuation'}`).
+- **Shape:** a feature is built only on public controller seams (command
+  interceptors, prepared commands with a literal undo checkpoint). A host with
+  its own interceptor chain (Histos's journal) calls
+  `HomericSmartPunctuation(...).sessionFor(controller).prepare(command)` at the
+  point the rule belongs in its chain, rather than `installOn`. Rules whose
+  output is the host's model (what a `---` divider *is*, what an annotation
+  stores) stay in the host until the representation is shared.
+- **Gotcha:** "is this code?" at the caret must read the run plain typing
+  joins (the run *before* the caret), not the run at the caret offset, or a
+  `code` run's end is mistaken for plain text.
+- Evidence: Homeric `test/writing/smart_punctuation_test.dart`; Nexus
+  `test/utils/homeric_journal_typed_breaks_test.dart` ("Homeric smart
+  punctuation in the journal").

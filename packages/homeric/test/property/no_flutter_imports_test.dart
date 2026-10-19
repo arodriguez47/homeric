@@ -95,4 +95,45 @@ void main() {
     expect(library, isNot(contains('margin')),
         reason: 'margin types ship only through package:homeric/margin.dart');
   });
+
+  // Writing features are an optional module over the controller's public
+  // seams, like margin: the core never reaches into it, and the core
+  // library does not export it.
+  test('core modules never import the writing module', () {
+    const coreDirs = [
+      'lib/src/model',
+      'lib/src/transform',
+      'lib/src/decoration',
+      'lib/src/view',
+      'lib/src/render',
+      'lib/src/editing',
+      'lib/src/margin',
+    ];
+    final writingImport = RegExp(
+      '''^\\s*(import|export)\\s+['"]([^'"]*/)?writing(/|\\.dart['"])''',
+    );
+    final offenders = <String>[];
+    for (final dir in coreDirs) {
+      final files = Directory(dir)
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.dart'));
+      for (final file in files) {
+        final lines = file.readAsLinesSync();
+        for (var i = 0; i < lines.length; i++) {
+          if (writingImport.hasMatch(lines[i])) {
+            offenders.add('${file.path}:${i + 1}: ${lines[i].trim()}');
+          }
+        }
+      }
+    }
+    expect(offenders, isEmpty,
+        reason: 'core modules must not depend on writing features:\n'
+            '${offenders.join('\n')}');
+    expect(writingImport.hasMatch("import '../writing/writing_kit.dart';"),
+        isTrue);
+    final library = File('lib/homeric.dart').readAsStringSync();
+    expect(library, isNot(contains('src/writing/')),
+        reason: 'writing types ship only through package:homeric/writing.dart');
+  });
 }

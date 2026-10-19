@@ -1406,6 +1406,7 @@ class HomericEditorController extends ChangeNotifier {
         blockId: blockId,
         text: inserts.map((edit) => edit.text).join(),
         edits: edits,
+        replacementComposing: composing,
       ));
       if (interception != null) return interception;
     }

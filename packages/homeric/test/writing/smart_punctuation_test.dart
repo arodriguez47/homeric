@@ -73,6 +73,9 @@ void main() {
       expect(rules.editFor('see https://x.com/a--', 20), isNull);
       expect(rules.editFor('[x](a--', 6), isNull);
       expect(rules.editFor('`a` b--', 6), isNotNull);
+      expect(rules.editFor('see example.com/a--', 18), isNull);
+      expect(rules.editFor('(docs.example.org:8080/a...', 26), isNull);
+      expect(rules.editFor('e.g.--', 5), isNotNull);
     });
 
     test('each rule can be turned off', () {
@@ -200,6 +203,66 @@ void main() {
       );
       await tester.pump();
       expect(textOf(controller), 'word”');
+    });
+
+    testWidgets('Backspace after a dead-key quote puts back the straight one',
+        (tester) async {
+      final controller = controllerFor('word');
+      const HomericSmartPunctuation().installOn(controller);
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        edits: const [CanonicalTextEdit(4, 4, '"')],
+        selection: const BlockTextSelection.collapsed(5),
+        composing: const BlockTextRange(4, 5),
+      );
+      await tester.pump();
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        selection: const BlockTextSelection.collapsed(5),
+      );
+      await tester.pump();
+      expect(textOf(controller), 'word”');
+      controller.deleteBackward();
+      expect(textOf(controller), 'word"');
+    });
+
+    testWidgets('a replacement or deleting batch goes ahead as asked',
+        (tester) async {
+      final controller = controllerFor('a-', caret: 2);
+      const HomericSmartPunctuation().installOn(controller);
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        edits: const [CanonicalTextEdit(0, 2, '-')],
+        selection: const BlockTextSelection.collapsed(1),
+      );
+      expect(textOf(controller), '-');
+
+      final selected = controllerFor('ab-');
+      const HomericSmartPunctuation().installOn(selected);
+      selected.applyBlockEditBatch(
+        blockId: 'b',
+        edits: const [
+          CanonicalTextEdit(1, 2, ''),
+          CanonicalTextEdit(2, 2, '-')
+        ],
+        selection: const BlockTextSelection.collapsed(3),
+      );
+      expect(textOf(selected), 'a--');
+    });
+
+    testWidgets('explicit attributes win, and explicit code stays as typed',
+        (tester) async {
+      final bold = controllerFor('say ');
+      const HomericSmartPunctuation().installOn(bold);
+      bold.replaceSelection('"', attributes: const {'bold': true});
+      expect(textOf(bold), 'say “');
+      expect(bold.document.blocks.single.runs.last.attributes,
+          const {'bold': true});
+
+      final code = controllerFor('a-');
+      const HomericSmartPunctuation().installOn(code);
+      code.replaceSelection('-', attributes: const {'code': true});
+      expect(textOf(code), 'a--');
     });
 
     testWidgets('isActive switches the feature without reinstalling',

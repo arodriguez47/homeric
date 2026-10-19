@@ -194,7 +194,7 @@ final class HomericSmartPunctuation extends HomericWritingFeature {
     // The word it is typed into is a web address or a link's target.
     final wordStart = before.lastIndexOf(RegExp(r'\s')) + 1;
     final word = before.substring(wordStart);
-    if (_urlStart.hasMatch(word)) return true;
+    if (_urlStart.hasMatch(word) || _bareAddress.hasMatch(word)) return true;
     if (word.contains('](')) return true;
     return false;
   }
@@ -214,6 +214,12 @@ final class HomericSmartPunctuation extends HomericWritingFeature {
   static final RegExp _urlStart = RegExp(
     r'(^|[(\[<])(https?://|www\.|mailto:)',
     caseSensitive: false,
+  );
+
+  /// A bare address with a path, as in `example.com/foo`.
+  static final RegExp _bareAddress = RegExp(
+    r'(^|[(\[<])[\p{L}\p{N}-]+(\.[\p{L}\p{N}-]+)*\.\p{L}{2,}(:\d+)?/',
+    unicode: true,
   );
 }
 
@@ -295,6 +301,19 @@ final class HomericSmartPunctuationSession {
         attributes: _attributesAt(block, edit.start),
       );
       // The quote keeps its length, so the caret stays where it was.
+      final caret = selection == null ? null : document.resolve(selection.head);
+      if (feature.backspaceReverts &&
+          caret is InlinePosition &&
+          caret.block.id == blockId) {
+        _last = _Substitution(
+          document: conversion.doc,
+          blockId: blockId,
+          start: edit.start,
+          replacement: edit.replacement,
+          original: edit.original(text),
+          caret: caret.offset,
+        );
+      }
       return HomericPreparedCommand(
         stages: <Transaction>[conversion],
         selection: selection,
@@ -356,7 +375,19 @@ final class HomericSmartPunctuationSession {
     }
     final block = caret.block;
     final offset = caret.offset;
-    if (_isCode(block, offset) ||
+    // Only plain typing: one insertion at the caret. A replacement or a
+    // batch that also deletes goes ahead as the platform asked.
+    final edits = command.edits;
+    if (edits != null &&
+        (edits.length != 1 ||
+            edits.single.start != offset ||
+            edits.single.end != offset ||
+            edits.single.text != typed)) {
+      return null;
+    }
+    final explicit = edits?.single.attributes;
+    if (explicit?['code'] == true ||
+        _isCode(block, offset) ||
         (feature.isLiteral?.call(block, offset) ?? false)) {
       return null;
     }
@@ -368,7 +399,8 @@ final class HomericSmartPunctuationSession {
         ..insertText(
           selection.head,
           typed,
-          attributes: feature.typingAttributes?.call(block, offset) ??
+          attributes: explicit ??
+              feature.typingAttributes?.call(block, offset) ??
               _inheritedAttributes(block, offset),
         );
       final literalDocument = literal.doc;

@@ -3,8 +3,10 @@ library;
 
 import 'package:flutter/foundation.dart';
 
+import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
 import 'smart_punctuation.dart';
+import 'wrap_shortcuts.dart';
 import 'writing_feature.dart';
 
 /// The writing features an app runs, installed together.
@@ -58,6 +60,7 @@ final class HomericWritingKit {
   static const List<HomericWritingFeature> standardFeatures =
       <HomericWritingFeature>[
     HomericSmartPunctuation(),
+    HomericWrapShortcuts(),
   ];
 
   /// Features in install order; interceptors run in this order.
@@ -65,6 +68,14 @@ final class HomericWritingKit {
 
   /// Whether the kit carries a feature with [id].
   bool has(String id) => features.any((feature) => feature.id == id);
+
+  /// Every feature's shortcuts, in install order, for
+  /// `HomericEditableDocument(commandBindings:)`. An app's own bindings
+  /// placed before these win for the same keys.
+  List<HomericDocumentCommandBinding> get commandBindings => List<
+          HomericDocumentCommandBinding>.unmodifiable(<HomericDocumentCommandBinding>[
+        for (final feature in features) ...feature.commandBindings,
+      ]);
 
   /// Installs every feature on [controller]; returns one callback that stops
   /// them all.

@@ -15,6 +15,8 @@
 /// `—-` for a host rule to recognize.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../editing/editor_controller.dart';
@@ -125,7 +127,13 @@ final class HomericSmartPunctuation extends HomericWritingFeature {
   @override
   VoidCallback installOn(HomericEditorController controller) {
     final session = sessionFor(controller);
-    return controller.addCommandInterceptor(session.intercept);
+    final stopIntercepting =
+        controller.addCommandInterceptor(session.intercept);
+    final stopListening = session.listen();
+    return () {
+      stopListening();
+      stopIntercepting();
+    };
   }
 
   /// What the character just typed at [at] in [text] becomes, or null when
@@ -221,6 +229,80 @@ final class HomericSmartPunctuationSession {
   final HomericEditorController controller;
 
   _Substitution? _last;
+
+  /// Where the open composition started (block id, block-local offset).
+  ({String blockId, int start})? _composingFrom;
+
+  /// Follows dead-key compositions so a quote typed as marked text curls
+  /// when it commits (`'` and `"` on US-International wait for the next
+  /// key). [HomericSmartPunctuation.installOn] calls it; a host that calls
+  /// [prepare] from its own chain calls it too. Returns the stop callback.
+  VoidCallback listen() {
+    controller.addListener(_onControllerChanged);
+    return () => controller.removeListener(_onControllerChanged);
+  }
+
+  void _onControllerChanged() {
+    final composing = controller.composing;
+    if (composing != null) {
+      if (_composingFrom != null) return;
+      final at = controller.document.resolve(composing.start);
+      if (at is InlinePosition) {
+        _composingFrom = (blockId: at.block.id, start: at.offset);
+      }
+      return;
+    }
+    final from = _composingFrom;
+    if (from == null) return;
+    _composingFrom = null;
+    final document = controller.document;
+    // After the commit settles, as typing a character would.
+    scheduleMicrotask(() {
+      if (!identical(controller.document, document)) return;
+      final prepared = _prepareCommitted(from.blockId, from.start);
+      if (prepared != null) controller.applyPreparedCommand(prepared);
+    });
+  }
+
+  /// A quote a composition just committed at [start] of [blockId].
+  HomericPreparedCommand? _prepareCommitted(String blockId, int start) {
+    _last = null;
+    if (feature.isActive?.call() == false || controller.composing != null) {
+      return null;
+    }
+    final document = controller.document;
+    final index = document.indexOfBlockId(blockId);
+    if (index == null) return null;
+    final block = document.blocks[index];
+    final text = block.text;
+    if (start >= text.length || !'"\''.contains(text[start])) return null;
+    if (_isCode(block, start) ||
+        (feature.isLiteral?.call(block, start) ?? false)) {
+      return null;
+    }
+    final edit = feature.editFor(text, start);
+    if (edit == null) return null;
+    final selection = controller.selection;
+    try {
+      final conversion = Transaction(document)
+        ..deleteRange(
+          document.positionAt(index, edit.start),
+          document.positionAt(index, edit.end),
+        );
+      conversion.insertText(
+        conversion.doc.positionAt(index, edit.start),
+        edit.replacement,
+        attributes: _attributesAt(block, edit.start),
+      );
+      // The quote keeps its length, so the caret stays where it was.
+      return HomericPreparedCommand(
+        stages: <Transaction>[conversion],
+        selection: selection,
+      );
+    } on ArgumentError {
+      return null;
+    }
+  }
 
   /// Interceptor that applies [prepare]'s command.
   HomericCommandInterception intercept(HomericEditorCommand command) {

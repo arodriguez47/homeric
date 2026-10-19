@@ -160,6 +160,48 @@ void main() {
       expect(caretOf(controller), 6);
     });
 
+    testWidgets('a dead-key quote waits as marked text, curls on commit',
+        (tester) async {
+      // US-International: `'` waits as marked text, then commits with the
+      // next key.
+      final controller = controllerFor('say ');
+      const HomericSmartPunctuation().installOn(controller);
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        edits: const [CanonicalTextEdit(4, 4, "'")],
+        selection: const BlockTextSelection.collapsed(5),
+        composing: const BlockTextRange(4, 5),
+      );
+      await tester.pump();
+      expect(textOf(controller), "say '", reason: 'marked text is untouched');
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        edits: const [CanonicalTextEdit(4, 5, "'h")],
+        selection: const BlockTextSelection.collapsed(6),
+      );
+      await tester.pump();
+      expect(textOf(controller), 'say ‘h');
+      expect(caretOf(controller), 6);
+    });
+
+    testWidgets('a dead-key quote committed alone curls too', (tester) async {
+      final controller = controllerFor('word');
+      const HomericSmartPunctuation().installOn(controller);
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        edits: const [CanonicalTextEdit(4, 4, '"')],
+        selection: const BlockTextSelection.collapsed(5),
+        composing: const BlockTextRange(4, 5),
+      );
+      await tester.pump();
+      controller.applyBlockEditBatch(
+        blockId: 'b',
+        selection: const BlockTextSelection.collapsed(5),
+      );
+      await tester.pump();
+      expect(textOf(controller), 'word”');
+    });
+
     testWidgets('isActive switches the feature without reinstalling',
         (tester) async {
       var on = false;

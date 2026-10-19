@@ -5,8 +5,8 @@
 /// export these types and no core module imports them.
 ///
 /// - Typing rules, installed on a controller by a [HomericWritingKit]:
-///   [HomericSmartPunctuation], [HomericWrapShortcuts] (⌘B ⌘I ⌘E ⌘⇧S) and
-///   [HomericFootnotePunctuation].
+///   [HomericSmartPunctuation], [HomericWrapShortcuts] (⌘B ⌘I ⌘E ⌘⇧S),
+///   [HomericFootnotePunctuation] and the soft word cap [HomericBrevity].
 /// - Typed syntax, folded away in live preview by [HomericSyntax]:
 ///   markdown, `[[links]]` ([HomericWikiLinks], [HomericLinkQuery]),
 ///   `#tags` ([HomericTags]), to-dos ([HomericChecklists]), `---`
@@ -17,6 +17,7 @@
 ///   [HomericWritingWidth] and focus dimming ([HomericFocusDimController]).
 library;
 
+export 'src/writing/brevity.dart';
 export 'src/writing/checklists.dart';
 export 'src/writing/divider.dart';
 export 'src/writing/focus_dim.dart';

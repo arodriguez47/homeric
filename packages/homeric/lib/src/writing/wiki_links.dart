@@ -83,12 +83,12 @@ abstract final class HomericWikiLinks {
 
   /// [text] with each link swapped for words a reader can follow: its
   /// `|label`, else [titleFor] the target, else the raw target. A title
-  /// that itself holds a link reads as "a note"; one longer than
-  /// [maxTitle] is cut with an ellipsis.
+  /// that itself holds a link reads as "a note". Titles are whole unless
+  /// [maxTitle] is given, past which they are cut with an ellipsis.
   static String readable(
     String text,
     String? Function(String target) titleFor, {
-    int maxTitle = 48,
+    int? maxTitle,
   }) {
     if (!text.contains('[[')) return text;
     final out = StringBuffer();
@@ -103,7 +103,7 @@ abstract final class HomericWikiLinks {
           out.write(title == null ? m.target : 'a note');
         } else {
           out.write(
-            title.length <= maxTitle
+            maxTitle == null || title.length <= maxTitle
                 ? title
                 : '${title.substring(0, maxTitle).trimRight()}…',
           );

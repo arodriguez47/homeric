@@ -293,6 +293,16 @@ void main() {
       );
     });
 
+    test('a linked title reads whole unless a cap is asked for', () {
+      const long = 'The old orchard by the river where the apple trees grow';
+      String? title(String _) => long;
+      expect(HomericWikiLinks.readable('see [[n1]]', title), 'see $long');
+      expect(
+        HomericWikiLinks.readable('see [[n1]]', title, maxTitle: 14),
+        'see The old orchar…',
+      );
+    });
+
     test('the [[ being typed is a query until it closes', () {
       expect(
         HomericLinkQuery.at('b', 'see [[orch', 10),

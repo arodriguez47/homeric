@@ -8,8 +8,7 @@ void main() {
   Block block(String id, String text) =>
       Block(id: id, type: 'paragraph', runs: [InlineRun(text)]);
 
-  String words(int n, {String word = 'word'}) =>
-      List.filled(n, word).join(' ');
+  String words(int n, {String word = 'word'}) => List.filled(n, word).join(' ');
 
   HomericBrevity feature({
     int first = 3,
@@ -25,8 +24,7 @@ void main() {
 
   group('counting', () {
     test('a word joins letters across inner apostrophes and hyphens', () {
-      expect(HomericBrevity.countWords('don’t stop — well-known, 3 ideas'),
-          5);
+      expect(HomericBrevity.countWords('don’t stop — well-known, 3 ideas'), 5);
       expect(HomericBrevity.countWords('  ...  -- '), 0);
       expect(HomericBrevity.countWords('café naïve 東京'), 3);
     });

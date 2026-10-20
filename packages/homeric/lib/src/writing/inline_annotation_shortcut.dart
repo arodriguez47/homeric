@@ -13,8 +13,9 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../editing/editor_controller.dart';
 import '../model/position.dart';
-import 'editor_controller.dart';
+import 'writing_feature.dart';
 
 /// The range a writer marked with `{{…}}`, after the braces were removed.
 @immutable
@@ -63,13 +64,17 @@ final class HomericInlineAnnotationRequest {
 
 /// Turns typed `{{text}}` into an annotation request.
 ///
-/// Default is **off**: a host registers [interceptor] (or calls [installOn])
-/// to enable it. [onAnnotate] runs after the frame that lays out the edited
+/// A writing feature the host switches on with its own [onAnnotate], so it
+/// stays out of [HomericWritingKit.standardFeatures]. A host registers
+/// [interceptor] (or calls [installOn]) to enable it. [onAnnotate] runs after the frame that lays out the edited
 /// paragraph, so geometry for the range is current when the host anchors its
 /// composer there. The edit is one undo step: undo restores the braces.
-final class HomericInlineAnnotationShortcut {
+final class HomericInlineAnnotationShortcut extends HomericWritingFeature {
   /// Creates the shortcut.
   const HomericInlineAnnotationShortcut({required this.onAnnotate});
+
+  @override
+  String get id => 'inlineAnnotation';
 
   /// Receives each marked range once its braces are gone.
   final ValueChanged<HomericInlineAnnotationRequest> onAnnotate;
@@ -79,6 +84,7 @@ final class HomericInlineAnnotationShortcut {
   HomericCommandInterceptor get interceptor => _intercept;
 
   /// Registers [interceptor] on [controller]; returns the unregister callback.
+  @override
   VoidCallback installOn(HomericEditorController controller) =>
       controller.addCommandInterceptor(interceptor);
 

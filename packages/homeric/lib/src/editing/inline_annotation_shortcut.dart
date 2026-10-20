@@ -1,7 +1,10 @@
 /// Opt-in `{{text}}` typing shortcut that asks the host to annotate a range.
 ///
 /// Typing the closing `}}` of `{{some words}}` removes both brace pairs,
-/// keeps `some words` in place, and reports that range to [onAnnotate]. What
+/// keeps `some words` in place, and reports that range to [onAnnotate].
+/// `{{some words|a note}}` also takes `|a note` out of the text and hands it
+/// over as [HomericInlineAnnotationRequest.note], so the writer can say what
+/// the note is without leaving the line. What
 /// an annotation *is* (a margin note, a comment, a popover) stays the host's
 /// decision, per the no-presentation-in-the-core rule: Homeric only spots the
 /// gesture and hands over the anchored range.
@@ -22,6 +25,7 @@ final class HomericInlineAnnotationRequest {
     required this.start,
     required this.end,
     required this.text,
+    this.note,
   });
 
   /// Stable ID of the block holding the range.
@@ -36,20 +40,25 @@ final class HomericInlineAnnotationRequest {
   /// The marked text itself.
   final String text;
 
+  /// What was typed after `|`, trimmed; null when there was no `|` or
+  /// nothing but spaces after it.
+  final String? note;
+
   @override
   bool operator ==(Object other) =>
       other is HomericInlineAnnotationRequest &&
       other.blockId == blockId &&
       other.start == start &&
       other.end == end &&
-      other.text == text;
+      other.text == text &&
+      other.note == note;
 
   @override
-  int get hashCode => Object.hash(blockId, start, end, text);
+  int get hashCode => Object.hash(blockId, start, end, text, note);
 
   @override
-  String toString() =>
-      'HomericInlineAnnotationRequest($blockId, $start..$end, "$text")';
+  String toString() => 'HomericInlineAnnotationRequest($blockId, '
+      '$start..$end, "$text"${note == null ? '' : ', note: "$note"'})';
 }
 
 /// Turns typed `{{text}}` into an annotation request.
@@ -73,8 +82,11 @@ final class HomericInlineAnnotationShortcut {
   VoidCallback installOn(HomericEditorController controller) =>
       controller.addCommandInterceptor(interceptor);
 
-  /// Text between the braces: one line, no nested braces, not just spaces.
-  static final RegExp _closing = RegExp(r'\{\{([^{}\n]*[^{}\s][^{}\n]*)\}$');
+  /// Text between the braces: one line, no nested braces, not just spaces,
+  /// then an optional `|note`. The marked words stop at the first `|`.
+  static final RegExp _closing = RegExp(
+    r'\{\{([^{}|\n]*[^{}|\s][^{}|\n]*)(?:\|([^{}\n]*))?\}$',
+  );
 
   HomericCommandInterception _intercept(HomericEditorCommand command) {
     if (command.kind != HomericCommandKind.preInsert || command.text != '}') {
@@ -97,11 +109,14 @@ final class HomericInlineAnnotationShortcut {
 
     final open = match.start;
     final inner = match.group(1)!;
+    final note = match.group(2)?.trim();
+    final innerEnd = open + 2 + inner.length;
     final applied = controller.applyBlockEditBatch(
       blockId: blockId,
       edits: <CanonicalTextEdit>[
-        // The first closing brace, already typed; the second never lands.
-        CanonicalTextEdit(offset - 1, offset, ''),
+        // `|note` and the first closing brace, already typed; the second
+        // never lands.
+        CanonicalTextEdit(innerEnd, offset, ''),
         CanonicalTextEdit(open, open + 2, ''),
       ],
       selection: BlockTextSelection.collapsed(open + inner.length),
@@ -113,6 +128,7 @@ final class HomericInlineAnnotationShortcut {
       start: open,
       end: open + inner.length,
       text: inner,
+      note: note == null || note.isEmpty ? null : note,
     );
     SchedulerBinding.instance
       ..addPostFrameCallback((_) => onAnnotate(request))

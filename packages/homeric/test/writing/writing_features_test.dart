@@ -285,6 +285,23 @@ void main() {
       expect(HomericWikiLinks.linkTo('n1', alias: 'a [b] | c'), '[[n1|a b c]]');
     });
 
+    test('renaming a link changes its words, never its target', () {
+      HomericWikiLinkMatch link(String text) =>
+          HomericWikiLinks.allMatches(text).single;
+      expect(link('[[n1]]').withWords('the walk'), '[[n1|the walk]]');
+      expect(link('[[n1|old]]').withWords('  new  words '), '[[n1|new words]]');
+      // Brackets, bars and line breaks would break the link: they read
+      // as spaces.
+      expect(link('[[n1|old]]').withWords('a [b] |\nc'), '[[n1|a b c]]');
+      // Blank words, or the target again, give the plain link back.
+      expect(link('[[n1|old]]').withWords(''), '[[n1]]');
+      expect(link('[[n1|old]]').withWords(null), '[[n1]]');
+      expect(link('[[The Orchard|walk]]').withWords('the  orchard'),
+          '[[The Orchard]]');
+      // The target keeps its own spelling.
+      expect(link('[[ Orchard ]]').withWords('walk'), '[[ Orchard |walk]]');
+    });
+
     test('readable text shows labels and titles', () {
       String? title(String target) => target == 'n1' ? 'The orchard' : null;
       expect(

@@ -690,11 +690,20 @@ class ParagraphGeometry {
     final boxes = <ui.TextBox>[];
     var start = viewStart;
     while (start < viewEnd) {
+      // Line numbers never decrease along the text, so the line's end is
+      // found by binary search rather than one lookup per code unit.
       final line = _paragraph.getLineNumberAt(start);
-      var end = start + 1;
-      while (end < viewEnd && _paragraph.getLineNumberAt(end) == line) {
-        end++;
+      var low = start + 1;
+      var high = viewEnd;
+      while (low < high) {
+        final mid = (low + high) >> 1;
+        if (_paragraph.getLineNumberAt(mid) == line) {
+          low = mid + 1;
+        } else {
+          high = mid;
+        }
       }
+      final end = low;
       var inkStart = start;
       var inkEnd = end;
       while (inkStart < inkEnd && _isBlank(text.codeUnitAt(inkStart))) {

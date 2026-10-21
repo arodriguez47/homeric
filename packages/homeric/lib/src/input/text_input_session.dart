@@ -56,15 +56,16 @@ final class HomericTextInputGeometryLease {
 /// `deleteBackward` sends no delta when the caret is at offset 0, so without a
 /// character to delete the document could never join or remove the block.
 /// Deleting the sentinel dispatches the host's document-level Backspace.
+///
+/// The default configuration turns UIKit's Smart Dashes off. Hyphens are
+/// source here (`- ` list markers, a `---` divider, the writing layer's `--`
+/// em dash), and UIKit rewriting them on an iPhone hides from those rules the
+/// hyphens they match.
 final class HomericTextInputSession extends ChangeNotifier {
   /// Creates a session that observes [controller].
   HomericTextInputSession({
     required this.controller,
-    TextInputConfiguration configuration = const TextInputConfiguration(
-      inputType: TextInputType.text,
-      inputAction: TextInputAction.newline,
-      enableDeltaModel: true,
-    ),
+    TextInputConfiguration configuration = defaultConfiguration,
   }) : _configuration = configuration {
     if (!configuration.enableDeltaModel) {
       throw ArgumentError.value(
@@ -75,6 +76,15 @@ final class HomericTextInputSession extends ChangeNotifier {
     }
     controller.addListener(_controllerChanged);
   }
+
+  /// Plain text, Enter for a new line, deltas, and no Smart Dashes.
+  static const TextInputConfiguration defaultConfiguration =
+      TextInputConfiguration(
+    inputType: TextInputType.text,
+    inputAction: TextInputAction.newline,
+    enableDeltaModel: true,
+    smartDashesType: SmartDashesType.disabled,
+  );
 
   /// The canonical editor state owned outside this platform adapter.
   final HomericEditorController controller;

@@ -1241,3 +1241,24 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   margin anchors, hit tests) is ink: hover areas match what is drawn.
 - Evidence: `test/render/paint_layers_test.dart` ("a range wrapping across
   lines hugs its glyphs"); homeric#63.
+
+## engineer — 2026-10-21 — A scaled host: measure against the viewport in its own units
+
+- **Symptom:** with Histos zoomed to 150% (an app-wide zoom that lays the
+  app out smaller and paints it scaled), a click in the lower half of the
+  journal scrolled the page, selection drags autoscrolled from mid-page,
+  and a drag across blocks stopped short of each line's end.
+- **Cause:** `localToGlobal` and pointer positions are in window units, so
+  under a scale they are longer than the editor's own. The caret reveal
+  subtracted the viewport's window top from the caret's window top and
+  compared that with the viewport's local height; the autoscroll band and
+  the selection hosts' block rects were "window top-left & local size".
+- **Rule:** compare against a viewport in its own units:
+  `render.globalToLocal(windowPoint)` against `render.size`. A rect that is
+  hit-tested or clamped in window units is the drawn rect,
+  `MatrixUtils.transformRect(render.getTransformTo(null), Offset.zero &
+  render.size)`. "Window top-left & local size" rects stay correct only
+  when a consumer turns the top-left back with `globalToLocal` and keeps the
+  size, never when it reads their far edges in window units.
+- Evidence: `test/editing/scaled_host_test.dart` (each case fails on the
+  old math); Histos zoom (nexus app_zoom).

@@ -937,7 +937,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
-            return render.localToGlobal(Offset.zero) & render.size;
+            // The block as drawn in the window, size included: drag hit
+            // tests and clamps pointer positions to it, and a scaled host
+            // (an app-wide zoom) draws it larger than its local size.
+            return MatrixUtils.transformRect(
+              render.getTransformTo(null),
+              Offset.zero & render.size,
+            );
           },
           hitTest: (globalPoint) {
             final current = _currentConsumerGeometry();

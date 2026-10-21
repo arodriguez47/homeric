@@ -939,11 +939,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             }
             // The block as drawn in the window, size included: drag hit
             // tests and clamps pointer positions to it, and a scaled host
-            // (an app-wide zoom) draws it larger than its local size.
-            return MatrixUtils.transformRect(
-              render.getTransformTo(null),
-              Offset.zero & render.size,
-            );
+            // (an app-wide zoom) draws it larger than its local size. The
+            // top left stays the block's own origin, which geometry reads.
+            return render.localToGlobal(Offset.zero) &
+                MatrixUtils.transformRect(
+                  render.getTransformTo(null),
+                  Offset.zero & render.size,
+                ).size;
           },
           hitTest: (globalPoint) {
             final current = _currentConsumerGeometry();

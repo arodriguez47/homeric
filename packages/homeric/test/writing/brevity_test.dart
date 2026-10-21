@@ -88,6 +88,88 @@ void main() {
     });
   });
 
+  group('characters', () {
+    HomericBrevity chars(
+            {int second = 5, int? goal, HomericWordTest? isCounted}) =>
+        HomericBrevity(
+          firstMark: 0,
+          secondMark: second,
+          unit: HomericBrevityUnit.characters,
+          goal: goal,
+          onReading: (_) {},
+          isCounted: isCounted,
+        );
+
+    test('counts what a reader sees, spaces and line breaks included', () {
+      expect(HomericBrevity.countCharacters('a b'), 3);
+      // One flag, one family: one character each.
+      expect(HomericBrevity.countCharacters('🇪🇸👨‍👩‍👧'), 2);
+      expect(HomericBrevity.countIn('one two', HomericBrevityUnit.words), 2);
+      final reading = chars(second: 50).read(
+        Document([block('a', 'ab'), block('b', ''), block('c', 'é')]),
+      );
+      // ab + break + break + é
+      expect(reading.count, 5);
+      expect(reading.unit, HomericBrevityUnit.characters);
+    });
+
+    test('fades from the first character past the mark', () {
+      final document = Document([block('a', 'abc'), block('b', 'defg')]);
+      final reading = chars().read(document);
+      // abc, break, d are the five; e is the sixth.
+      expect(reading.count, 8);
+      expect(reading.stage, HomericBrevityStage.overlong);
+      expect(reading.pastBlockId, 'b');
+      expect(reading.pastOffset, 1);
+    });
+
+    test('a line break past the mark fades the whole next block', () {
+      final document = Document(
+        [block('a', 'abcde'), block('b', 'f'), block('c', 'g')],
+      );
+      final reading = chars().read(document);
+      expect(reading.count, 9);
+      expect(reading.pastBlockId, 'b');
+      expect(reading.pastOffset, 0);
+      expect(reading.laterBlockIds, {'c'});
+    });
+
+    test('isCounted is asked of each character', () {
+      final reading = chars(
+        second: 50,
+        isCounted: (block, start, end) => block.text[start] != '#',
+      ).read(Document([block('a', '#a#b')]));
+      expect(reading.count, 2);
+    });
+  });
+
+  group('goal', () {
+    test('rides on each reading without changing the stage', () {
+      final f = HomericBrevity(
+        firstMark: 0,
+        secondMark: 10,
+        goal: 4,
+        onReading: (_) {},
+      );
+      final short = f.read(Document([block('a', words(2))]));
+      expect(short.goal, 4);
+      expect(short.reachedGoal, isFalse);
+      expect(short.goalProgress, closeTo(0.5, 1e-9));
+      expect(short.stage, HomericBrevityStage.long);
+      final reached = f.read(Document([block('a', words(4))]));
+      expect(reached.reachedGoal, isTrue);
+      expect(reached.goalProgress, 1);
+      expect(short == reached, isFalse);
+    });
+
+    test('no goal reads as reached', () {
+      final reading = feature().read(Document([block('a', 'one')]));
+      expect(reading.goal, isNull);
+      expect(reading.reachedGoal, isTrue);
+      expect(reading.goalProgress, 1);
+    });
+  });
+
   group('installOn', () {
     test('reads on install and again only when the reading changes', () {
       final document = Document([block('a', 'one')]);

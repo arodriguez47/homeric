@@ -1223,3 +1223,21 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
 - Evidence: `test/writing/writing_features_test.dart`,
   `test/writing/note_marks_test.dart`; Sprintnotes
   `test/writing_focus_test.dart`.
+
+## engineer — 2026-10-21 — Decorations hug glyphs; only the selection keeps the line shape
+
+- **Symptom:** a `{{passage|note}}` underline wrapping after a space ran
+  from its last word on to the column edge (Sprintnotes Echo card), and
+  Histos's annotation wash did the same.
+- **Cause:** paint layers resolved through `rectsForRange`
+  (`BoxWidthStyle.max`, the selection shape). That box keeps the space
+  hanging at a soft wrap, and the engine reports that space stretched to
+  the column edge. `BoxWidthStyle.tight` alone still includes the space.
+- **Rule:** decorations use `ParagraphGeometry.inkRectsForRange` (tight
+  boxes per line, trimmed of spaces at each line's ends); this is
+  `PaintLayer`'s default (`PaintLayerFit.ink`). Selection paints and reports
+  (`globalSelectionRects`) with `PaintLayerFit.line` / `rectsForRange`, so
+  a wrapped selection stays gapless. Block geometry `rectsForRange` (host
+  margin anchors, hit tests) is ink: hover areas match what is drawn.
+- Evidence: `test/render/paint_layers_test.dart` ("a range wrapping across
+  lines hugs its glyphs"); homeric#63.

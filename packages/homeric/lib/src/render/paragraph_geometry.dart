@@ -646,7 +646,8 @@ class ParagraphGeometry {
   ///
   /// [heightStyle]/[widthStyle] default to `includeLineSpacingMiddle` /
   /// `max` — AppFlowy's own default, and the shape that yields gapless
-  /// selection rects across a wrapped line.
+  /// selection rects across a wrapped line. Decorations want
+  /// [inkRectsForRange] instead.
   ///
   /// Throws [DocOffsetOutOfRangeError] if either end of [range] is outside
   /// `[0, docLength]`.
@@ -663,6 +664,74 @@ class ParagraphGeometry {
     return _stamp(_paragraph.getBoxesForRange(viewStart, viewEnd,
         boxHeightStyle: heightStyle, boxWidthStyle: widthStyle));
   }
+
+  /// The rects covering only the glyphs [range] shows on each visual
+  /// line: the shape a decoration (an underline, a wash, a pill) should
+  /// hug, unlike [rectsForRange]'s selection shape.
+  ///
+  /// Each line's share of [range] is measured `tight` and trimmed of the
+  /// whitespace at its two ends, so a passage that wraps after a space
+  /// stops at its last word instead of running on to the widest line's
+  /// edge, and a line that holds nothing but that space gets no rect.
+  /// Fragments within a line stay separate, as in [rectsForRange].
+  ///
+  /// Throws [DocOffsetOutOfRangeError] if either end of [range] is outside
+  /// `[0, docLength]`.
+  GeometryResult<List<ui.TextBox>> inkRectsForRange(
+    DocRange range, {
+    ui.BoxHeightStyle heightStyle = ui.BoxHeightStyle.includeLineSpacingMiddle,
+  }) {
+    _checkRange(range);
+    final (viewStart, viewEnd) = _viewRangeOf(range);
+    if (viewEnd <= viewStart) {
+      return _stamp(const <ui.TextBox>[]);
+    }
+    final text = _viewText;
+    final boxes = <ui.TextBox>[];
+    var start = viewStart;
+    while (start < viewEnd) {
+      // Line numbers never decrease along the text, so the line's end is
+      // found by binary search rather than one lookup per code unit.
+      final line = _paragraph.getLineNumberAt(start);
+      var low = start + 1;
+      var high = viewEnd;
+      while (low < high) {
+        final mid = (low + high) >> 1;
+        if (_paragraph.getLineNumberAt(mid) == line) {
+          low = mid + 1;
+        } else {
+          high = mid;
+        }
+      }
+      final end = low;
+      var inkStart = start;
+      var inkEnd = end;
+      while (inkStart < inkEnd && _isBlank(text.codeUnitAt(inkStart))) {
+        inkStart++;
+      }
+      while (inkEnd > inkStart && _isBlank(text.codeUnitAt(inkEnd - 1))) {
+        inkEnd--;
+      }
+      if (inkEnd > inkStart) {
+        boxes.addAll(_paragraph.getBoxesForRange(inkStart, inkEnd,
+            boxHeightStyle: heightStyle,
+            boxWidthStyle: ui.BoxWidthStyle.tight));
+      }
+      start = end;
+    }
+    return _stamp(boxes);
+  }
+
+  /// Whether [unit] is a space or tab: ink a decoration never covers at
+  /// the edge of a line.
+  static bool _isBlank(int unit) =>
+      unit == 0x20 ||
+      unit == 0x09 ||
+      unit == 0xA0 ||
+      unit == 0x3000 ||
+      (unit >= 0x2000 && unit <= 0x200A) ||
+      unit == 0x202F ||
+      unit == 0x205F;
 
   // --- Hit testing -----------------------------------------------------------
 

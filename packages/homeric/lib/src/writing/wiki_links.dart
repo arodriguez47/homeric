@@ -39,6 +39,22 @@ final class HomericWikiLinkMatch {
 
   /// Whether the link has its own `|label`.
   bool get hasLabel => labelStart != start + 2;
+
+  /// This link's source with [words] as its label: `[[target|words]]`.
+  ///
+  /// Renaming a link changes only the words a reader sees; the target
+  /// stays as written. Blank [words], or words that only repeat the
+  /// target, give the plain `[[target]]` back, so the link reads as what
+  /// it points at again.
+  String withWords(String? words) {
+    final clean = words?.replaceAll(RegExp(r'[\[\]|\s]+'), ' ').trim();
+    if (clean == null ||
+        clean.isEmpty ||
+        HomericWikiLinks.key(clean) == HomericWikiLinks.key(target)) {
+      return '[[$target]]';
+    }
+    return '[[$target|$clean]]';
+  }
 }
 
 /// Reading and writing `[[links]]`.

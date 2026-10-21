@@ -2215,7 +2215,6 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
     final render = context.findRenderObject();
     if (render is! RenderBox || !render.attached || !render.hasSize) return;
-    final viewportTop = render.localToGlobal(Offset.zero).dy;
     final viewportHeight = render.size.height;
     if (viewportHeight <= 0) return;
     if (!caret.globalRect.isFinite) {
@@ -2223,7 +2222,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       _revealActiveBlockBounded();
       return;
     }
-    final caretRect = caret.globalRect.translate(0, -viewportTop);
+    // In the viewport's own units. A host that scales the editor (an
+    // app-wide zoom) makes window distances longer than local ones, and
+    // the caret rect's size is already local.
+    final caretRect =
+        render.globalToLocal(caret.globalRect.topLeft) & caret.globalRect.size;
     final double delta;
     if (widget.typewriterFocus) {
       // Keep the caret line at viewport center (always inside the middle
@@ -2418,11 +2421,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (!_scrollController.hasClients) return;
     final render = context.findRenderObject();
     if (render is! RenderBox || !render.attached) return;
-    final viewport = render.localToGlobal(Offset.zero) & render.size;
+    // In the viewport's own units, so a scaled host keeps the edge bands
+    // where they are drawn.
+    final point = render.globalToLocal(globalPoint);
     const edge = 36.0;
-    final direction = globalPoint.dy < viewport.top + edge
+    final direction = point.dy < edge
         ? -1
-        : globalPoint.dy > viewport.bottom - edge
+        : point.dy > render.size.height - edge
             ? 1
             : 0;
     if (direction == 0) {

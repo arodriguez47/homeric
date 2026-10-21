@@ -148,10 +148,12 @@ final class HomericSmartPunctuation extends HomericWritingFeature {
     if (isLiteralText(text, at)) return null;
     switch (typed) {
       case '-':
-        // A dash on an empty bullet line (`- ` with nothing after it) is the
+        // A dash on an empty bullet line (`- ` with nothing else on it) is the
         // second of `--`, typed with a space between: the bullet gives way
         // to the em dash, so a third `-` still makes a divider.
-        if (emDash && _emptyBullet.hasMatch(_lineBefore(text, at))) {
+        if (emDash &&
+            _emptyBullet.hasMatch(_lineBefore(text, at)) &&
+            _lineAfter(text, at).isEmpty) {
           final markerStart = text.indexOf('-', _lineStart(text, at));
           return HomericPunctuationEdit(markerStart, at + 1, emDashCharacter);
         }
@@ -198,6 +200,12 @@ final class HomericSmartPunctuation extends HomericWritingFeature {
   /// The line holding [at] in [text], up to [at].
   static String _lineBefore(String text, int at) =>
       text.substring(_lineStart(text, at), at);
+
+  /// The line holding [at] in [text], after the character at [at].
+  static String _lineAfter(String text, int at) {
+    final end = text.indexOf('\n', at + 1);
+    return text.substring(at + 1, end < 0 ? text.length : end);
+  }
 
   /// A bullet marker with nothing after it yet, as a whole line before the
   /// caret.

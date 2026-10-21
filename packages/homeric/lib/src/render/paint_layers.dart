@@ -51,6 +51,19 @@ enum PaintBand {
   overlay,
 }
 
+/// How a [PaintLayer]'s range turns into the rects its painter draws.
+enum PaintLayerFit {
+  /// Hugs the glyphs on each line ([ParagraphGeometry.inkRectsForRange]):
+  /// an underline or wash over a wrapped range stops at the last word of
+  /// each line, never at the column edge. The default.
+  ink,
+
+  /// The selection shape ([ParagraphGeometry.rectsForRange]): each wrapped
+  /// line runs on to the widest line's edge, so a selection reads as one
+  /// gapless block.
+  line,
+}
+
 /// Interprets one [PaintLayer]'s opaque [PaintLayer.spec] against a single
 /// resolved fragment [rect], drawing on [canvas].
 ///
@@ -82,6 +95,7 @@ final class PaintLayer {
     required this.band,
     required this.painter,
     this.spec,
+    this.fit = PaintLayerFit.ink,
   });
 
   /// The document range this layer paints over.
@@ -103,20 +117,27 @@ final class PaintLayer {
   /// changed layer and force an unnecessary repaint.
   final Object? spec;
 
+  /// Whether [range] resolves to rects that hug its glyphs or to the
+  /// selection shape.
+  final PaintLayerFit fit;
+
   @override
   bool operator ==(Object other) =>
       other is PaintLayer &&
       other.range == range &&
       other.band == band &&
       identical(other.painter, painter) &&
-      other.spec == spec;
+      other.spec == spec &&
+      other.fit == fit;
 
   @override
-  int get hashCode => Object.hash(range, band, identityHashCode(painter), spec);
+  int get hashCode =>
+      Object.hash(range, band, identityHashCode(painter), spec, fit);
 
   @override
-  String toString() =>
-      'PaintLayer(${band.name}, $range${spec == null ? '' : ', spec: $spec'})';
+  String toString() => 'PaintLayer(${band.name}, $range'
+      '${fit == PaintLayerFit.ink ? '' : ', fit: ${fit.name}'}'
+      '${spec == null ? '' : ', spec: $spec'})';
 }
 
 /// Paints every layer in [layers] whose [PaintLayer.band] is [band],
@@ -126,7 +147,8 @@ final class PaintLayer {
 /// never held across frames or builds — so every rect reflects the
 /// paragraph's current layout generation (R9). Each layer's document
 /// range becomes zero or more fragment rects via
-/// [ParagraphGeometry.rectsForRange] (bidi runs and slot placeholders
+/// [ParagraphGeometry.inkRectsForRange], or [ParagraphGeometry.rectsForRange]
+/// for a [PaintLayerFit.line] layer (bidi runs and slot placeholders
 /// never merge into a neighboring fragment: a range spanning a slot
 /// paints the surrounding text fragments correctly without ever washing
 /// the slot itself unless the range explicitly includes it), each shifted
@@ -147,7 +169,10 @@ void paintLayerBand(
     if (layer.band != band || layer.range.isCollapsed) {
       continue;
     }
-    final boxes = geometry.rectsForRange(layer.range).value;
+    final boxes = switch (layer.fit) {
+      PaintLayerFit.ink => geometry.inkRectsForRange(layer.range).value,
+      PaintLayerFit.line => geometry.rectsForRange(layer.range).value,
+    };
     for (final box in boxes) {
       layer.painter(canvas, box.toRect().shift(origin), layer.spec);
     }

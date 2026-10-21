@@ -129,6 +129,89 @@ void main() {
     });
   });
 
+  group('a range wrapping across lines hugs its glyphs', () {
+    // 14 glyphs fit the 200px harness: "aaaa bbbb cccc" fills line one and
+    // its trailing space hangs at the wrap; "dddd eeee" is line two.
+    const text = 'aaaa bbbb cccc dddd eeee';
+
+    testWidgets(
+        'each line stops at its last word, never at the wrap space or the '
+        'widest line', (tester) async {
+      final range = DocRange(const DocOffset(10), const DocOffset(19));
+      final layer = PaintLayer(
+        range: range,
+        band: PaintBand.overlay,
+        painter: underlinePainter,
+        spec: const UnderlineSpec(Color(0xFF2F6F66)),
+      );
+
+      await tester.pumpWidget(harness(
+          HomericParagraph(source: sourceOf(text), paintLayers: [layer])));
+
+      final rects = ParagraphGeometry(renderOf(tester))
+          .inkRectsForRange(range)
+          .value
+          .map((box) => box.toRect())
+          .toList();
+      expect(rects, hasLength(2));
+      expect(rects[0].left, 140);
+      expect(rects[0].right, 196);
+      expect(rects[1].left, 0);
+      expect(rects[1].right, 56);
+      expect(rects[1].top, greaterThan(rects[0].top));
+
+      expect(
+        renderOf(tester),
+        paints
+          ..line(
+              p1: Offset(140, rects[0].bottom + 1),
+              p2: Offset(196, rects[0].bottom + 1))
+          ..line(
+              p1: Offset(0, rects[1].bottom + 1),
+              p2: Offset(56, rects[1].bottom + 1)),
+      );
+    });
+
+    testWidgets('a line holding only the wrap space gets no rect',
+        (tester) async {
+      await tester
+          .pumpWidget(harness(HomericParagraph(source: sourceOf(text))));
+      final geometry = ParagraphGeometry(renderOf(tester));
+
+      final rects = geometry
+          .inkRectsForRange(DocRange(const DocOffset(14), const DocOffset(19)))
+          .value;
+      expect(rects, hasLength(1));
+      expect(rects.single.left, 0);
+      expect(rects.single.right, 56);
+    });
+
+    testWidgets('a selection layer keeps the gapless line shape',
+        (tester) async {
+      final range = DocRange(const DocOffset(10), const DocOffset(19));
+      final layer = PaintLayer(
+        range: range,
+        band: PaintBand.underlay,
+        painter: solidWashPainter,
+        spec: const SolidWashSpec(Color(0xFFFF0000)),
+        fit: PaintLayerFit.line,
+      );
+
+      await tester.pumpWidget(harness(
+          HomericParagraph(source: sourceOf(text), paintLayers: [layer])));
+
+      final expected =
+          ParagraphGeometry(renderOf(tester)).rectsForRange(range).value;
+      expect(expected.first.right, greaterThan(196));
+      expect(
+        renderOf(tester),
+        paints
+          ..rect(rect: expected[0].toRect(), color: const Color(0xFFFF0000))
+          ..rect(rect: expected[1].toRect(), color: const Color(0xFFFF0000)),
+      );
+    });
+  });
+
   group('paint order (R3, pinned)', () {
     testWidgets(
         'underlay paints before the glyphs; overlay paints after, '

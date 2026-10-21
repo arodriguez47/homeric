@@ -120,11 +120,13 @@ final class HomericEditableBlockGeometry {
               .value
           : null;
 
-  /// Returns paragraph-local rectangles for one canonical block range.
+  /// Returns paragraph-local rectangles for one canonical block range,
+  /// hugging its glyphs on each line
+  /// ([ParagraphGeometry.inkRectsForRange]).
   List<Rect>? rectsForRange(BlockTextRange range) => isCurrent
       ? List<Rect>.unmodifiable(
           _geometry
-              .rectsForRange(DocRange(
+              .inkRectsForRange(DocRange(
                 DocOffset(range.start),
                 DocOffset(range.end),
               ))
@@ -864,6 +866,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           spec: SolidWashSpec(
             focused ? selectionColor : inactiveSelectionColor,
           ),
+          fit: PaintLayerFit.line,
         ),
       for (final suggestion in _currentSpellingSuggestions)
         PaintLayer(

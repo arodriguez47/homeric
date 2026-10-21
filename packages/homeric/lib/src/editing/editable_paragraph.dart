@@ -135,6 +135,20 @@ final class HomericEditableBlockGeometry {
         )
       : null;
 
+  /// [rectsForRange] in the selection shape, matching the painted selection
+  /// wash ([PaintLayerFit.line]).
+  List<Rect>? _lineRectsForRange(BlockTextRange range) => isCurrent
+      ? List<Rect>.unmodifiable(
+          _geometry
+              .rectsForRange(DocRange(
+                DocOffset(range.start),
+                DocOffset(range.end),
+              ))
+              .value
+              .map((box) => box.toRect()),
+        )
+      : null;
+
   /// Returns the current visual line containing [offset] in canonical block
   /// coordinates, or `null` after this layout generation is invalidated.
   BlockTextRange? lineBoundaryAt(
@@ -969,7 +983,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             if (render is! RenderBox || !render.attached || !render.hasSize) {
               return null;
             }
-            final localRects = current.rectsForRange(range);
+            final localRects = current._lineRectsForRange(range);
             if (localRects == null) return null;
             return <Rect>[
               for (final rect in localRects)

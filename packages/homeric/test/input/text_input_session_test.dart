@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric/writing.dart';
 
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
@@ -1246,6 +1247,78 @@ void main() {
 
       session.dispose();
       controller.dispose();
+    });
+
+    test('UIKit Smart Dashes stay off, so typed hyphens reach Homeric', () {
+      final controller = HomericEditorController(
+        document: _document(''),
+        selection: const HomericSelection.collapsed(1),
+      );
+      final session = HomericTextInputSession(controller: controller);
+
+      session.attach(blockId: 'a');
+
+      final setClient =
+          calls.firstWhere((call) => call.method == 'TextInput.setClient');
+      final configuration =
+          (setClient.arguments as List<Object?>)[1]! as Map<Object?, Object?>;
+      expect(configuration['smartDashesType'],
+          SmartDashesType.disabled.index.toString());
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    group('dashes typed at a line start on the soft keyboard', () {
+      /// Types [typed] into an empty line one character at a time, as the
+      /// iOS keyboard sends it: an insertion delta after the sentinel.
+      Future<String> typeOnPhone(String typed) async {
+        final controller = HomericEditorController(
+          document: _document(''),
+          selection: const HomericSelection.collapsed(1),
+        );
+        final uninstall = const HomericSmartPunctuation().installOn(controller);
+        final session = HomericTextInputSession(controller: controller);
+        session.attach(blockId: 'a', commandDelegate: _FakeCommandDelegate());
+        for (final char in typed.split('')) {
+          final text = controller.document.blocks.single.text;
+          final caret = controller.blockOffsetForGlobalPosition(
+              'a', controller.selection!.head);
+          await _sendDeltas(binding, 1, <Map<String, Object?>>[
+            _delta(
+              oldText: '\u200B$text',
+              deltaText: char,
+              start: caret + 1,
+              end: caret + 1,
+              selectionBase: caret + 2,
+              selectionExtent: caret + 2,
+            ),
+          ]);
+        }
+        final result = controller.document.blocks.single.text;
+        session.dispose();
+        uninstall();
+        controller.dispose();
+        return result;
+      }
+
+      for (final (typed, result) in <(String, String)>[
+        ('--', '—'),
+        ('-- ', '— '),
+        ('---', '—-'),
+        ('- ', '- '),
+        ('- -', '—'),
+        ('- --', '—-'),
+        ('- item', '- item'),
+      ]) {
+        test('"$typed" makes "$result"', () async {
+          expect(await typeOnPhone(typed), result);
+          if (typed.endsWith('---') || typed == '- --') {
+            expect(HomericDivider.isTyped(result), isTrue,
+                reason: 'the host turns this line into a divider');
+          }
+        });
+      }
     });
   });
 }

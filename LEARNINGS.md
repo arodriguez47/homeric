@@ -1262,3 +1262,24 @@ the three 2026-10-05 margin entries above; these are the host-side ones.
   size, never when it reads their far edges in window units.
 - Evidence: `test/editing/scaled_host_test.dart` (each case fails on the
   old math); Histos zoom (nexus app_zoom).
+
+## engineer — 2026-10-21 — iOS Smart Dashes rewrite the hyphens Homeric's rules match
+
+**What:** On iPhone, Sprintnotes could not make `---` (divider) or `--` (em
+dash) at a line start; a `- ` became a bullet that then took every further
+dash. The text input session used Flutter's default configuration, which
+leaves UIKit Smart Dashes on, so UIKit replaced hyphens itself before the
+writing layer's `--` / `---` rules saw them. Histos had already hit this and
+turned Smart Dashes off in its own configuration (nexus `913ef98`).
+
+**Fix:** `HomericTextInputSession.defaultConfiguration` turns Smart Dashes off,
+so every host gets the hyphens as typed. `HomericSmartPunctuation` also lets a
+`-` typed on an empty `- ` bullet line become an em dash, so `- --` still
+reaches a divider.
+
+- **A platform text service that rewrites characters competes with any
+  typed-syntax rule.** When Homeric owns a rule, turn the platform's version off
+  in the input configuration rather than chasing its replacements.
+- Evidence: `test/input/text_input_session_test.dart` (iOS group, "dashes typed
+  at a line start on the soft keyboard"), `test/writing/smart_punctuation_test.dart`
+  ("dashes typed at a line start with a hardware keyboard").

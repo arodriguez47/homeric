@@ -53,6 +53,21 @@ void main() {
       expect(rules.editFor('a---', 3), isNull);
     });
 
+    test('a hyphen on an empty bullet line makes an em dash', () {
+      expect(rules.editFor('- -', 2), const HomericPunctuationEdit(0, 3, '—'));
+      expect(rules.editFor('a\n  - -', 6),
+          const HomericPunctuationEdit(4, 7, '—'));
+      expect(rules.editFor('- a-', 3), isNull);
+      // A dash typed straight after the marker of an item keeps the bullet.
+      expect(rules.editFor('- -item', 2), isNull);
+      expect(rules.editFor('- -\nnext', 2),
+          const HomericPunctuationEdit(0, 3, '—'));
+      expect(rules.editFor('* -', 2), isNull);
+      expect(rules.editFor('a - -', 4), isNull);
+      expect(const HomericSmartPunctuation(emDash: false).editFor('- -', 2),
+          isNull);
+    });
+
     test('three dots make an ellipsis, a fourth stays', () {
       expect(
           rules.editFor('wait...', 6), const HomericPunctuationEdit(4, 7, '…'));
@@ -91,6 +106,41 @@ void main() {
     testWidgets('sets punctuation as it is typed', (tester) async {
       expect(typeInto('', 'He said "wait... -- don\'t."'),
           'He said “wait… — don’t.”');
+    });
+
+    group('dashes typed at a line start with a hardware keyboard', () {
+      for (final (typed, result) in <(String, String)>[
+        ('--', '—'),
+        ('-- ', '— '),
+        ('---', '—-'),
+        ('- ', '- '),
+        ('- -', '—'),
+        ('- --', '—-'),
+        ('- item', '- item'),
+      ]) {
+        testWidgets('"$typed" makes "$result"', (tester) async {
+          expect(typeInto('', typed), result);
+        });
+      }
+
+      testWidgets('a dash before an item\'s text keeps the bullet',
+          (tester) async {
+        final controller = controllerFor('- item', caret: 2);
+        const HomericSmartPunctuation().installOn(controller);
+        controller.replaceSelection('-');
+        expect(textOf(controller), '- -item');
+      });
+
+      testWidgets('Backspace after the bullet gives way puts it back',
+          (tester) async {
+        final controller = controllerFor('- ');
+        const HomericSmartPunctuation().installOn(controller);
+        controller.replaceSelection('-');
+        expect(textOf(controller), '—');
+        expect(caretOf(controller), 1);
+        controller.deleteBackward();
+        expect(textOf(controller), '- -');
+      });
     });
 
     testWidgets('the caret follows the substitute', (tester) async {

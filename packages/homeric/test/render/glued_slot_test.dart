@@ -28,9 +28,7 @@ List<int> _lineStarts(RenderHomericParagraph render) {
   final length = render.source.viewText.length;
   return <int>{
     for (var i = 0; i <= length; i++)
-      paragraph
-          .getLineBoundary(TextPosition(offset: i))
-          .start,
+      paragraph.getLineBoundary(TextPosition(offset: i)).start,
   }.toList()
     ..sort();
 }
@@ -54,8 +52,7 @@ void main() {
     return renderOf(tester);
   }
 
-  testWidgets('a placeholder lets the period wrap on its own',
-      (tester) async {
+  testWidgets('a placeholder lets the period wrap on its own', (tester) async {
     final render = await pump(tester, 'plain');
     // Second line is just the period, after the slot (view offset 5).
     expect(_lineStarts(render), [0, 6]);

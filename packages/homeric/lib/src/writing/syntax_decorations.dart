@@ -18,6 +18,7 @@ import '../decoration/markdown_mark_visibility.dart';
 import '../editing/markdown_inline.dart';
 import '../editing/markdown_list_indent.dart';
 import '../model/block.dart';
+import '../render/homeric_paragraph.dart' show HomericGluedSlot;
 import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../view/view_text.dart' show ReplacementContent;
@@ -474,7 +475,7 @@ List<Decoration> _withoutOverlappingHides(List<Decoration> decorations) {
 
 /// Widget-slot payload for a footnote marker; the host looks its number up
 /// by [key] so markers renumber as footnotes come and go elsewhere.
-class HomericFootnoteSpec {
+class HomericFootnoteSpec implements HomericGluedSlot {
   const HomericFootnoteSpec(this.key, {this.definition = false});
   final String key;
 
@@ -492,7 +493,7 @@ class HomericFootnoteSpec {
 }
 
 /// Widget-slot payload for an annotation's note, shown beside its passage.
-class HomericAnnotationNoteSpec {
+class HomericAnnotationNoteSpec implements HomericGluedSlot {
   const HomericAnnotationNoteSpec(this.note);
   final String note;
 

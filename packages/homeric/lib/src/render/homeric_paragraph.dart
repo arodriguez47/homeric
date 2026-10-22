@@ -134,6 +134,27 @@ part 'paragraph_layout_cache.dart';
 /// changed.
 typedef PaintOnlyStyler = TextStyle Function(TextSegment<TextStyle> segment);
 
+/// A slot spec whose mark stays on the line with the words around it.
+///
+/// The engine always lets a line break on either side of a placeholder, so
+/// a small mark set between a word and its punctuation (a footnote number
+/// in `word^[note].`) could end a line and send the `.` on alone. A glued
+/// slot is set as a narrow no-break space as wide as its child instead,
+/// which joins the word before it and the text after it (UAX #14 GL), and
+/// the child is painted over that space. Its height never raises the line,
+/// so glue only marks that fit inside one.
+abstract interface class HomericGluedSlot {}
+
+/// The character a glued slot is set as: U+202F NARROW NO-BREAK SPACE.
+const String _glueCharacter = '\u202F';
+
+/// Small enough that the glue's own advance and height vanish beside its
+/// letter spacing, which carries the child's width.
+const double _glueFontSize = 0.01;
+
+bool _isGlued(SlotSegment<Object?> slot) =>
+    slot.decoration.spec is HomericGluedSlot;
+
 /// Builds the inline child widget for one slot of a [HomericParagraph].
 ///
 /// Called once per slot per widget build, in slot-index (view-text)
@@ -935,6 +956,16 @@ class RenderHomericParagraph extends RenderBox
           builder.pop();
         case final SlotSegment<TextStyle> slot:
           final dims = dimensions[slot.slotIndex];
+          if (_isGlued(slot)) {
+            // One view unit, like the placeholder it stands in for.
+            builder.pushStyle(ui.TextStyle(
+              fontSize: _glueFontSize,
+              letterSpacing: dims.size.width,
+            ));
+            builder.addText(_glueCharacter);
+            builder.pop();
+            break;
+          }
           // scale: 1.0 always — placeholder sizes are real measured
           // pixels; the TextScaler never multiplies them again
           // (WidgetSpan.build's addPlaceholder shape).
@@ -948,8 +979,10 @@ class RenderHomericParagraph extends RenderBox
           );
       }
     }
-    assert(
-        builder.placeholderCount == source.slots.length,
+    assert(() {
+      final placeholders = source.slots.where((s) => !_isGlued(s)).length;
+      return builder.placeholderCount == placeholders;
+    }(),
         'ParagraphSource invariant violated: ${source.slots.length} '
         'slot(s) but ${builder.placeholderCount} placeholder(s) emitted');
     if (resolvedStyles != null) {
@@ -1160,15 +1193,73 @@ class RenderHomericParagraph extends RenderBox
     if (childCount == 0) {
       return;
     }
-    final boxes = paragraph.getBoxesForPlaceholders();
+    final rects = slotRectsIn(paragraph);
     var index = 0;
     for (var child = firstChild; child != null; child = childAfter(child)) {
       final parentData = child.parentData! as HomericSlotParentData;
-      parentData._offset = index < boxes.length
-          ? Offset(boxes[index].left, boxes[index].top)
-          : null;
+      parentData._offset = index < rects.length ? rects[index]?.topLeft : null;
       index += 1;
     }
+  }
+
+  /// Each slot's rect in [paragraph], in slot-index order; null where the
+  /// paragraph has no box for it (a future ellipsis case). Placeholders
+  /// take their box from the engine; a [HomericGluedSlot] is centred on
+  /// its line over the glue's advance.
+  List<Rect?> slotRectsIn(ui.Paragraph paragraph) {
+    final slots = _source.slots;
+    final dimensions = _liveDimensions;
+    final boxes = paragraph.getBoxesForPlaceholders();
+    List<ui.LineMetrics>? lines;
+    var placeholder = 0;
+    return <Rect?>[
+      for (final slot in slots)
+        if (!_isGlued(slot))
+          placeholder < boxes.length ? boxes[placeholder++].toRect() : null
+        else
+          _gluedRect(
+            paragraph,
+            slot,
+            dimensions == null || slot.slotIndex >= dimensions.length
+                ? Size.zero
+                : dimensions[slot.slotIndex].size,
+            lines ??= paragraph.computeLineMetrics(),
+          ),
+    ];
+  }
+
+  static Rect? _gluedRect(
+    ui.Paragraph paragraph,
+    SlotSegment<TextStyle> slot,
+    Size size,
+    List<ui.LineMetrics> lines,
+  ) {
+    final boxes = paragraph.getBoxesForRange(
+      slot.viewOffset,
+      slot.viewOffset + 1,
+    );
+    if (boxes.isEmpty || lines.isEmpty) return null;
+    final box = boxes.first;
+    // The glue is all but zero-height, so its box sits on its line's
+    // baseline; that line's text decides the middle.
+    final y = box.top;
+    var line = lines.last;
+    for (final l in lines) {
+      if (y <= l.baseline + l.descent) {
+        line = l;
+        break;
+      }
+    }
+    final middle = line.baseline - (line.ascent - line.descent) / 2;
+    final left = box.direction == ui.TextDirection.rtl
+        ? box.right - size.width
+        : box.left;
+    return Rect.fromLTWH(
+      left,
+      middle - size.height / 2,
+      size.width,
+      size.height,
+    );
   }
 
   /// The separate intrinsics paragraph: intrinsic and dry queries must

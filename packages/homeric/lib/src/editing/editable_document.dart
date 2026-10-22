@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart'
         TargetPlatform,
         ValueListenable,
         defaultTargetPlatform,
+        kIsWeb,
         visibleForTesting;
 import 'package:flutter/material.dart'
     show TextMagnifier, materialTextSelectionHandleControls;
@@ -991,6 +992,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) return;
+    if (homericKeepsFocusThroughLifecycle) {
+      cancelPointerSelectionDrag();
+      hideTouchSelectionChrome();
+      return;
+    }
     blurEditingFocus();
   }
 
@@ -3538,3 +3544,17 @@ class _RenderMeasureNaturalHeight extends RenderProxyBox {
     });
   }
 }
+
+/// Whether an editing host keeps its focus and platform input while the app
+/// is inactive or in the background.
+///
+/// On iOS and Android, Flutter's own text fields keep both, so the keyboard
+/// returns with the caret when the writer comes back. Keyboards that leave
+/// the app to work (Wispr Flow opens its own app to record) insert into the
+/// field they left, which must still be focused when they return. Desktop and
+/// web blur instead; Flutter's FocusManager suspends focus there itself.
+@internal
+bool get homericKeepsFocusThroughLifecycle =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.android);

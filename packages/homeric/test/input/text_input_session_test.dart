@@ -1164,6 +1164,69 @@ void main() {
       controller.dispose();
     });
 
+    test('a keyboard inserting several lines splits them into blocks',
+        () async {
+      // Wispr Flow's keyboard inserts a whole multi-paragraph dictation with
+      // one insertText, which reaches Homeric as one insertion delta.
+      final document = _document('ab');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      session.attach(blockId: 'a', commandDelegate: _FakeCommandDelegate());
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\nab',
+          deltaText: 'One.\n\nTwo.',
+          start: 2,
+          end: 2,
+          selectionBase: 12,
+          selectionExtent: 12,
+        ),
+      ]);
+
+      expect(
+        controller.document.blocks.map((block) => block.text),
+        <String>['aOne.', '', 'Two.b'],
+      );
+      expect(controller.document.blocks.first.id, 'a');
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    test('a multi-line replacement swaps the selected range for blocks',
+        () async {
+      final document = _document('abcd');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 4)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      session.attach(blockId: 'a', commandDelegate: _FakeCommandDelegate());
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\nabcd',
+          deltaText: 'X\nY',
+          start: 2,
+          end: 4,
+          selectionBase: 5,
+          selectionExtent: 5,
+        ),
+      ]);
+
+      expect(
+        controller.document.blocks.map((block) => block.text),
+        <String>['aX', 'Yd'],
+      );
+
+      session.dispose();
+      controller.dispose();
+    });
+
     test('deleting the sentinel dispatches document Backspace once', () async {
       final document = _documents(<String>['left', '']);
       final controller = HomericEditorController(

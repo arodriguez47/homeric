@@ -4,7 +4,6 @@
 // FlutterTest font at 14px: every glyph is 14 wide, a line 14 tall, the
 // baseline at 10.5 and the text midline at y=7.
 
-import 'package:flutter/rendering.dart' hide Decoration;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';

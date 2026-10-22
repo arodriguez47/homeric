@@ -374,6 +374,42 @@ void main() {
       expect(HomericDivider.isTyped('—-'), isTrue);
     });
 
+    test('quote lines hide their marker and mark their words', () {
+      bool quoted(String text) => derive(text, HomericSyntax.all)
+          .map((d) => d.spec)
+          .whereType<HomericMarkSpec>()
+          .any((s) => s.kind == HomericMarkKind.quote);
+      final ds = derive('> one\n>\n> two', HomericSyntax.all);
+      final quotes = ds
+          .where((d) =>
+              d.spec is HomericMarkSpec &&
+              (d.spec as HomericMarkSpec).kind == HomericMarkKind.quote)
+          .map((d) => (d.start, d.end))
+          .toList();
+      expect(quotes, [(2, 5), (10, 13)]);
+      expect(
+          ds.where(isMarkdownMarkHideDecoration).map((d) => (d.start, d.end)),
+          containsAll([(0, 2), (6, 7), (8, 10)]));
+      expect(quoted('a > b'), isFalse);
+      expect(quoted('>b'), isFalse);
+      expect(HomericSyntax.isQuote('> a\n> b'), isTrue);
+      expect(HomericSyntax.isQuote('> a\nb'), isFalse);
+      expect(HomericSyntax.isCommentLines('%% a\n%% b'), isTrue);
+      expect(HomericSyntax.isCommentLines('%% a\n> b'), isFalse);
+    });
+
+    test('a comment line is its own kind, apart from asides and quotes', () {
+      Set<HomericMarkKind> kinds(String text) => derive(text, HomericSyntax.all)
+          .map((d) => d.spec)
+          .whereType<HomericMarkSpec>()
+          .map((s) => s.kind)
+          .toSet();
+      expect(kinds('%% to self'), {HomericMarkKind.commentLine});
+      expect(kinds('a ++aside++'), contains(HomericMarkKind.comment));
+      expect(
+          kinds('a ++aside++'), isNot(contains(HomericMarkKind.commentLine)));
+    });
+
     test('each form can be switched off', () {
       bool has(
               String text, HomericSyntax syntax, bool Function(Object?) test) =>

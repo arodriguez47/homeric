@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
+import 'list_nesting.dart';
 import 'quote_continuation.dart';
 import 'smart_punctuation.dart';
 import 'wrap_shortcuts.dart';
@@ -62,6 +63,7 @@ final class HomericWritingKit {
       <HomericWritingFeature>[
     HomericSmartPunctuation(),
     HomericWrapShortcuts(),
+    HomericListNesting(),
     HomericQuoteContinuation(),
   ];
 

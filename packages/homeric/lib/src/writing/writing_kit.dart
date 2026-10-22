@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
+import 'list_nesting.dart';
 import 'smart_punctuation.dart';
 import 'wrap_shortcuts.dart';
 import 'writing_feature.dart';
@@ -61,6 +62,7 @@ final class HomericWritingKit {
       <HomericWritingFeature>[
     HomericSmartPunctuation(),
     HomericWrapShortcuts(),
+    HomericListNesting(),
   ];
 
   /// Features in install order; interceptors run in this order.

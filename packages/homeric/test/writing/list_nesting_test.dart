@@ -242,6 +242,37 @@ void main() {
       expect(controller.selection!.anchor, document.positionAt(1, 0));
     });
 
+    test('the first ← after installing already moves on', () async {
+      final document = Document([
+        _block('words', id: 'l0'),
+        _block('- two', id: 'l1'),
+      ]);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(1, 2)),
+      );
+      final stop =
+          const HomericListNesting(hangingLists: true).installOn(controller);
+      addTearDown(() {
+        stop();
+        controller.dispose();
+      });
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(1, 1)),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(caretOf(controller), ('l0', 5));
+    });
+
+    test('is in the standard kit', () {
+      expect(HomericWritingKit.standard().has('listNesting'), isTrue);
+      expect(
+        HomericWritingKit.standard(without: const {'listNesting'})
+            .has('listNesting'),
+        isFalse,
+      );
+    });
+
     test('switched off, typing goes ahead as typed', () {
       final document =
           Document([_block('- one', id: 'l0'), _block('- two', id: 'l1')]);

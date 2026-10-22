@@ -68,6 +68,9 @@ final class HomericListNesting extends HomericWritingFeature {
     if (!hangingLists) return stopIntercepting;
     final keeper = _CaretKeeper(controller);
     controller.addListener(keeper.onChanged);
+    // The caret as it is now, so the first ← from an item's words already
+    // knows where it came from.
+    keeper.onChanged();
     return () {
       controller.removeListener(keeper.onChanged);
       stopIntercepting();

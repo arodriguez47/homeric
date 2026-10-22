@@ -397,6 +397,27 @@ void main() {
       expect(texts(plain), ['> one\ntwo', '']);
     });
 
+    test('an empty line in a soft-broken quote becomes its own paragraph',
+        () {
+      final last = quoted('> one\n> ', 8);
+      expect(last.insertParagraphBreak(), isTrue);
+      expect(texts(last), ['> one', '']);
+      expect(last.selection,
+          HomericSelection.collapsed(last.document.positionAt(1, 0)));
+
+      final middle = quoted('> one\n> \n> two', 8);
+      expect(middle.insertParagraphBreak(), isTrue);
+      expect(texts(middle), ['> one', '', '> two']);
+      expect(middle.selection,
+          HomericSelection.collapsed(middle.document.positionAt(1, 0)));
+
+      final first = quoted('> \n> two', 2);
+      expect(first.insertParagraphBreak(), isTrue);
+      expect(texts(first), ['', '> two']);
+      expect(first.selection,
+          HomericSelection.collapsed(first.document.positionAt(0, 0)));
+    });
+
     test('without the feature Enter is a plain split', () {
       final c = controllerFor('> a line', caret: 8);
       expect(c.insertParagraphBreak(), isTrue);

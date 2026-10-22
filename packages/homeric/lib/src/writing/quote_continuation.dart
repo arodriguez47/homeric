@@ -6,6 +6,9 @@ import 'package:flutter/foundation.dart';
 
 import '../editing/editor_controller.dart';
 import '../model/position.dart';
+import '../model/selection.dart';
+import '../transform/builders.dart';
+import '../transform/transaction.dart';
 import 'syntax_decorations.dart';
 import 'writing_feature.dart';
 
@@ -51,20 +54,60 @@ final class HomericQuoteContinuation extends HomericWritingFeature {
     if (marker == null || offset < lineStart + marker.end) {
       return HomericCommandInterception.ignored;
     }
-    final handled = line.trim() == '>'
-        ? controller.applyBlockEditBatch(
-            blockId: resolved.block.id,
-            edits: <CanonicalTextEdit>[
-              CanonicalTextEdit(lineStart, lineEnd, ''),
-            ],
-            selection: BlockTextSelection.collapsed(lineStart),
-          )
-        : controller.replaceSelectionStructurally(
+    final handled = line.trim() != '>'
+        ? controller.replaceSelectionStructurally(
             '\n> ',
             firstTrailingBlockId: command.trailingBlockId,
-          );
+          )
+        : _endQuote(controller, resolved.block.id, text, lineStart, lineEnd);
     return handled
         ? HomericCommandInterception.handled
         : HomericCommandInterception.ignored;
+  }
+
+  /// Ends the quote at the empty line [lineStart]..[lineEnd] of block
+  /// [blockId]. A block that is only that line is cleared; in a soft-broken
+  /// quote the line becomes an empty paragraph of its own, between the
+  /// quote's halves, with the caret in it.
+  static bool _endQuote(
+    HomericEditorController controller,
+    String blockId,
+    String text,
+    int lineStart,
+    int lineEnd,
+  ) {
+    final before = lineStart > 0;
+    final after = lineEnd < text.length;
+    if (!before && !after) {
+      return controller.applyBlockEditBatch(
+        blockId: blockId,
+        edits: <CanonicalTextEdit>[CanonicalTextEdit(0, text.length, '')],
+        selection: const BlockTextSelection.collapsed(0),
+      );
+    }
+    final document = controller.document;
+    final index = document.indexOfBlockId(blockId);
+    if (index == null) return false;
+    final from = before ? lineStart - 1 : 0;
+    final to = after ? lineEnd + 1 : lineEnd;
+    try {
+      final tx = Transaction(document)
+        ..deleteRange(
+          document.positionAt(index, from),
+          document.positionAt(index, to),
+        );
+      // Splitting where the line was leaves an empty paragraph there, with
+      // the quote's other half (if any) on its far side.
+      if (after) tx.splitBlock(tx.doc.positionAt(index, from));
+      if (before) tx.splitBlock(tx.doc.positionAt(index, from));
+      return controller.applyPreparedCommand(HomericPreparedCommand(
+        stages: <Transaction>[tx],
+        selection: HomericSelection.collapsed(
+          tx.doc.positionAt(index + (before ? 1 : 0), 0),
+        ),
+      ));
+    } on ArgumentError {
+      return false;
+    }
   }
 }

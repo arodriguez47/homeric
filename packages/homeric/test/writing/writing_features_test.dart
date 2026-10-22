@@ -397,8 +397,7 @@ void main() {
       expect(texts(plain), ['> one\ntwo', '']);
     });
 
-    test('an empty line in a soft-broken quote becomes its own paragraph',
-        () {
+    test('an empty line in a soft-broken quote becomes its own paragraph', () {
       final last = quoted('> one\n> ', 8);
       expect(last.insertParagraphBreak(), isTrue);
       expect(texts(last), ['> one', '']);

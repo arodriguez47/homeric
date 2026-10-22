@@ -3,7 +3,11 @@ import 'package:flutter/cupertino.dart'
 import 'package:flutter/foundation.dart'
     show ValueListenable, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
-    show TextMagnifier, materialTextSelectionHandleControls;
+    show
+        AdaptiveTextSelectionToolbar,
+        DefaultMaterialLocalizations,
+        TextMagnifier,
+        materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -250,7 +254,7 @@ void main() {
         HomericSelection.collapsed(controller.document.positionAt(1, 0)),
       );
       await tester.pump();
-      final platformText = '\u200B${empty ? '' : 'right'}';
+      final platformText = '\n${empty ? '' : 'right'}';
       expect(session.activeBlockId, 'block-1');
 
       // UIKit's deleteBackward removes the sentinel; no key event arrives.
@@ -275,7 +279,7 @@ void main() {
       // The survivor keeps a sentinel, so typing still lands canonically.
       session.debugDeltaCallback!(<TextEditingDelta>[
         TextEditingDeltaInsertion(
-          oldText: '\u200B${empty ? 'left' : 'leftright'}',
+          oldText: '\n${empty ? 'left' : 'leftright'}',
           textInserted: '!',
           insertionOffset: 5,
           selection: const TextSelection.collapsed(offset: 6),
@@ -1039,6 +1043,7 @@ void main() {
     expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
     expect(key.currentState!.debugTouchEndHandleVisible, isTrue,
         reason: 'drag-time physical endpoint mapping remains until release');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
 
     recognizer.onEnd!(DragEndDetails());
     await tester.pump();
@@ -1047,6 +1052,8 @@ void main() {
     expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
     expect(key.currentState!.debugTouchEndHandleVisible, isFalse,
         reason: 'release must resync the collapsed caret overlay');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget,
+        reason: 'letting go of a handle brings the edit menu back');
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -5070,6 +5077,8 @@ Widget _withOverlay(Widget child) => Directionality(
         locale: const Locale('en'),
         delegates: const <LocalizationsDelegate<dynamic>>[
           DefaultWidgetsLocalizations.delegate,
+          // Touch gestures open the edit menu, which labels its buttons.
+          DefaultMaterialLocalizations.delegate,
         ],
         child: Overlay(
           initialEntries: <OverlayEntry>[

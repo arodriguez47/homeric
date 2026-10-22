@@ -51,16 +51,20 @@ final class HomericTextInputGeometryLease {
 /// platform value always contains raw block text; projected view offsets never
 /// cross this boundary.
 ///
-/// On iOS the platform value also leads with one zero-width boundary sentinel.
-/// UIKit's soft-keyboard Backspace sends no key event, and the engine's
+/// On iOS the platform value also leads with one boundary sentinel, a line
+/// break. UIKit's soft-keyboard Backspace sends no key event, and the engine's
 /// `deleteBackward` sends no delta when the caret is at offset 0, so without a
 /// character to delete the document could never join or remove the block.
-/// Deleting the sentinel dispatches the host's document-level Backspace.
+/// Deleting the sentinel dispatches the host's document-level Backspace. A
+/// line break, unlike a zero-width space, reads to UIKit as the paragraph
+/// break it stands for, so the keyboard capitalizes a block's first word and
+/// Smart Quotes open at a block start.
 ///
 /// The default configuration turns UIKit's Smart Dashes off. Hyphens are
 /// source here (`- ` list markers, a `---` divider, the writing layer's `--`
 /// em dash), and UIKit rewriting them on an iPhone hides from those rules the
-/// hyphens they match.
+/// hyphens they match. It asks for sentence capitalization, as Notes and
+/// Mail do; Flutter's default leaves the shift key off at a sentence start.
 final class HomericTextInputSession extends ChangeNotifier {
   /// Creates a session that observes [controller].
   HomericTextInputSession({
@@ -77,12 +81,14 @@ final class HomericTextInputSession extends ChangeNotifier {
     controller.addListener(_controllerChanged);
   }
 
-  /// Plain text, Enter for a new line, deltas, and no Smart Dashes.
+  /// Plain text, Enter for a new line, deltas, sentence capitals, and no
+  /// Smart Dashes.
   static const TextInputConfiguration defaultConfiguration =
       TextInputConfiguration(
     inputType: TextInputType.text,
     inputAction: TextInputAction.newline,
     enableDeltaModel: true,
+    textCapitalization: TextCapitalization.sentences,
     smartDashesType: SmartDashesType.disabled,
   );
 
@@ -401,7 +407,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     );
   }
 
-  static const String _boundarySentinelText = '\u200B';
+  static const String _boundarySentinelText = '\n';
 
   int get _sentinelLength => _boundarySentinel ? 1 : 0;
 
@@ -526,7 +532,7 @@ final class HomericTextInputSession extends ChangeNotifier {
           return;
         }
         var next = delta.apply(shadow);
-        if (!_validValue(next) || _containsNewline(next.text)) {
+        if (!_validValue(next)) {
           _syncCanonical(force: true);
           return;
         }
@@ -548,7 +554,8 @@ final class HomericTextInputSession extends ChangeNotifier {
           sentinelRestored = true;
         }
         final after = _localValue(next);
-        if (before == null || after == null) {
+        // Checked without the sentinel, which is itself a line break.
+        if (before == null || after == null || _containsNewline(after.text)) {
           _syncCanonical(force: true);
           return;
         }
@@ -569,7 +576,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     if (localInitial == null ||
         local == null ||
         !_validValue(shadow) ||
-        _containsNewline(shadow.text)) {
+        _containsNewline(local.text)) {
       _syncCanonical(force: true);
       return;
     }

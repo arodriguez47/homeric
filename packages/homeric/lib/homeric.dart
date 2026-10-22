@@ -15,7 +15,10 @@ export 'src/editing/editable_document.dart'
 export 'src/editing/selection_snapshot.dart';
 
 export 'src/editing/spell_check.dart'
-    show HomericSpellCheckProvider, HomericSpellCheckRequest;
+    show
+        HomericPlatformSpellCheckProvider,
+        HomericSpellCheckProvider,
+        HomericSpellCheckRequest;
 export 'src/editing/editor_clipboard.dart'
     show
         HomericClipboardAdapter,

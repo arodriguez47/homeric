@@ -2,8 +2,10 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/cupertino.dart' show CupertinoLocalizations;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
@@ -399,6 +401,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   BlockTextRange? _dragWordAnchor;
   _DragSelectionMode? _dragMode;
   bool _longPressActive = false;
+  bool _longPressMovesCaret = false;
   ({int position, HomericCaretAffinity affinity})? _pendingIosTap;
   RenderHomericParagraph? _renderParagraph;
   int? _renderGeneration;
@@ -428,6 +431,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   Offset? _secondaryLocalPosition;
   BlockTextRange? _secondaryWordRange;
   ContextMenuController? _contextMenuController;
+  SystemContextMenuController? _systemContextMenu;
+  _MenuWitness? _systemContextMenuWitness;
+  bool _contextMenuShownAtTapDown = false;
   int _spellRequestGeneration = 0;
   _SpellRequestKey? _spellRequestKey;
   List<_ResolvedSpellingSuggestion> _spellingSuggestions = const [];
@@ -733,6 +739,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         (autocorrectionPrompt.contentRevision != _controller.contentRevision ||
             autocorrectionPrompt.composing != _controller.composing)) {
       _clearAutocorrectionPrompt();
+    }
+    final systemMenuWitness = _systemContextMenuWitness;
+    if (systemMenuWitness != null &&
+        !_isMenuWitnessCurrent(systemMenuWitness)) {
+      // UIKit keeps its menu up through typing and selection changes that a
+      // Flutter-drawn menu would not survive; its actions are stale now.
+      _dismissContextMenu();
     }
     final caretStateChanged = _captureCaretState();
     if (caretStateChanged) _syncCaretBlink(resetVisible: true);
@@ -1897,6 +1910,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   void _tapDown(ParagraphGeometry geometry, TapDragDownDetails details) {
     if (details.consecutiveTapCount != 1 || !_canUsePointer(geometry)) return;
+    _contextMenuShownAtTapDown = _isContextMenuShown;
     _dismissContextMenu();
     final hit = _caretForPoint(geometry, details.localPosition);
     _resetPointerState();
@@ -1913,14 +1927,29 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   void _completeSingleTap(PointerDeviceKind? kind) {
     final pending = _pendingIosTap;
+    final menuWasShown = _contextMenuShownAtTapDown;
     _pendingIosTap = null;
+    _contextMenuShownAtTapDown = false;
     if (pending == null) return;
+    // As in Notes, a tap on the caret or inside the selection toggles the edit
+    // menu and leaves the selection where it is.
+    final selection = _localSelection();
+    if (selection != null &&
+        (selection.isCollapsed
+            ? pending.position == selection.head
+            : pending.position >= selection.start &&
+                pending.position <= selection.end)) {
+      if (!menuWasShown) _showContextMenu();
+      return;
+    }
     _relocate(
       pending.position,
       pending.position,
       affinity: pending.affinity,
     );
     _syncTouchSelectionChrome(kind);
+    // A tap on a misspelled word offers its replacements.
+    if (_spellingSuggestionAt(pending.position) != null) _showContextMenu();
   }
 
   void _doubleTapDown(
@@ -1931,6 +1960,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _dismissContextMenu();
     _startWordSelection(geometry, details.localPosition);
     _syncTouchSelectionChrome(details.kind);
+    if (_isTouchKind(details.kind)) _showContextMenu();
   }
 
   void _tripleTapDown(
@@ -1987,7 +2017,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         _ownsEditingFocus &&
         !_controller.isReadOnly &&
         widget.inputSession.activeBlockId == widget.blockId) {
+      // As in Notes, a long press while writing carries the caret under the
+      // finger with the magnifier, and lifting opens the edit menu.
       _resetPointerState();
+      _dismissContextMenu();
+      _longPressActive = true;
+      _longPressMovesCaret = true;
+      _moveCaretUnderLongPress(
+        geometry,
+        details.localPosition,
+        details.globalPosition,
+      );
       return;
     }
     _longPressActive = true;
@@ -2016,6 +2056,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     LongPressMoveUpdateDetails details,
   ) {
     if (!_longPressActive) return;
+    if (_longPressMovesCaret) {
+      _moveCaretUnderLongPress(
+        geometry,
+        details.localPosition,
+        details.globalPosition,
+      );
+      return;
+    }
     final documentHost = _documentHost;
     if (documentHost != null) {
       if (!documentHost.updatePointerSelectionDrag(
@@ -2035,11 +2083,40 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _updateLocalTouchMagnifier(geometry, details.globalPosition);
   }
 
+  void _moveCaretUnderLongPress(
+    ParagraphGeometry geometry,
+    Offset localPosition,
+    Offset globalPosition,
+  ) {
+    final hit = _caretForPoint(geometry, localPosition);
+    _relocate(hit.position, hit.position, affinity: hit.affinity);
+    final documentHost = _documentHost;
+    final render = _overlayContext?.findRenderObject();
+    if (documentHost != null && render is RenderBox && render.hasSize) {
+      // The caret stays in this block, so the loupe does too: past its edge
+      // the document magnifier would preview another block's text.
+      // Clamp in the box's own space (hosts may scale it) and stay a hair
+      // inside the far edges, which belong to the next block's hit test.
+      final local = render.globalToLocal(globalPosition);
+      final clamped = Offset(
+        local.dx.clamp(0, math.max(0, render.size.width - 0.5)).toDouble(),
+        local.dy.clamp(0, math.max(0, render.size.height - 0.5)).toDouble(),
+      );
+      documentHost.updateTouchSelectionMagnifier(
+        render.localToGlobal(clamped),
+      );
+    } else if (documentHost == null) {
+      _updateLocalTouchMagnifier(geometry, globalPosition);
+    }
+  }
+
   void _longPressEnd() {
+    final wasActive = _longPressActive;
     _longPressActive = false;
     _documentHost?.hideTouchSelectionMagnifier();
     _localTouchOverlayCoordinator.hideMagnifier();
     _endSelectionPointer();
+    if (wasActive) _showContextMenu();
   }
 
   void _longPressCancel() {
@@ -2183,14 +2260,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       ),
       onStartHandleDragUpdate: (details) =>
           _updateLocalTouchHandleDrag(details.globalPosition),
-      onStartHandleDragEnd: (_) => _endLocalTouchHandleDrag(),
+      onStartHandleDragEnd: (_) => _releaseLocalTouchHandle(),
       onEndHandleDragStart: (details) => _beginLocalTouchHandleDrag(
         HomericSelectionEndpoint.end,
         details.globalPosition,
       ),
       onEndHandleDragUpdate: (details) =>
           _updateLocalTouchHandleDrag(details.globalPosition),
-      onEndHandleDragEnd: (_) => _endLocalTouchHandleDrag(),
+      onEndHandleDragEnd: (_) => _releaseLocalTouchHandle(),
     );
   }
 
@@ -2236,6 +2313,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _localTouchMovingEndpoint = null;
     _localTouchOverlayCoordinator.hideMagnifier();
     _resetPointerState();
+  }
+
+  /// A released handle brings the edit menu back, as in Notes. Teardown and
+  /// cancellation end the drag through [_endLocalTouchHandleDrag] silently.
+  void _releaseLocalTouchHandle() {
+    if (_localTouchMovingEndpoint == null) return;
+    _endLocalTouchHandleDrag();
+    _showContextMenu();
   }
 
   HomericSelectionOverlayEndpoint? _localTouchEndpoint(
@@ -2347,6 +2432,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   void _resetPointerState() {
     _longPressActive = false;
+    _longPressMovesCaret = false;
     _pendingIosTap = null;
     _dragAnchor = null;
     _dragWordAnchor = null;
@@ -2395,18 +2481,32 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
               assoc: _assoc(selection.affinity),
             )
             .value;
-        _secondaryWordRange =
+        // A caret at either edge of a misspelled word still offers it.
+        final misspelled = selection.isCollapsed
+            ? _spellingSuggestionAt(selection.head)
+            : null;
+        _secondaryWordRange = misspelled?.range ??
             BlockTextRange(range.start.value, range.end.value);
       }
     }
     widget.onShowToolbar?.call();
-    if (Overlay.maybeOf(context, rootOverlay: true) == null) return;
     final render = context.findRenderObject();
     if (render is! RenderBox || !render.attached) return;
     final witness = _MenuWitness(
       epoch: _hostEpoch,
       stateRevision: _controller.stateRevision,
     );
+    if (_usesSystemContextMenu(context)) {
+      _showSystemContextMenu(
+        context,
+        witness,
+        render,
+        useSecondaryAnchor ? null : _selectionMenuRect(),
+        point,
+      );
+      return;
+    }
+    if (Overlay.maybeOf(context, rootOverlay: true) == null) return;
     final anchor = render.localToGlobal(point);
     _dismissContextMenu();
     late final ContextMenuController menu;
@@ -2481,7 +2581,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
   }
 
-  Offset? _selectionMenuAnchor() {
+  /// The caret or selection bounds the iOS edit menu points at.
+  Rect? _selectionMenuRect() {
     final geometry = _currentGeometry();
     final selection = _localSelection();
     if (geometry == null || selection == null) return null;
@@ -2491,8 +2592,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             DocOffset(selection.head),
             assoc: _assoc(selection.affinity),
           )
-          .value
-          .topCenter;
+          .value;
     }
     final boxes = geometry
         .rectsForRange(DocRange(
@@ -2505,18 +2605,22 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     for (final box in boxes.skip(1)) {
       rect = rect.expandToInclude(box.toRect());
     }
-    return rect.topCenter;
+    return rect;
   }
+
+  Offset? _selectionMenuAnchor() => _selectionMenuRect()?.topCenter;
 
   List<ContextMenuButtonItem> _contextMenuItems(_MenuWitness witness) {
     final selection = _localSelection();
-    final block = _block;
-    final canCopy = selection != null && !selection.isCollapsed;
-    final canSelectAll = block != null &&
-        block.contentLength > 0 &&
-        (selection == null ||
-            selection.start != 0 ||
-            selection.end != block.contentLength);
+    return <ContextMenuButtonItem>[
+      ..._spellingMenuItems(witness),
+      ..._editingMenuItems(witness),
+      ..._historyMenuItems(witness),
+      ..._hostContextMenuItems(witness, selection),
+    ];
+  }
+
+  Iterable<ContextMenuButtonItem> _spellingMenuItems(_MenuWitness witness) {
     final spelling = _spellingSuggestions.where((suggestion) {
       final word = _secondaryWordRange;
       return word != null &&
@@ -2536,6 +2640,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                       replacement,
                     ),
           ),
+    ];
+  }
+
+  /// Cut, Copy, Paste and Select All, in that order.
+  List<ContextMenuButtonItem> _editingMenuItems(_MenuWitness witness) {
+    final selection = _localSelection();
+    final block = _block;
+    final canCopy = selection != null && !selection.isCollapsed;
+    final canSelectAll = block != null &&
+        block.contentLength > 0 &&
+        (selection == null ||
+            selection.start != 0 ||
+            selection.end != block.contentLength);
+    return <ContextMenuButtonItem>[
       ContextMenuButtonItem(
         type: ContextMenuButtonType.cut,
         onPressed: canCopy && !_controller.isReadOnly
@@ -2571,6 +2689,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                 )
             : null,
       ),
+    ];
+  }
+
+  List<ContextMenuButtonItem> _historyMenuItems(_MenuWitness witness) {
+    return <ContextMenuButtonItem>[
       ContextMenuButtonItem(
         // Flutter exposes localized button types for Cut through Select All,
         // but no public Undo/Redo context-menu label in the supported SDKs.
@@ -2591,8 +2714,157 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                 )
             : null,
       ),
-      ..._hostContextMenuItems(witness, selection),
     ];
+  }
+
+  bool get _isContextMenuShown =>
+      (_contextMenuController?.isShown ?? false) || _systemContextMenu != null;
+
+  static bool _isTouchKind(PointerDeviceKind? kind) =>
+      kind == null ||
+      kind == PointerDeviceKind.touch ||
+      kind == PointerDeviceKind.stylus;
+
+  _ResolvedSpellingSuggestion? _spellingSuggestionAt(int offset) {
+    for (final suggestion in _currentSpellingSuggestions) {
+      if (suggestion.range.start <= offset && offset <= suggestion.range.end) {
+        return suggestion;
+      }
+    }
+    return null;
+  }
+
+  /// Whether UIKit's own edit menu can stand in for the Flutter-drawn one.
+  ///
+  /// The engine presents it from the hidden text input view, so this block
+  /// must own the platform input connection (iOS 16 and later).
+  bool _usesSystemContextMenu(BuildContext context) =>
+      !_controller.isReadOnly &&
+      widget.inputSession.isAttached &&
+      widget.inputSession.activeBlockId == widget.blockId &&
+      SystemContextMenu.isSupported(context);
+
+  /// Shows UIKit's edit menu over [localRect], or over [point] for a
+  /// secondary click.
+  ///
+  /// Every editing item is a custom action routed through this paragraph's
+  /// intents. UIKit's own Cut, Copy and Paste edit the hidden platform text,
+  /// one block of raw source, so they would miss multi-block selections,
+  /// multi-line plain text and the host's pasted pictures. Look Up, Search
+  /// Web and Share only read that text, so they stay native for a selection
+  /// inside this block.
+  void _showSystemContextMenu(
+    BuildContext context,
+    _MenuWitness witness,
+    RenderBox render,
+    Rect? localRect,
+    Offset point,
+  ) {
+    final localizations = WidgetsLocalizations.of(context);
+    final cupertino = Localizations.of<CupertinoLocalizations>(
+      context,
+      CupertinoLocalizations,
+    );
+    String? titleFor(ContextMenuButtonItem item) =>
+        item.label ??
+        switch (item.type) {
+          ContextMenuButtonType.cut =>
+            cupertino?.cutButtonLabel ?? localizations.cutButtonLabel,
+          ContextMenuButtonType.copy =>
+            cupertino?.copyButtonLabel ?? localizations.copyButtonLabel,
+          ContextMenuButtonType.paste =>
+            cupertino?.pasteButtonLabel ?? localizations.pasteButtonLabel,
+          ContextMenuButtonType.selectAll => cupertino?.selectAllButtonLabel ??
+              localizations.selectAllButtonLabel,
+          _ => null,
+        };
+    final items = <IOSSystemContextMenuItemData>[];
+    void add(ContextMenuButtonItem item) {
+      final onPressed = item.onPressed;
+      final title = titleFor(item);
+      if (onPressed == null || title == null) return;
+      items.add(IOSSystemContextMenuItemDataCustom(
+        title: title,
+        onPressed: onPressed,
+      ));
+    }
+
+    final selection = _localSelection();
+    final collapsed = selection == null || selection.isCollapsed;
+    _spellingMenuItems(witness).forEach(add);
+    if (collapsed && _block != null && _block!.contentLength > 0) {
+      add(ContextMenuButtonItem(
+        label: 'Select',
+        onPressed: () => _selectWordFromMenu(witness),
+      ));
+    }
+    _editingMenuItems(witness).forEach(add);
+    if (!collapsed && _selectionIsInThisBlock) {
+      items
+        ..add(IOSSystemContextMenuItemDataLookUp(
+          title: localizations.lookUpButtonLabel,
+        ))
+        ..add(IOSSystemContextMenuItemDataSearchWeb(
+          title: localizations.searchWebButtonLabel,
+        ))
+        ..add(IOSSystemContextMenuItemDataShare(
+          title: localizations.shareButtonLabel,
+        ));
+    }
+    _hostContextMenuItems(witness, selection).forEach(add);
+    _historyMenuItems(witness).forEach(add);
+    if (items.isEmpty) return;
+
+    final target = MatrixUtils.transformRect(
+      render.getTransformTo(null),
+      localRect ?? Rect.fromCenter(center: point, width: 1, height: 1),
+    );
+    _dismissContextMenu();
+    late final SystemContextMenuController menu;
+    menu = SystemContextMenuController(onSystemHide: () {
+      if (identical(_systemContextMenu, menu)) {
+        _systemContextMenu = null;
+        _systemContextMenuWitness = null;
+      }
+    });
+    _systemContextMenu = menu;
+    _systemContextMenuWitness = witness;
+    menu.showWithItems(target, items);
+  }
+
+  bool get _selectionIsInThisBlock {
+    final selection = _controller.selection;
+    if (selection == null) return false;
+    try {
+      _controller.blockOffsetForGlobalPosition(
+          widget.blockId, selection.anchor);
+      _controller.blockOffsetForGlobalPosition(widget.blockId, selection.head);
+      return true;
+    } on ArgumentError {
+      return false;
+    }
+  }
+
+  /// The edit menu's Select: the word at the caret, then the menu again for
+  /// that selection.
+  void _selectWordFromMenu(_MenuWitness witness) {
+    final isCurrent = _isMenuWitnessCurrent(witness);
+    _dismissContextMenu();
+    final geometry = _currentGeometry();
+    final selection = _localSelection();
+    if (!isCurrent || geometry == null || selection == null) return;
+    final word = _wordForHit(
+      geometry,
+      (position: selection.head, affinity: selection.affinity),
+    );
+    _relocate(word.start, word.end);
+    _syncTouchSelectionChrome(PointerDeviceKind.touch);
+    // UIKit dismisses the menu after this action returns; show the next one
+    // once that has happened.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_disposing) _showContextMenu();
+    });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   Iterable<ContextMenuButtonItem> _hostContextMenuItems(
@@ -2669,6 +2941,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final menu = _contextMenuController;
     _contextMenuController = null;
     menu?.remove();
+    final systemMenu = _systemContextMenu;
+    _systemContextMenu = null;
+    _systemContextMenuWitness = null;
+    // Disposing hides the menu if UIKit has not already.
+    systemMenu?.dispose();
   }
 
   void _clearTransientState() {

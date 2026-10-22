@@ -822,9 +822,9 @@ as a block edit; the session restores the sentinel and pushes the value back.
   `test/editing/editable_document_test.dart` ("iOS soft Backspace crosses the
   block start"). Verified on the iOS 27 simulator through Nexus `mock_main`:
   empty-block removal and non-empty join, one action per press.
-- **Auto-capitalisation is unaffected today** because the session's default
-  configuration uses `TextCapitalization.none`. If a consumer turns on
-  sentence capitalisation, re-check UIKit's behaviour after the sentinel.
+- **Auto-capitalisation** (superseded 2026-10-22): the default configuration now
+  asks for sentence capitals, and the sentinel became `\n`; see "The iOS
+  boundary sentinel is a line break".
 - **Android is unverified.** Some IMEs send a DEL key event on an empty field
   and others call `deleteSurroundingText`, which also sends nothing at offset 0.
   Extend the sentinel to Android only after checking on a device.
@@ -1283,3 +1283,37 @@ reaches a divider.
 - Evidence: `test/input/text_input_session_test.dart` (iOS group, "dashes typed
   at a line start on the soft keyboard"), `test/writing/smart_punctuation_test.dart`
   ("dashes typed at a line start with a hardware keyboard").
+
+## editor-architect — 2026-10-22 — The iOS boundary sentinel is a line break; the edit menu is UIKit's
+
+**What:** Sprintnotes on iPhone showed no edit menu on a press, no spell check
+and no sentence capitals. Homeric owns its gestures, so nothing opens a menu
+unless Homeric asks; touch only asked from a handle tap, and a focused iOS long
+press did nothing (the earlier plan expected UIKit to take it, and UIKit never
+sees the press). Capitals were off because Flutter's default is
+`TextCapitalization.none`.
+
+**Fix (homeric#68):**
+- Touch opens the menu as Notes does: caret tap toggles, a tap inside the
+  selection toggles, double tap opens it on the word, a focused long press
+  carries the caret under the finger (loupe clamped to the block) and opens it
+  on lift, and a released handle brings it back. Teardown and cancel paths end
+  drags silently.
+- On iOS 16+ the menu is `SystemContextMenuController`. Every editing item is
+  a custom action through the paragraph's intents. UIKit's own Cut/Copy/Paste
+  act on the hidden platform value (one block of raw source, deltas that
+  reject `\n`), so they would drop multi-block selections, multi-line paste
+  and host paste handlers. Look Up / Search Web / Share only read that value,
+  so they stay native for single-block selections. The engine builds only the
+  items it is sent: AutoFill and Scan Text cannot be offered.
+- The sentinel is `\n`, not U+200B. UIKit's sentence detection treats a
+  zero-width space as text, so a block start would not capitalise and Smart
+  Quotes would close there. Newline checks now run on the block text after
+  stripping the sentinel; Return still arrives as `performAction`.
+
+**Rule going forward:** the platform value is UIKit's whole idea of the
+document. Pick the sentinel for what UIKit infers from the context before the
+caret (capitals, quotes, predictions), not only for deletability. Route menu
+actions through Homeric intents; never let UIKit edit the hidden value
+directly. Evidence: `test/editing/edit_menu_test.dart`,
+`test/input/text_input_session_test.dart` (iOS group). Device check pending.

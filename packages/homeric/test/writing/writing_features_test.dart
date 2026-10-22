@@ -355,6 +355,97 @@ void main() {
     });
   });
 
+  group('quote continuation', () {
+    HomericEditorController quoted(String text, int caret) {
+      final controller = controllerFor(text, caret: caret);
+      addTearDown(const HomericQuoteContinuation().installOn(controller));
+      return controller;
+    }
+
+    List<String> texts(HomericEditorController c) =>
+        c.document.blocks.map((b) => b.text).toList();
+
+    test('Enter on a quote line carries the marker over', () {
+      final c = quoted('> a line', 8);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> a line', '> ']);
+      expect(
+          c.selection, HomericSelection.collapsed(c.document.positionAt(1, 2)));
+    });
+
+    test('Enter on an empty quote line ends the quote', () {
+      final c = quoted('> ', 2);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['']);
+    });
+
+    test('Enter before the marker is a plain split, even on an empty line', () {
+      final c = quoted('> a', 0);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['', '> a']);
+      final empty = quoted('> ', 0);
+      expect(empty.insertParagraphBreak(), isTrue);
+      expect(texts(empty), ['', '> ']);
+    });
+
+    test('the line the caret is on decides in a soft-broken quote', () {
+      final c = quoted('> one\n> two', 11);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> one\n> two', '> ']);
+      final plain = quoted('> one\ntwo', 9);
+      expect(plain.insertParagraphBreak(), isTrue);
+      expect(texts(plain), ['> one\ntwo', '']);
+    });
+
+    test('an empty line in a soft-broken quote becomes its own paragraph', () {
+      final last = quoted('> one\n> ', 8);
+      expect(last.insertParagraphBreak(), isTrue);
+      expect(texts(last), ['> one', '']);
+      expect(last.selection,
+          HomericSelection.collapsed(last.document.positionAt(1, 0)));
+
+      final middle = quoted('> one\n> \n> two', 8);
+      expect(middle.insertParagraphBreak(), isTrue);
+      expect(texts(middle), ['> one', '', '> two']);
+      expect(middle.selection,
+          HomericSelection.collapsed(middle.document.positionAt(1, 0)));
+
+      final first = quoted('> \n> two', 2);
+      expect(first.insertParagraphBreak(), isTrue);
+      expect(texts(first), ['', '> two']);
+      expect(first.selection,
+          HomericSelection.collapsed(first.document.positionAt(0, 0)));
+    });
+
+    test('ending a soft-broken quote names the new paragraph as asked', () {
+      final c = quoted('> one\n> \n> two', 8);
+      expect(c.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+      expect(c.document.blocks[1].id, 'next');
+      expect(c.document.blocks[1].text, '');
+      final last = quoted('> one\n> ', 8);
+      expect(last.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+      expect(last.document.blocks[1].id, 'next');
+    });
+
+    test('Enter mid-way through a soft-broken quote stays in the block', () {
+      final c = quoted('> one\n> two', 5);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> one\n> \n> two']);
+      expect(
+          c.selection, HomericSelection.collapsed(c.document.positionAt(0, 8)));
+    });
+
+    test('without the feature Enter is a plain split', () {
+      final c = controllerFor('> a line', caret: 8);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> a line', '']);
+    });
+
+    test('the standard kit carries it', () {
+      expect(HomericWritingKit.standard().has('quoteContinuation'), isTrue);
+    });
+  });
+
   group('syntax switches', () {
     List<Decoration> derive(String text, HomericSyntax syntax) =>
         syntax.decorationsFor(_block(text)).toList();
@@ -372,6 +463,42 @@ void main() {
         isNot(contains(const HomericDividerSpec())),
       );
       expect(HomericDivider.isTyped('—-'), isTrue);
+    });
+
+    test('quote lines hide their marker and mark their words', () {
+      bool quoted(String text) => derive(text, HomericSyntax.all)
+          .map((d) => d.spec)
+          .whereType<HomericMarkSpec>()
+          .any((s) => s.kind == HomericMarkKind.quote);
+      final ds = derive('> one\n>\n> two', HomericSyntax.all);
+      final quotes = ds
+          .where((d) =>
+              d.spec is HomericMarkSpec &&
+              (d.spec as HomericMarkSpec).kind == HomericMarkKind.quote)
+          .map((d) => (d.start, d.end))
+          .toList();
+      expect(quotes, [(2, 5), (10, 13)]);
+      expect(
+          ds.where(isMarkdownMarkHideDecoration).map((d) => (d.start, d.end)),
+          containsAll([(0, 2), (6, 7), (8, 10)]));
+      expect(quoted('a > b'), isFalse);
+      expect(quoted('>b'), isFalse);
+      expect(HomericSyntax.isQuote('> a\n> b'), isTrue);
+      expect(HomericSyntax.isQuote('> a\nb'), isFalse);
+      expect(HomericSyntax.isCommentLines('%% a\n%% b'), isTrue);
+      expect(HomericSyntax.isCommentLines('%% a\n> b'), isFalse);
+    });
+
+    test('a comment line is its own kind, apart from asides and quotes', () {
+      Set<HomericMarkKind> kinds(String text) => derive(text, HomericSyntax.all)
+          .map((d) => d.spec)
+          .whereType<HomericMarkSpec>()
+          .map((s) => s.kind)
+          .toSet();
+      expect(kinds('%% to self'), {HomericMarkKind.commentLine});
+      expect(kinds('a ++aside++'), contains(HomericMarkKind.comment));
+      expect(
+          kinds('a ++aside++'), isNot(contains(HomericMarkKind.commentLine)));
     });
 
     test('each form can be switched off', () {

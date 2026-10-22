@@ -131,7 +131,7 @@ void main() {
         ds.any(
           (d) =>
               d.spec is HomericMarkSpec &&
-              (d.spec as HomericMarkSpec).kind == HomericMarkKind.comment,
+              (d.spec as HomericMarkSpec).kind == HomericMarkKind.commentLine,
         ),
         isTrue,
       );

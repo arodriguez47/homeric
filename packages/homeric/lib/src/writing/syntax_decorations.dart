@@ -56,8 +56,15 @@ enum HomericMarkKind {
   /// An inline `#tag`.
   tag,
 
-  /// `++aside++` and `%% line`: the writer's second voice, muted in place.
+  /// `++aside++`: the writer's second voice, muted in place.
   comment,
+
+  /// The words of a `%% line`: a note to self, kept out of the text. Hosts
+  /// set it apart from prose and from a [quote].
+  commentLine,
+
+  /// The words of a `> ` line: someone else's words, quoted.
+  quote,
 
   /// `~~struck~~`, and a ticked to-do's words.
   strike,
@@ -117,6 +124,21 @@ final class HomericSyntax {
 
   /// Every form.
   static const all = HomericSyntax();
+
+  /// A quote line's marker: `> ` at the start of a line, or a lone `>`
+  /// that keeps a blank line inside a quote.
+  static final RegExp quoteLine = RegExp(r'^>(?: |$)');
+
+  /// Whether every line of [text] is quoted, so a host can draw the
+  /// paragraph as a block quote.
+  static bool isQuote(String text) =>
+      text.isNotEmpty && text.split('\n').every(quoteLine.hasMatch);
+
+  /// Whether every line of [text] is a `%%` comment, so a host can set the
+  /// paragraph apart as a note to self.
+  static bool isCommentLines(String text) =>
+      text.isNotEmpty &&
+      text.split('\n').every(HomericNoteMarks.commentLine.hasMatch);
 
   /// Markdown: `**bold**`, `*italic*`, `` `code` ``, `# headings`, `> `
   /// quotes, `==highlight==`, `[label](url)` links, list markers, and
@@ -601,7 +623,7 @@ Iterable<Decoration> _layerDecorations(
         id,
         line.bodyStart,
         line.end,
-        spec: const HomericMarkSpec(HomericMarkKind.comment),
+        spec: const HomericMarkSpec(HomericMarkKind.commentLine),
       );
     }
   }
@@ -786,9 +808,21 @@ Iterable<Decoration> _markdownBlockDecorations(Block block) sync* {
     }
   }
 
-  final quoteMatch = RegExp(r'^> ').firstMatch(text);
-  if (quoteMatch != null) {
-    yield markdownMarkHideReplacement(block.id, 0, quoteMatch.end);
+  // `> ` lines: each line of a soft-broken quote carries its own marker.
+  for (final line in homericLines(text)) {
+    final quote = HomericSyntax.quoteLine.firstMatch(line.text);
+    if (quote == null) continue;
+    final bodyStart = line.start + quote.end;
+    final end = line.start + line.text.length;
+    yield markdownMarkHideReplacement(block.id, line.start, bodyStart);
+    if (bodyStart < end) {
+      yield Decoration.inline(
+        block.id,
+        bodyStart,
+        end,
+        spec: const HomericMarkSpec(HomericMarkKind.quote),
+      );
+    }
   }
 
   for (final m in RegExp(r'==(.+?)==').allMatches(text)) {

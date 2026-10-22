@@ -25,6 +25,7 @@ export 'src/writing/footnote_punctuation.dart';
 export 'src/writing/inline_annotation_shortcut.dart';
 export 'src/writing/list_glyphs.dart';
 export 'src/writing/note_marks.dart';
+export 'src/writing/quote_continuation.dart';
 export 'src/writing/sentences.dart';
 export 'src/writing/smart_punctuation.dart';
 export 'src/writing/syntax_decorations.dart';

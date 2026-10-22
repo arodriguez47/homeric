@@ -355,6 +355,59 @@ void main() {
     });
   });
 
+  group('quote continuation', () {
+    HomericEditorController quoted(String text, int caret) {
+      final controller = controllerFor(text, caret: caret);
+      addTearDown(const HomericQuoteContinuation().installOn(controller));
+      return controller;
+    }
+
+    List<String> texts(HomericEditorController c) =>
+        c.document.blocks.map((b) => b.text).toList();
+
+    test('Enter on a quote line carries the marker over', () {
+      final c = quoted('> a line', 8);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> a line', '> ']);
+      expect(
+          c.selection, HomericSelection.collapsed(c.document.positionAt(1, 2)));
+    });
+
+    test('Enter on an empty quote line ends the quote', () {
+      final c = quoted('> ', 2);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['']);
+    });
+
+    test('Enter before the marker is a plain split, even on an empty line', () {
+      final c = quoted('> a', 0);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['', '> a']);
+      final empty = quoted('> ', 0);
+      expect(empty.insertParagraphBreak(), isTrue);
+      expect(texts(empty), ['', '> ']);
+    });
+
+    test('the line the caret is on decides in a soft-broken quote', () {
+      final c = quoted('> one\n> two', 11);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> one\n> two', '> ']);
+      final plain = quoted('> one\ntwo', 9);
+      expect(plain.insertParagraphBreak(), isTrue);
+      expect(texts(plain), ['> one\ntwo', '']);
+    });
+
+    test('without the feature Enter is a plain split', () {
+      final c = controllerFor('> a line', caret: 8);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> a line', '']);
+    });
+
+    test('the standard kit carries it', () {
+      expect(HomericWritingKit.standard().has('quoteContinuation'), isTrue);
+    });
+  });
+
   group('syntax switches', () {
     List<Decoration> derive(String text, HomericSyntax syntax) =>
         syntax.decorationsFor(_block(text)).toList();

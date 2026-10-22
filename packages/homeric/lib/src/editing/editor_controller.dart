@@ -1072,8 +1072,6 @@ class HomericEditorController extends ChangeNotifier {
   /// continues the list: the trailing block opens with the same bullet chrome
   /// or the next ordered marker. An empty list item (prefix only) exits the
   /// list by clearing that prefix instead of inserting a bare paragraph.
-  /// A `> ` quote line continues the quote the same way, and an empty one
-  /// ends it.
   bool insertParagraphBreak({String? trailingBlockId}) {
     final current = _selection;
     if (current != null && _isValidSelection(_document, current)) {
@@ -1102,24 +1100,6 @@ class HomericEditorController extends ChangeNotifier {
             firstTrailingBlockId: trailingBlockId,
           );
         }
-        final quote = _quotePrefix.firstMatch(text);
-        if (match == null && quote != null && !text.contains('\n')) {
-          if (text.trim() == '>') {
-            return applyBlockEditBatch(
-              blockId: start.block.id,
-              edits: <CanonicalTextEdit>[
-                CanonicalTextEdit(0, text.length, ''),
-              ],
-              selection: const BlockTextSelection.collapsed(0),
-            );
-          }
-          if (start.offset >= quote.end && end.offset >= quote.end) {
-            return replaceSelectionStructurally(
-              '\n> ',
-              firstTrailingBlockId: trailingBlockId,
-            );
-          }
-        }
       }
     }
     return replaceSelectionStructurally(
@@ -1127,8 +1107,6 @@ class HomericEditorController extends ChangeNotifier {
       firstTrailingBlockId: trailingBlockId,
     );
   }
-
-  static final RegExp _quotePrefix = RegExp(r'^>(?: |$)');
 
   /// Applies a stale-safe stable-ID block move as one history unit.
   ///

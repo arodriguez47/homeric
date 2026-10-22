@@ -24,6 +24,7 @@ import '../view/view_text.dart' show ReplacementContent;
 import 'checklists.dart';
 import 'divider.dart';
 import 'list_glyphs.dart';
+import 'list_hang.dart';
 import 'note_marks.dart';
 import 'tags.dart';
 import 'wiki_links.dart';
@@ -111,6 +112,7 @@ final class HomericSyntax {
     this.dropCaps = true,
     this.images = true,
     this.listGlyphs = true,
+    this.hangingLists = false,
   });
 
   /// Every form.
@@ -156,6 +158,13 @@ final class HomericSyntax {
   /// Off, a bullet shows as • and a number as typed.
   final bool listGlyphs;
 
+  /// List lines with a hanging indent ([HomericListHang]): the marker is
+  /// folded out of the line for the host to draw in a gutter with
+  /// [HomericListLine], so wrapped lines start under the words. Off, the
+  /// marker shows in the line. A host that turns this on lays list lines
+  /// out with [HomericListLine], or their markers go missing.
+  final bool hangingLists;
+
   /// The decorations for [block].
   ///
   /// A `[[link]]`, `{{annotation}}`, `++aside++` or `~~strike~~` holding
@@ -197,7 +206,12 @@ final class HomericSyntax {
         ..._attributeMarkDecorations(block),
         ..._markdownBlockDecorations(block),
         ..._markdownMarkDecorations(block),
-        ..._listMarkDecorations(block, glyphs: listGlyphs),
+        ..._listMarkDecorations(
+          block,
+          glyphs: listGlyphs,
+          hang: hangingLists ? listHangFor(block, caret: caret) : null,
+          caret: hangingLists ? caret : null,
+        ),
         ..._linkMarkDecorations(block),
       ],
       if (wikiLinks) ..._wikiLinkMarkDecorations(block, caret: caret),
@@ -220,6 +234,14 @@ final class HomericSyntax {
         for (final d in rest) ..._outsideFolded(d, folded),
     ]);
   }
+
+  /// The hanging-indent layout for [block] when [hangingLists] is on and
+  /// [block] is a list line whose marker does not hold [caret]; null
+  /// otherwise. The host passes it to [HomericListLine].
+  HomericListHang? listHangFor(Block block, {int? caret}) =>
+      markdown && hangingLists
+          ? HomericListHang.of(block, caret: caret, glyphs: listGlyphs)
+          : null;
 
   /// Homeric refuses a paragraph whose hidden ranges overlap, so where two
   /// marks claim the same characters (`[[a **b]] c**`) the outer, earlier
@@ -256,7 +278,8 @@ final class HomericSyntax {
       other.strike == strike &&
       other.dropCaps == dropCaps &&
       other.images == images &&
-      other.listGlyphs == listGlyphs;
+      other.listGlyphs == listGlyphs &&
+      other.hangingLists == hangingLists;
 
   @override
   int get hashCode => Object.hash(
@@ -272,6 +295,7 @@ final class HomericSyntax {
         dropCaps,
         images,
         listGlyphs,
+        hangingLists,
       );
 }
 
@@ -882,9 +906,18 @@ Iterable<Decoration> _markdownMarkDecorations(Block block) sync* {
 Iterable<Decoration> _listMarkDecorations(
   Block block, {
   required bool glyphs,
+  HomericListHang? hang,
+  int? caret,
 }) sync* {
+  if (hang != null) {
+    // The marker is drawn in the gutter beside the line.
+    yield hang.hide;
+    return;
+  }
   final match = HomericMarkdownListPrefix.match(block.text);
   if (match == null) return;
+  // Hung lines: a marker holding the caret shows exactly as typed.
+  if (caret != null && caret < match.prefixEnd) return;
   final mark = glyphs ? _listGlyph(block.text, match) : match.visibleMark;
   // The marker shows as a bullet or number; the space after it stays.
   yield Decoration.replace(
@@ -899,9 +932,7 @@ Iterable<Decoration> _listMarkDecorations(
 /// The marker of a list line nested [HomericMarkdownListMatch.indentLength]
 /// deep: a tab or two spaces per level.
 String _listGlyph(String text, HomericMarkdownListMatch match) {
-  final indent = text.substring(0, match.indentLength);
-  final depth = '\t'.allMatches(indent).length +
-      ' '.allMatches(indent).length ~/ HomericMarkdownListIndent.unit.length;
+  final depth = HomericListHang.depthOf(text.substring(0, match.indentLength));
   return switch (match.kind) {
     HomericMarkdownListKind.bullet => HomericListGlyphs.bullet(depth),
     HomericMarkdownListKind.ordered =>

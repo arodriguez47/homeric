@@ -6,14 +6,16 @@
 ///
 /// - Typing rules, installed on a controller by a [HomericWritingKit]:
 ///   [HomericSmartPunctuation], [HomericWrapShortcuts] (⌘B ⌘I ⌘E ⌘⇧S),
-///   [HomericFootnotePunctuation] and the soft word cap [HomericBrevity].
+///   [HomericFootnotePunctuation], keyboard-only list nesting
+///   [HomericListNesting] and the soft word cap [HomericBrevity].
 /// - Typed syntax, folded away in live preview by [HomericSyntax]:
 ///   markdown, `[[links]]` ([HomericWikiLinks], [HomericLinkQuery]),
 ///   `#tags` ([HomericTags]), to-dos ([HomericChecklists]), `---`
 ///   dividers ([HomericDivider]), and the writing layer of asides,
 ///   comments, annotations, footnotes, strikes, drop caps and images
 ///   ([HomericMarkScan]).
-/// - Presentation: [HomericTypography], [HomericListGlyphs],
+/// - Presentation: [HomericTypography], [HomericListGlyphs], hanging list
+///   lines ([HomericListHang], [HomericListLine]),
 ///   [HomericWritingWidth] and focus dimming ([HomericFocusDimController]).
 library;
 
@@ -24,6 +26,8 @@ export 'src/writing/focus_dim.dart';
 export 'src/writing/footnote_punctuation.dart';
 export 'src/writing/inline_annotation_shortcut.dart';
 export 'src/writing/list_glyphs.dart';
+export 'src/writing/list_hang.dart';
+export 'src/writing/list_nesting.dart';
 export 'src/writing/note_marks.dart';
 export 'src/writing/sentences.dart';
 export 'src/writing/smart_punctuation.dart';

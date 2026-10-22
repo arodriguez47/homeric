@@ -427,6 +427,14 @@ void main() {
       expect(last.document.blocks[1].id, 'next');
     });
 
+    test('Enter mid-way through a soft-broken quote stays in the block', () {
+      final c = quoted('> one\n> two', 5);
+      expect(c.insertParagraphBreak(), isTrue);
+      expect(texts(c), ['> one\n> \n> two']);
+      expect(
+          c.selection, HomericSelection.collapsed(c.document.positionAt(0, 8)));
+    });
+
     test('without the feature Enter is a plain split', () {
       final c = controllerFor('> a line', caret: 8);
       expect(c.insertParagraphBreak(), isTrue);

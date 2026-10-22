@@ -54,16 +54,36 @@ final class HomericQuoteContinuation extends HomericWritingFeature {
     if (marker == null || offset < lineStart + marker.end) {
       return HomericCommandInterception.ignored;
     }
-    final handled = line.trim() != '>'
-        ? controller.replaceSelectionStructurally(
-            '\n> ',
-            firstTrailingBlockId: command.trailingBlockId,
-          )
-        : _endQuote(controller, resolved.block.id, text, lineStart, lineEnd,
-            trailingBlockId: command.trailingBlockId);
+    final handled = line.trim() == '>'
+        ? _endQuote(controller, resolved.block.id, text, lineStart, lineEnd,
+            trailingBlockId: command.trailingBlockId)
+        : lineEnd < text.length
+            // Inside a soft-broken quote, the next line joins it in place.
+            ? _continueInside(controller, selection.head)
+            : controller.replaceSelectionStructurally(
+                '\n> ',
+                firstTrailingBlockId: command.trailingBlockId,
+              );
     return handled
         ? HomericCommandInterception.handled
         : HomericCommandInterception.ignored;
+  }
+
+  /// Opens a quoted line at [position] inside a soft-broken quote, keeping
+  /// the lines after it in the same block.
+  static bool _continueInside(
+    HomericEditorController controller,
+    int position,
+  ) {
+    try {
+      final tx = Transaction(controller.document)..insertText(position, '\n> ');
+      return controller.applyPreparedCommand(HomericPreparedCommand(
+        stages: <Transaction>[tx],
+        selection: HomericSelection.collapsed(position + 3),
+      ));
+    } on ArgumentError {
+      return false;
+    }
   }
 
   /// Ends the quote at the empty line [lineStart]..[lineEnd] of block

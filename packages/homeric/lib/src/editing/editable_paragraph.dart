@@ -507,11 +507,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) return;
+    if (state == AppLifecycleState.resumed) {
+      _syncCaretBlink(resetVisible: true);
+      return;
+    }
     _cancelPlatformTransientInput();
     _hideLocalTouchSelectionChrome();
     _dismissContextMenu();
     _stopCaretBlink();
+    if (homericKeepsFocusThroughLifecycle) return;
     if (_controller.activeBlockId == widget.blockId) {
       final documentHost = _documentHost;
       if (documentHost != null) {

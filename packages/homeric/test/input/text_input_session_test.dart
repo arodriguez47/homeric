@@ -385,6 +385,38 @@ void main() {
     controller.dispose();
   });
 
+  test('multi-line insertion replaces a cross-block selection', () async {
+    final document = _documents(<String>['first', 'second']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 2),
+        head: document.positionAt(1, 3),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    session.attach(blockId: 'b');
+
+    await _sendDeltas(binding, 1, <Map<String, Object?>>[
+      _delta(
+        oldText: 'second',
+        deltaText: 'X\nY',
+        start: 3,
+        end: 3,
+        selectionBase: 6,
+        selectionExtent: 6,
+      ),
+    ]);
+
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      <String>['fiX', 'Yond'],
+    );
+
+    session.dispose();
+    controller.dispose();
+  });
+
   test('first composing delta replaces a cross-block selection once', () async {
     final document = _documents(<String>['abc', 'def']);
     final controller = HomericEditorController(
@@ -1159,6 +1191,69 @@ void main() {
           reason: 'Return reaches the document as performAction, not text');
       expect(_editingStateCalls(calls).last.arguments,
           containsPair('text', '\nab'));
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    test('a keyboard inserting several lines splits them into blocks',
+        () async {
+      // Wispr Flow's keyboard inserts a whole multi-paragraph dictation with
+      // one insertText, which reaches Homeric as one insertion delta.
+      final document = _document('ab');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      session.attach(blockId: 'a', commandDelegate: _FakeCommandDelegate());
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\nab',
+          deltaText: 'One.\n\nTwo.',
+          start: 2,
+          end: 2,
+          selectionBase: 12,
+          selectionExtent: 12,
+        ),
+      ]);
+
+      expect(
+        controller.document.blocks.map((block) => block.text),
+        <String>['aOne.', '', 'Two.b'],
+      );
+      expect(controller.document.blocks.first.id, 'a');
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    test('a multi-line replacement swaps the selected range for blocks',
+        () async {
+      final document = _document('abcd');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 4)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      session.attach(blockId: 'a', commandDelegate: _FakeCommandDelegate());
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\nabcd',
+          deltaText: 'X\nY',
+          start: 2,
+          end: 4,
+          selectionBase: 5,
+          selectionExtent: 5,
+        ),
+      ]);
+
+      expect(
+        controller.document.blocks.map((block) => block.text),
+        <String>['aX', 'Yd'],
+      );
 
       session.dispose();
       controller.dispose();

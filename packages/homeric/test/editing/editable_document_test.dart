@@ -709,8 +709,11 @@ void main() {
     expect(key.currentState!.pointerSelectionDragActive, isFalse);
     expect(key.currentState!.debugTouchMagnifierVisible, isFalse);
     expect(key.currentState!.touchSelectionChromeVisible, isFalse);
-    expect(key.currentState!.hasEditingFocus, isFalse);
-    expect(session.isAttached, isFalse);
+    // Like Flutter's own text fields on phones, the editor keeps focus and
+    // platform input while backgrounded, so a keyboard that leaves the app
+    // (Wispr Flow records in its own app) can insert on return.
+    expect(key.currentState!.hasEditingFocus, isTrue);
+    expect(session.isAttached, isTrue);
 
     tester.binding.handleAppLifecycleStateChanged(
       AppLifecycleState.resumed,
@@ -718,9 +721,9 @@ void main() {
     await interrupted.moveTo(alpha);
     await interrupted.up();
     await tester.pump();
-    expect(controller.selection, retainedSelection);
-    expect(session.isAttached, isFalse,
-        reason: 'resume requires a fresh focus action');
+    expect(controller.selection, retainedSelection,
+        reason: 'the interrupted drag stays inert after resume');
+    expect(session.isAttached, isTrue);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -1054,6 +1057,118 @@ void main() {
         reason: 'release must resync the collapsed caret overlay');
     expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget,
         reason: 'letting go of a handle brings the edit menu back');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+      'iOS keeps the caret through an app switch and takes a keyboard '
+      'dictation of several paragraphs on return', (tester) async {
+    // Wispr Flow's keyboard opens its own app to record, then inserts the
+    // transcript into the field the writer left once they come back.
+    TextInputConnection.debugResetId();
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+    controller.setSelection(
+      HomericSelection.collapsed(document.positionAt(0, 10)),
+    );
+    await tester.pump();
+
+    for (final state in const <AppLifecycleState>[
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+      await tester.pump();
+    }
+    expect(key.currentState!.hasEditingFocus, isTrue);
+    expect(session.isAttached, isTrue);
+
+    final message = const JSONMessageCodec().encodeMessage(<String, Object?>{
+      'method': 'TextInputClient.updateEditingStateWithDeltas',
+      'args': <Object?>[
+        1,
+        <String, Object?>{
+          'deltas': <Object?>[
+            <String, Object?>{
+              'oldText': '\nalpha beta',
+              'deltaText': ' gamma.\n\nDelta.',
+              'deltaStart': 11,
+              'deltaEnd': 11,
+              'selectionBase': 26,
+              'selectionExtent': 26,
+              'selectionAffinity': 'TextAffinity.downstream',
+              'selectionIsDirectional': false,
+              'composingBase': -1,
+              'composingExtent': -1,
+            },
+          ],
+        },
+      ],
+    });
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'flutter/textinput',
+      message,
+      (_) {},
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      <String>['alpha beta gamma.', '', 'Delta.'],
+    );
+    expect(session.isAttached, isTrue);
+    expect(session.activeBlockId, controller.document.blocks.last.id,
+        reason: 'typing continues after the inserted text');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('desktop still blurs the editor when the app is backgrounded',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final document = _document(const <String>['alpha beta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    final paragraph = find.byKey(const ValueKey('homeric-editable-block-0'));
+    await tester.tapAt(tester.getTopLeft(paragraph) + const Offset(15, 7));
+    await tester.pump();
+    expect(session.isAttached, isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(session.isAttached, isFalse);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
     debugDefaultTargetPlatformOverride = null;
   });
 

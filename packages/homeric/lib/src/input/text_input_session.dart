@@ -518,6 +518,11 @@ final class HomericTextInputSession extends ChangeNotifier {
     final blockId = _blockId;
     if (initial == null || blockId == null) return;
 
+    if (deltas.length == 1 && _insertsLines(deltas.single, initial)) {
+      _insertLinesStructurally(blockId, deltas.single);
+      return;
+    }
+
     var shadow = initial;
     var sentinelRestored = false;
     final edits = <CanonicalTextEdit>[];
@@ -614,6 +619,79 @@ final class HomericTextInputSession extends ChangeNotifier {
       return;
     }
     _syncCanonical(force: true);
+  }
+
+  /// Whether [delta] inserts text holding line breaks into the block, as a
+  /// keyboard extension does with a multi-paragraph dictation (Wispr Flow's
+  /// `insertText`). A lone line break is the Return key, which arrives as
+  /// [TextInputAction.newline] as well and stays on that path.
+  bool _insertsLines(TextEditingDelta delta, TextEditingValue shadow) {
+    if (delta.oldText != shadow.text || controller.composing != null) {
+      return false;
+    }
+    final text = switch (delta) {
+      TextEditingDeltaInsertion(:final textInserted) => textInserted,
+      TextEditingDeltaReplacement(:final replacementText) => replacementText,
+      _ => null,
+    };
+    return text != null &&
+        _containsNewline(text) &&
+        text != '\n' &&
+        text != '\r' &&
+        text != '\r\n';
+  }
+
+  /// Applies a multi-line platform insertion as one structural edit, the
+  /// way a paste of the same text splits into blocks.
+  void _insertLinesStructurally(String blockId, TextEditingDelta delta) {
+    final prefix = _sentinelLength;
+    final (start, end, text) = switch (delta) {
+      TextEditingDeltaInsertion(:final insertionOffset, :final textInserted) =>
+        (insertionOffset, insertionOffset, textInserted),
+      TextEditingDeltaReplacement(
+        :final replacedRange,
+        :final replacementText,
+      ) =>
+        (replacedRange.start, replacedRange.end, replacementText),
+      _ => throw StateError('not a line insertion'),
+    };
+    int local(int offset) => offset < prefix ? 0 : offset - prefix;
+    final block = controller.document.blockById(blockId);
+    if (block == null ||
+        local(start) > local(end) ||
+        local(end) > block.contentLength) {
+      _syncCanonical(force: true);
+      return;
+    }
+    if (_selectionSpansBlocks(blockId)) {
+      // The platform sees only a collapsed caret for a cross-block
+      // selection; text typed there replaces the whole selection.
+      final caret = _shadowValue == null ? null : _localValue(_shadowValue!);
+      if (caret == null ||
+          local(start) != caret.selection.extentOffset ||
+          local(end) != caret.selection.extentOffset ||
+          !controller.replaceSelectionStructurally(text)) {
+        _syncCanonical(force: true);
+      }
+      return;
+    }
+    final target = HomericSelection(
+      anchor: controller.globalPositionForBlockOffset(blockId, local(start)),
+      head: controller.globalPositionForBlockOffset(blockId, local(end)),
+    );
+    final selection = controller.selection;
+    final inPlace = selection != null &&
+        selection.start == target.start &&
+        selection.end == target.end;
+    if (!inPlace && !controller.setSelection(target)) {
+      _syncCanonical(force: true);
+      return;
+    }
+    // Controller listeners retarget or reopen platform input when the edit
+    // moves the caret into a new block, as they do after a paste.
+    if (!controller.replaceSelectionStructurally(text)) {
+      _syncCanonical(force: true);
+    }
   }
 
   bool _selectionSpansBlocks(String blockId) {

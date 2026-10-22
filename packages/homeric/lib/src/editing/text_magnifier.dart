@@ -3,11 +3,13 @@ library;
 
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart' show TextMagnifier;
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-/// Homeric's adaptive magnifier: the modern loupe on iOS, Flutter's default
+/// Homeric's adaptive magnifier: the system loupe on iOS, Flutter's default
 /// elsewhere. Touch selection uses it on iOS only; Android keeps
 /// [TextMagnifier.adaptiveMagnifierConfiguration], which also keeps the
 /// handles out of the lens there.
@@ -20,7 +22,7 @@ Widget? _adaptiveMagnifierBuilder(
   ValueNotifier<MagnifierInfo> magnifierInfo,
 ) {
   if (defaultTargetPlatform == TargetPlatform.iOS) {
-    return HomericTextMagnifier(
+    return HomericSystemLoupe(
       controller: controller,
       magnifierInfo: magnifierInfo,
     );
@@ -30,6 +32,125 @@ Widget? _adaptiveMagnifierBuilder(
     controller,
     magnifierInfo,
   );
+}
+
+/// The loupe iOS itself draws (Liquid Glass on iOS 26), asked for over the
+/// `homeric/loupe` channel, which magnifies whatever Flutter drew under the
+/// finger. An app that doesn't answer the channel gets [HomericTextMagnifier]
+/// instead.
+///
+/// The channel takes `begin` and `move` with the finger (`x`, `y`) and the
+/// caret (`caret`: left, top, width, height), all in logical pixels of the
+/// Flutter view, and `end`. `begin` answers whether a loupe is showing.
+class HomericSystemLoupe extends StatefulWidget {
+  /// Creates the loupe for one drag.
+  const HomericSystemLoupe({
+    super.key,
+    required this.controller,
+    required this.magnifierInfo,
+  });
+
+  /// Shows and hides the loupe.
+  final MagnifierController controller;
+
+  /// The caret and finger the loupe follows.
+  final ValueNotifier<MagnifierInfo> magnifierInfo;
+
+  /// The channel the app's iOS side answers.
+  static const MethodChannel channel = MethodChannel('homeric/loupe');
+
+  /// Whether the app answered `begin`; unknown until the first drag.
+  static bool? _available;
+
+  /// Forgets whether the app answered, for tests.
+  @visibleForTesting
+  static void resetAvailability() => _available = null;
+
+  @override
+  State<HomericSystemLoupe> createState() => _HomericSystemLoupeState();
+}
+
+class _HomericSystemLoupeState extends State<HomericSystemLoupe> {
+  bool _drawn = HomericSystemLoupe._available == false;
+  bool _active = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_drawn) return;
+    widget.magnifierInfo.addListener(_follow);
+    _follow();
+  }
+
+  @override
+  void didUpdateWidget(HomericSystemLoupe oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_drawn && oldWidget.magnifierInfo != widget.magnifierInfo) {
+      oldWidget.magnifierInfo.removeListener(_follow);
+      widget.magnifierInfo.addListener(_follow);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.magnifierInfo.removeListener(_follow);
+    _end();
+    super.dispose();
+  }
+
+  void _follow() {
+    final info = widget.magnifierInfo.value;
+    final finger = info.globalGesturePosition;
+    final caret = info.caretRect;
+    // Like the drawn loupe, step aside when the finger drags far below the
+    // line.
+    if (caret.center.dy - finger.dy <
+        -HomericTextMagnifier._hideBelowThreshold) {
+      _end();
+      return;
+    }
+    final args = <String, Object>{
+      'x': finger.dx,
+      'y': finger.dy,
+      'caret': <double>[caret.left, caret.top, caret.width, caret.height],
+    };
+    if (_active) {
+      HomericSystemLoupe.channel.invokeMethod<void>('move', args);
+      return;
+    }
+    _active = true;
+    HomericSystemLoupe.channel.invokeMethod<bool>('begin', args).then(
+      (shown) {
+        HomericSystemLoupe._available = shown ?? false;
+        if (shown != true) _drawInstead();
+      },
+      onError: (Object _) {
+        HomericSystemLoupe._available = false;
+        _drawInstead();
+      },
+    );
+  }
+
+  void _end() {
+    if (!_active) return;
+    _active = false;
+    HomericSystemLoupe.channel.invokeMethod<void>('end').catchError((_) {});
+  }
+
+  void _drawInstead() {
+    widget.magnifierInfo.removeListener(_follow);
+    _active = false;
+    if (mounted) setState(() => _drawn = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_drawn) return const SizedBox.shrink();
+    return HomericTextMagnifier(
+      controller: widget.controller,
+      magnifierInfo: widget.magnifierInfo,
+    );
+  }
 }
 
 /// The loupe iOS 17 and later show while a caret or handle is dragged: a

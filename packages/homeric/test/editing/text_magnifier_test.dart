@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart' show TextMagnifier;
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 
 void main() {
+  setUp(HomericSystemLoupe.resetAvailability);
   Future<({MagnifierController controller, ValueNotifier<MagnifierInfo> info})>
       pumpLoupe(WidgetTester tester, {required Offset finger}) async {
     final controller = MagnifierController();
@@ -35,7 +37,78 @@ void main() {
     return (controller: controller, info: info);
   }
 
-  testWidgets('iOS gets the modern loupe above the line', (tester) async {
+  List<MethodCall> answerLoupe(WidgetTester tester, {required bool shown}) {
+    final calls = <MethodCall>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(HomericSystemLoupe.channel,
+        (call) async {
+      calls.add(call);
+      return call.method == 'begin' ? shown : null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(
+          HomericSystemLoupe.channel,
+          null,
+        ));
+    return calls;
+  }
+
+  testWidgets('iOS asks the app for the system loupe', (tester) async {
+    final calls = answerLoupe(tester, shown: true);
+    final loupe = await pumpLoupe(tester, finger: const Offset(200, 310));
+
+    expect(find.byType(HomericSystemLoupe), findsOneWidget);
+    expect(find.byType(RawMagnifier), findsNothing,
+        reason: 'iOS draws the loupe itself');
+    expect(calls.single.method, 'begin');
+    expect(calls.single.arguments, <String, Object>{
+      'x': 200.0,
+      'y': 310.0,
+      'caret': <double>[200, 300, 2, 20],
+    });
+
+    loupe.info.value = const MagnifierInfo(
+      globalGesturePosition: Offset(240, 312),
+      caretRect: Rect.fromLTWH(240, 300, 2, 20),
+      fieldBounds: Rect.fromLTWH(20, 280, 360, 200),
+      currentLineBoundaries: Rect.fromLTWH(20, 300, 360, 20),
+    );
+    await tester.pump();
+    expect(calls.last.method, 'move');
+    expect((calls.last.arguments as Map)['x'], 240.0);
+
+    // Far below the line, the loupe steps aside, and comes back on a new
+    // session.
+    loupe.info.value = const MagnifierInfo(
+      globalGesturePosition: Offset(240, 400),
+      caretRect: Rect.fromLTWH(240, 300, 2, 20),
+      fieldBounds: Rect.fromLTWH(20, 280, 360, 200),
+      currentLineBoundaries: Rect.fromLTWH(20, 300, 360, 20),
+    );
+    await tester.pump();
+    expect(calls.last.method, 'end');
+    loupe.info.value = const MagnifierInfo(
+      globalGesturePosition: Offset(240, 312),
+      caretRect: Rect.fromLTWH(240, 300, 2, 20),
+      fieldBounds: Rect.fromLTWH(20, 280, 360, 200),
+      currentLineBoundaries: Rect.fromLTWH(20, 300, 360, 20),
+    );
+    await tester.pump();
+    expect(calls.last.method, 'begin');
+
+    await tester.pumpWidget(const SizedBox());
+    expect(calls.last.method, 'end', reason: 'the drag ended');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('an app without the system loupe gets the drawn one',
+      (tester) async {
+    answerLoupe(tester, shown: false);
+    await pumpLoupe(tester, finger: const Offset(200, 310));
+    expect(find.byType(HomericTextMagnifier), findsOneWidget);
+    expect(find.byType(RawMagnifier), findsOneWidget);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('the drawn loupe sits above the line', (tester) async {
+    answerLoupe(tester, shown: false);
     await pumpLoupe(tester, finger: const Offset(200, 310));
 
     expect(find.byType(HomericTextMagnifier), findsOneWidget);
@@ -59,6 +132,7 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
   testWidgets('the loupe keeps clear of the screen edge', (tester) async {
+    answerLoupe(tester, shown: false);
     await pumpLoupe(tester, finger: const Offset(4, 310));
     final lens = find.byType(RawMagnifier);
     final rect = tester.getRect(lens);
@@ -71,6 +145,7 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
   testWidgets('a new controller drives the same loupe', (tester) async {
+    answerLoupe(tester, shown: false);
     final first = await pumpLoupe(tester, finger: const Offset(200, 310));
     expect(first.controller.animationController, isNotNull);
     final info = first.info;

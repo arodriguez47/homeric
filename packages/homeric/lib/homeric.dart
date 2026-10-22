@@ -20,7 +20,10 @@ export 'src/editing/spell_check.dart'
         HomericSpellCheckProvider,
         HomericSpellCheckRequest;
 export 'src/editing/text_magnifier.dart'
-    show HomericTextMagnifier, homericAdaptiveMagnifierConfiguration;
+    show
+        HomericSystemLoupe,
+        HomericTextMagnifier,
+        homericAdaptiveMagnifierConfiguration;
 export 'src/editing/editor_clipboard.dart'
     show
         HomericClipboardAdapter,

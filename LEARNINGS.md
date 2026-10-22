@@ -1335,3 +1335,11 @@ overlay recreates on a non-identical configuration). Any new touch gesture
 that shows the document magnifier must request touch chrome before it.
 Mirror selection-geometry and editor-architecture learnings in Homeric and
 Nexus in the same change.
+
+**Update — system loupe:** On iOS the configuration now builds
+`HomericSystemLoupe`, which asks the app over `homeric/loupe` (`begin`,
+`move`, `end`; finger and caret in Flutter view points) for UIKit's own
+`UITextLoupeSession` over the Flutter view, so it gets the system look
+(Liquid Glass on iOS 26). An app whose iOS side doesn't answer, or answers
+`begin` with false, gets the drawn `HomericTextMagnifier` from then on. The
+Swift side lives in each app's Runner (Homeric has no native code).

@@ -262,7 +262,7 @@ void main() {
     await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
     await tester.pump();
     expect(document.debugTouchMagnifierVisible, isTrue);
-    expect(find.byType(HomericTextMagnifier), findsOneWidget);
+    expect(find.byType(HomericSystemLoupe), findsOneWidget);
     await press.up();
     await tester.pump();
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));

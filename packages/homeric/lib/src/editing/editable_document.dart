@@ -118,8 +118,9 @@ final class HomericTouchSelectionConfiguration {
   /// Optional consumer controls replacing the platform mobile default.
   final TextSelectionControls? selectionControls;
 
-  /// Optional consumer magnifier replacing the default: Homeric's loupe on
-  /// iOS ([homericAdaptiveMagnifierConfiguration]), Flutter's on Android.
+  /// Optional consumer magnifier replacing the default: the system loupe on
+  /// iOS ([homericAdaptiveMagnifierConfiguration], [HomericSystemLoupe]),
+  /// Flutter's on Android.
   final TextMagnifierConfiguration? magnifierConfiguration;
 
   /// Opts desktop platforms into touch chrome.

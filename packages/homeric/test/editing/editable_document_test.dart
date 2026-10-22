@@ -6,7 +6,6 @@ import 'package:flutter/material.dart'
     show
         AdaptiveTextSelectionToolbar,
         DefaultMaterialLocalizations,
-        TextMagnifier,
         materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter/gestures.dart';
@@ -308,7 +307,7 @@ void main() {
         android!.selectionControls, same(materialTextSelectionHandleControls));
     expect(
       android.magnifierConfiguration,
-      same(TextMagnifier.adaptiveMagnifierConfiguration),
+      same(homericAdaptiveMagnifierConfiguration),
     );
     expect(adaptive.resolve(TargetPlatform.macOS), isNull);
 

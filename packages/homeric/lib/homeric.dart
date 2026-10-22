@@ -19,6 +19,8 @@ export 'src/editing/spell_check.dart'
         HomericPlatformSpellCheckProvider,
         HomericSpellCheckProvider,
         HomericSpellCheckRequest;
+export 'src/editing/text_magnifier.dart'
+    show HomericTextMagnifier, homericAdaptiveMagnifierConfiguration;
 export 'src/editing/editor_clipboard.dart'
     show
         HomericClipboardAdapter,

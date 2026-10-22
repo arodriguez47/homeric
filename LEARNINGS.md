@@ -1317,3 +1317,21 @@ caret (capitals, quotes, predictions), not only for deletability. Route menu
 actions through Homeric intents; never let UIKit edit the hidden value
 directly. Evidence: `test/editing/edit_menu_test.dart`,
 `test/input/text_input_session_test.dart` (iOS group). Device check pending.
+
+## editor-architect — 2026-10-22 — Homeric draws its own iOS loupe; a focused long press asks for touch chrome
+
+**What:** Flutter 3.47 only ships the pre-iOS 17 `CupertinoTextMagnifier`
+(small oval, tinted border, no zoom). Homeric's adaptive touch configuration
+now resolves to `homericAdaptiveMagnifierConfiguration`: `HomericTextMagnifier`
+on iOS (104x74 stadium, 1.25x, hairline edge, soft shadow, 30pt above the
+line center), Flutter's default elsewhere. `RawMagnifier` paints its shadow
+above the lens, so the loupe needs `Clip.hardEdge` or the lens turns grey.
+The document magnifier lives in the touch overlay, which only exists once
+touch chrome is requested; a focused iOS long press now requests it first,
+or the first long press after a caret placed another way shows no loupe.
+
+**Rule going forward:** Keep the configuration a single top-level const (the
+overlay recreates on a non-identical configuration). Any new touch gesture
+that shows the document magnifier must request touch chrome before it.
+Mirror selection-geometry and editor-architecture learnings in Homeric and
+Nexus in the same change.

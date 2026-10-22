@@ -13,8 +13,7 @@ import 'package:flutter/foundation.dart'
         defaultTargetPlatform,
         kIsWeb,
         visibleForTesting;
-import 'package:flutter/material.dart'
-    show TextMagnifier, materialTextSelectionHandleControls;
+import 'package:flutter/material.dart' show materialTextSelectionHandleControls;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart' show SchedulerPhase;
 import 'package:flutter/services.dart' show RawFloatingCursorPoint;
@@ -33,6 +32,7 @@ import 'editable_paragraph.dart'
     show HomericEditableBlockGeometry, HomericEditableParagraph;
 import 'editor_controller.dart';
 import 'selection_overlay.dart';
+import 'text_magnifier.dart';
 
 typedef HomericEditableBlockBuilder = Widget Function(
   BuildContext context,
@@ -117,7 +117,8 @@ final class HomericTouchSelectionConfiguration {
   /// Optional consumer controls replacing the platform mobile default.
   final TextSelectionControls? selectionControls;
 
-  /// Optional consumer magnifier replacing Flutter's adaptive default.
+  /// Optional consumer magnifier replacing Homeric's adaptive default
+  /// ([homericAdaptiveMagnifierConfiguration]).
   final TextMagnifierConfiguration? magnifierConfiguration;
 
   /// Opts desktop platforms into touch chrome.
@@ -144,7 +145,7 @@ final class HomericTouchSelectionConfiguration {
       selectionControls: controls,
       magnifierConfiguration: magnifierConfiguration ??
           (isMobile
-              ? TextMagnifier.adaptiveMagnifierConfiguration
+              ? homericAdaptiveMagnifierConfiguration
               : TextMagnifierConfiguration.disabled),
     );
   }

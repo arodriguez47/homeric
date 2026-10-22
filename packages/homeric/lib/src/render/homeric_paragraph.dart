@@ -1243,9 +1243,10 @@ class RenderHomericParagraph extends RenderBox
     );
     if (boxes.isEmpty || lines.isEmpty) return null;
     final box = boxes.first;
-    // The glue is all but zero-height, so its box sits on its line's
-    // baseline; that line's text decides the middle.
-    final y = box.top;
+    // The glue's tight box sits on its line's baseline (zero height); its
+    // centre stays inside that line even if an engine grows the box to
+    // the height multiplier. That line's text decides the middle.
+    final y = (box.top + box.bottom) / 2;
     var line = lines.last;
     for (final l in lines) {
       if (y <= l.baseline + l.descent) {

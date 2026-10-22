@@ -7,6 +7,7 @@
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric/writing.dart';
 
 import 'render_test_utils.dart';
 
@@ -66,6 +67,17 @@ void main() {
     expect(render.source.viewText.length, 7);
   });
 
+  for (final spec in <Object>[
+    const HomericFootnoteSpec('n'),
+    const HomericAnnotationNoteSpec('note'),
+  ]) {
+    testWidgets('${spec.runtimeType} keeps its word and period together',
+        (tester) async {
+      final render = await pump(tester, spec);
+      expect(_lineStarts(render), [0, 3]);
+    });
+  }
+
   testWidgets('a glued mark paints over its advance, centred on the line',
       (tester) async {
     final render = await pump(tester, const _Mark());
@@ -103,5 +115,30 @@ void main() {
       width: 80,
     ));
     expect(renderOf(tester).size.height, greaterThanOrEqualTo(20));
+  });
+
+  testWidgets('a tall glued mark on a later line paints on that line',
+      (tester) async {
+    final source = sourceOf(
+      'ab cd.',
+      decorations: [Decoration.widget('b', 5, spec: const _Mark())],
+    );
+    await tester.pumpWidget(harness(
+      HomericParagraph(
+        source: source,
+        slotBuilder: (_) =>
+            const SizedBox(key: Key('mark'), width: 6, height: 20),
+      ),
+      width: 80,
+    ));
+    final render = renderOf(tester);
+    final second = render.layoutParagraph.computeLineMetrics()[1];
+    final lineTop = second.baseline - second.ascent;
+    final markBox = tester.getRect(find.byKey(const Key('mark')));
+    expect(markBox.top, greaterThanOrEqualTo(lineTop - 0.5));
+    expect(
+      ParagraphGeometry(render).slotRectAt(0).value.topLeft,
+      markBox.topLeft,
+    );
   });
 }

@@ -3,7 +3,10 @@ import 'package:flutter/cupertino.dart'
 import 'package:flutter/foundation.dart'
     show ValueListenable, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
-    show TextMagnifier, materialTextSelectionHandleControls;
+    show
+        DefaultMaterialLocalizations,
+        TextMagnifier,
+        materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -250,7 +253,7 @@ void main() {
         HomericSelection.collapsed(controller.document.positionAt(1, 0)),
       );
       await tester.pump();
-      final platformText = '\u200B${empty ? '' : 'right'}';
+      final platformText = '\n${empty ? '' : 'right'}';
       expect(session.activeBlockId, 'block-1');
 
       // UIKit's deleteBackward removes the sentinel; no key event arrives.
@@ -275,7 +278,7 @@ void main() {
       // The survivor keeps a sentinel, so typing still lands canonically.
       session.debugDeltaCallback!(<TextEditingDelta>[
         TextEditingDeltaInsertion(
-          oldText: '\u200B${empty ? 'left' : 'leftright'}',
+          oldText: '\n${empty ? 'left' : 'leftright'}',
           textInserted: '!',
           insertionOffset: 5,
           selection: const TextSelection.collapsed(offset: 6),
@@ -5070,6 +5073,8 @@ Widget _withOverlay(Widget child) => Directionality(
         locale: const Locale('en'),
         delegates: const <LocalizationsDelegate<dynamic>>[
           DefaultWidgetsLocalizations.delegate,
+          // Touch gestures open the edit menu, which labels its buttons.
+          DefaultMaterialLocalizations.delegate,
         ],
         child: Overlay(
           initialEntries: <OverlayEntry>[

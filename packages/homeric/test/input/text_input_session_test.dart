@@ -169,6 +169,11 @@ void main() {
       containsPair('inputAction', 'TextInputAction.newline'),
     );
     expect(
+      (calls.first.arguments as List<Object?>)[1],
+      containsPair('textCapitalization', 'TextCapitalization.sentences'),
+      reason: 'the keyboard capitalizes a sentence start as Notes does',
+    );
+    expect(
       calls[1].arguments,
       containsPair('text', 'raw **text**'),
     );
@@ -1117,11 +1122,43 @@ void main() {
       session.attach(blockId: 'a');
 
       final state = _editingStateCalls(calls).single.arguments as Map;
-      expect(state['text'], '\u200Bab',
+      expect(state['text'], '\nab',
           reason: 'UIKit deleteBackward sends nothing at offset 0, so the '
               'block start must sit after one platform-only character');
       expect(state['selectionBase'], 2);
       expect(state['selectionExtent'], 2);
+
+      session.dispose();
+      controller.dispose();
+    });
+
+    test('a typed line break is never block text beside the sentinel',
+        () async {
+      final document = _document('ab');
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      final delegate = _FakeCommandDelegate();
+      session.attach(blockId: 'a', commandDelegate: delegate);
+      calls.clear();
+
+      await _sendDeltas(binding, 1, <Map<String, Object?>>[
+        _delta(
+          oldText: '\nab',
+          deltaText: '\n',
+          start: 2,
+          end: 2,
+          selectionBase: 3,
+          selectionExtent: 3,
+        ),
+      ]);
+
+      expect(controller.document.blocks.single.text, 'ab',
+          reason: 'Return reaches the document as performAction, not text');
+      expect(_editingStateCalls(calls).last.arguments,
+          containsPair('text', '\nab'));
 
       session.dispose();
       controller.dispose();
@@ -1140,7 +1177,7 @@ void main() {
 
       await _sendDeltas(binding, 1, <Map<String, Object?>>[
         _delta(
-          oldText: '\u200B',
+          oldText: '\n',
           deltaText: '',
           start: 0,
           end: 1,
@@ -1157,7 +1194,7 @@ void main() {
           reason: 'the sentinel is never canonical text');
       expect(
         (_editingStateCalls(calls).last.arguments as Map)['text'],
-        '\u200B',
+        '\n',
         reason: 'an unhandled boundary Backspace restores the sentinel',
       );
 
@@ -1178,7 +1215,7 @@ void main() {
 
       await _sendDeltas(binding, 1, <Map<String, Object?>>[
         _delta(
-          oldText: '\u200Bab',
+          oldText: '\nab',
           deltaText: 'X',
           start: 2,
           end: 2,
@@ -1193,7 +1230,7 @@ void main() {
 
       await _sendDeltas(binding, 1, <Map<String, Object?>>[
         _delta(
-          oldText: '\u200BaXb',
+          oldText: '\naXb',
           deltaText: '',
           start: 1,
           end: 2,
@@ -1208,7 +1245,7 @@ void main() {
 
       await _sendDeltas(binding, 1, <Map<String, Object?>>[
         _delta(
-          oldText: '\u200BXb',
+          oldText: '\nXb',
           deltaText: 'Q',
           start: 0,
           end: 3,
@@ -1220,13 +1257,13 @@ void main() {
           reason: 'a platform range over the sentinel still edits the block');
       expect(delegate.intents, isEmpty);
       expect(_editingStateCalls(calls).last.arguments,
-          containsPair('text', '\u200BQ'));
+          containsPair('text', '\nQ'));
 
       // A caret placed before the sentinel inserts at offset 0, displacing
       // it; it must not become document text.
       await _sendDeltas(binding, 1, <Map<String, Object?>>[
         _delta(
-          oldText: '\u200BQ',
+          oldText: '\nQ',
           deltaText: 'Z',
           start: 0,
           end: 0,
@@ -1238,7 +1275,7 @@ void main() {
       expect(controller.selection,
           HomericSelection.collapsed(controller.document.positionAt(0, 1)));
       expect(_editingStateCalls(calls).last.arguments,
-          containsPair('text', '\u200BZQ'));
+          containsPair('text', '\nZQ'));
 
       session.debugAutocorrectionPromptCallback!(1, 2);
       expect(delegate.autocorrectionPromptRanges, const <TextRange>[
@@ -1286,7 +1323,7 @@ void main() {
               'a', controller.selection!.head);
           await _sendDeltas(binding, 1, <Map<String, Object?>>[
             _delta(
-              oldText: '\u200B$text',
+              oldText: '\n$text',
               deltaText: char,
               start: caret + 1,
               end: caret + 1,

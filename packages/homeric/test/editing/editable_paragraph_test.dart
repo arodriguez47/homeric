@@ -450,7 +450,8 @@ void main() {
   });
 
   testWidgets(
-      'iOS focused long press defers to one epoch-bound floating cursor',
+      'iOS focused long press moves the caret, then the keyboard floating '
+      'cursor stays epoch-bound',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final document = _document('alpha beta');
@@ -501,10 +502,24 @@ void main() {
       kind: PointerDeviceKind.touch,
     );
     await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await longPress.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    final underFinger = controller.selection!;
+    expect(underFinger.isCollapsed, isTrue,
+        reason: 'a focused iOS long press carries the caret, as in Notes');
+    expect(underFinger, isNot(initial));
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing,
+        reason: 'the menu waits for the finger to lift');
     await longPress.up();
     await tester.pump();
-    expect(controller.selection, initial,
-        reason: 'focused iOS long press leaves selection to the platform');
+    expect(controller.selection, underFinger);
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget,
+        reason: 'lifting opens the edit menu');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    controller.setSelection(initial);
+    await tester.pump();
 
     var notifications = 0;
     controller.addListener(() => notifications++);

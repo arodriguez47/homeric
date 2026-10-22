@@ -385,6 +385,38 @@ void main() {
     controller.dispose();
   });
 
+  test('multi-line insertion replaces a cross-block selection', () async {
+    final document = _documents(<String>['first', 'second']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 2),
+        head: document.positionAt(1, 3),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    session.attach(blockId: 'b');
+
+    await _sendDeltas(binding, 1, <Map<String, Object?>>[
+      _delta(
+        oldText: 'second',
+        deltaText: 'X\nY',
+        start: 3,
+        end: 3,
+        selectionBase: 6,
+        selectionExtent: 6,
+      ),
+    ]);
+
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      <String>['fiX', 'Yond'],
+    );
+
+    session.dispose();
+    controller.dispose();
+  });
+
   test('first composing delta replaces a cross-block selection once', () async {
     final document = _documents(<String>['abc', 'def']);
     final controller = HomericEditorController(

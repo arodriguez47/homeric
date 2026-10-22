@@ -663,6 +663,18 @@ final class HomericTextInputSession extends ChangeNotifier {
       _syncCanonical(force: true);
       return;
     }
+    if (_selectionSpansBlocks(blockId)) {
+      // The platform sees only a collapsed caret for a cross-block
+      // selection; text typed there replaces the whole selection.
+      final caret = _shadowValue == null ? null : _localValue(_shadowValue!);
+      if (caret == null ||
+          local(start) != caret.selection.extentOffset ||
+          local(end) != caret.selection.extentOffset ||
+          !controller.replaceSelectionStructurally(text)) {
+        _syncCanonical(force: true);
+      }
+      return;
+    }
     final target = HomericSelection(
       anchor: controller.globalPositionForBlockOffset(blockId, local(start)),
       head: controller.globalPositionForBlockOffset(blockId, local(end)),

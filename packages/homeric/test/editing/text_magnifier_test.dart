@@ -59,9 +59,37 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
   testWidgets('the loupe keeps clear of the screen edge', (tester) async {
-    await pumpLoupe(tester, finger: const Offset(4, 312));
-    final rect = tester.getRect(find.byType(RawMagnifier));
+    await pumpLoupe(tester, finger: const Offset(4, 310));
+    final lens = find.byType(RawMagnifier);
+    final rect = tester.getRect(lens);
     expect(rect.left, 10);
+    expect(
+      rect.center + tester.widget<RawMagnifier>(lens).focalPointOffset,
+      const Offset(4, 310),
+      reason: 'the shifted lens still shows the text under the finger',
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('a new controller drives the same loupe', (tester) async {
+    final first = await pumpLoupe(tester, finger: const Offset(200, 310));
+    expect(first.controller.animationController, isNotNull);
+    final info = first.info;
+    final second = MagnifierController();
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: MediaQuery(
+        data: const MediaQueryData(size: Size(400, 800)),
+        child: Stack(children: <Widget>[
+          Builder(
+            builder: (_) =>
+                HomericTextMagnifier(controller: second, magnifierInfo: info),
+          ),
+        ]),
+      ),
+    ));
+    expect(first.controller.animationController, isNull);
+    expect(second.animationController, isNotNull);
+    expect(tester.takeException(), isNull);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
   testWidgets('Android keeps Flutter\'s magnifier', (tester) async {

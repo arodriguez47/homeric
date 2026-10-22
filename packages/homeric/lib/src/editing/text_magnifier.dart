@@ -74,6 +74,7 @@ class _HomericTextMagnifierState extends State<HomericTextMagnifier>
     with SingleTickerProviderStateMixin {
   Offset _position = Offset.zero;
   double _focalAdjustment = 0;
+  double _focalShift = 0;
   late final AnimationController _inOut = AnimationController(
     vsync: this,
     duration: HomericTextMagnifier._inOutDuration,
@@ -93,6 +94,10 @@ class _HomericTextMagnifierState extends State<HomericTextMagnifier>
   @override
   void didUpdateWidget(HomericTextMagnifier oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.animationController = null;
+      widget.controller.animationController = _inOut;
+    }
     if (oldWidget.magnifierInfo != widget.magnifierInfo) {
       oldWidget.magnifierInfo.removeListener(_follow);
       widget.magnifierInfo.addListener(_follow);
@@ -152,6 +157,9 @@ class _HomericTextMagnifierState extends State<HomericTextMagnifier>
     setState(() {
       _position = position;
       _focalAdjustment = lineCenter - lensLine;
+      // Kept off the screen edge, the lens still shows what is under the
+      // finger.
+      _focalShift = finger.dx - (position.dx + size.width / 2);
     });
   }
 
@@ -175,7 +183,7 @@ class _HomericTextMagnifierState extends State<HomericTextMagnifier>
           // The shadow paints over the lens; the clip keeps it outside.
           clipBehavior: Clip.hardEdge,
           focalPointOffset: Offset(
-            0,
+            _focalShift,
             size.height / 2 +
                 HomericTextMagnifier.gapAboveLine -
                 rise +

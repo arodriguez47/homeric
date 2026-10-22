@@ -958,8 +958,11 @@ class RenderHomericParagraph extends RenderBox
           final dims = dimensions[slot.slotIndex];
           if (_isGlued(slot)) {
             // One view unit, like the placeholder it stands in for.
+            // The height multiplier keeps a line that holds only the
+            // mark as tall as the mark, as a placeholder would.
             builder.pushStyle(ui.TextStyle(
               fontSize: _glueFontSize,
+              height: dims.size.height / _glueFontSize,
               letterSpacing: dims.size.width,
             ));
             builder.addText(_glueCharacter);

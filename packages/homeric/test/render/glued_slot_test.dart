@@ -89,4 +89,20 @@ void main() {
     final render = await pump(tester, const _Mark());
     expect(render.size.height, 28);
   });
+
+  testWidgets('a line that holds only a glued mark keeps its height',
+      (tester) async {
+    final source = sourceOf(
+      '',
+      decorations: [Decoration.widget('b', 0, spec: const _Mark())],
+    );
+    await tester.pumpWidget(harness(
+      HomericParagraph(
+        source: source,
+        slotBuilder: (_) => const SizedBox(width: 6, height: 20),
+      ),
+      width: 80,
+    ));
+    expect(renderOf(tester).size.height, greaterThanOrEqualTo(20));
+  });
 }

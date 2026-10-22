@@ -59,7 +59,8 @@ final class HomericQuoteContinuation extends HomericWritingFeature {
             '\n> ',
             firstTrailingBlockId: command.trailingBlockId,
           )
-        : _endQuote(controller, resolved.block.id, text, lineStart, lineEnd);
+        : _endQuote(controller, resolved.block.id, text, lineStart, lineEnd,
+            trailingBlockId: command.trailingBlockId);
     return handled
         ? HomericCommandInterception.handled
         : HomericCommandInterception.ignored;
@@ -74,8 +75,9 @@ final class HomericQuoteContinuation extends HomericWritingFeature {
     String blockId,
     String text,
     int lineStart,
-    int lineEnd,
-  ) {
+    int lineEnd, {
+    String? trailingBlockId,
+  }) {
     final before = lineStart > 0;
     final after = lineEnd < text.length;
     if (!before && !after) {
@@ -98,8 +100,19 @@ final class HomericQuoteContinuation extends HomericWritingFeature {
         );
       // Splitting where the line was leaves an empty paragraph there, with
       // the quote's other half (if any) on its far side.
-      if (after) tx.splitBlock(tx.doc.positionAt(index, from));
-      if (before) tx.splitBlock(tx.doc.positionAt(index, from));
+      // The block right after the quote's first half takes [trailingBlockId].
+      if (after) {
+        tx.splitBlock(
+          tx.doc.positionAt(index, from),
+          trailingBlockId: before ? null : trailingBlockId,
+        );
+      }
+      if (before) {
+        tx.splitBlock(
+          tx.doc.positionAt(index, from),
+          trailingBlockId: trailingBlockId,
+        );
+      }
       return controller.applyPreparedCommand(HomericPreparedCommand(
         stages: <Transaction>[tx],
         selection: HomericSelection.collapsed(

@@ -417,6 +417,16 @@ void main() {
           HomericSelection.collapsed(first.document.positionAt(0, 0)));
     });
 
+    test('ending a soft-broken quote names the new paragraph as asked', () {
+      final c = quoted('> one\n> \n> two', 8);
+      expect(c.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+      expect(c.document.blocks[1].id, 'next');
+      expect(c.document.blocks[1].text, '');
+      final last = quoted('> one\n> ', 8);
+      expect(last.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+      expect(last.document.blocks[1].id, 'next');
+    });
+
     test('without the feature Enter is a plain split', () {
       final c = controllerFor('> a line', caret: 8);
       expect(c.insertParagraphBreak(), isTrue);

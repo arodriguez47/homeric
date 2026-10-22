@@ -209,13 +209,14 @@ class _HomericListLineState extends State<HomericListLine> {
             child: hang == null
                 ? null
                 : Padding(
-                    padding: EdgeInsets.only(
-                      left: hang.depth * step,
-                      right: step * (bullet ? 0.3 : 0.2),
+                    padding: EdgeInsetsDirectional.only(
+                      start: hang.depth * step,
+                      end: step * (bullet ? 0.3 : 0.2),
                     ),
                     child: Align(
-                      alignment:
-                          bullet ? Alignment.center : Alignment.centerRight,
+                      alignment: bullet
+                          ? Alignment.center
+                          : AlignmentDirectional.centerEnd,
                       child: KeyedSubtree(
                         key: const ValueKey<String>('homeric-list-mark'),
                         child: bullet

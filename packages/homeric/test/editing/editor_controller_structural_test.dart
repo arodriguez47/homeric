@@ -438,6 +438,50 @@ void main() {
     );
   });
 
+  test('paragraph break on a quote line continues the quote', () {
+    final document = _document(['> a line']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 8)),
+    );
+
+    expect(controller.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+    expect(controller.document.blocks.map((block) => block.text), [
+      '> a line',
+      '> ',
+    ]);
+    expect(
+      controller.selection,
+      HomericSelection.collapsed(controller.document.positionAt(1, 2)),
+    );
+  });
+
+  test('paragraph break on an empty quote line ends the quote', () {
+    final document = _document(['> ']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 2)),
+    );
+
+    expect(controller.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+    expect(controller.document.blocks, hasLength(1));
+    expect(controller.document.blocks.single.text, isEmpty);
+  });
+
+  test('paragraph break before a quote marker stays a bare split', () {
+    final document = _document(['> a']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+
+    expect(controller.insertParagraphBreak(trailingBlockId: 'next'), isTrue);
+    expect(
+      controller.document.blocks.map((block) => block.text),
+      ['', '> a'],
+    );
+  });
+
   test('paragraph break on plain text stays a bare split', () {
     final document = _document(['plain']);
     final controller = HomericEditorController(

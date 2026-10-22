@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart' show CupertinoLocalizations;
@@ -2094,12 +2095,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (documentHost != null && render is RenderBox && render.hasSize) {
       // The caret stays in this block, so the loupe does too: past its edge
       // the document magnifier would preview another block's text.
+      // Clamp in the box's own space (hosts may scale it) and stay a hair
+      // inside the far edges, which belong to the next block's hit test.
+      final local = render.globalToLocal(globalPosition);
       final clamped = Offset(
-        localPosition.dx.clamp(0, render.size.width).toDouble(),
-        localPosition.dy.clamp(0, render.size.height).toDouble(),
+        local.dx.clamp(0, math.max(0, render.size.width - 0.5)).toDouble(),
+        local.dy.clamp(0, math.max(0, render.size.height - 0.5)).toDouble(),
       );
       documentHost.updateTouchSelectionMagnifier(
-        globalPosition - localPosition + clamped,
+        render.localToGlobal(clamped),
       );
     } else if (documentHost == null) {
       _updateLocalTouchMagnifier(geometry, globalPosition);

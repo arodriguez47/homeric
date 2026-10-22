@@ -6,6 +6,7 @@ import 'package:flutter/material.dart'
     show
         AdaptiveTextSelectionToolbar,
         DefaultMaterialLocalizations,
+        TextMagnifier,
         materialTextSelectionHandleControls;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter/gestures.dart';
@@ -305,10 +306,15 @@ void main() {
     expect(android, isNotNull);
     expect(
         android!.selectionControls, same(materialTextSelectionHandleControls));
+    expect(ios.magnifierConfiguration,
+        same(homericAdaptiveMagnifierConfiguration));
     expect(
       android.magnifierConfiguration,
-      same(homericAdaptiveMagnifierConfiguration),
+      same(TextMagnifier.adaptiveMagnifierConfiguration),
     );
+    expect(
+        android.magnifierConfiguration.shouldDisplayHandlesInMagnifier, isFalse,
+        reason: 'Android keeps its handles out of the lens');
     expect(adaptive.resolve(TargetPlatform.macOS), isNull);
 
     const disabled = HomericTouchSelectionConfiguration.disabled();

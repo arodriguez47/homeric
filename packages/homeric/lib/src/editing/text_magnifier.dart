@@ -8,7 +8,9 @@ import 'package:flutter/material.dart' show TextMagnifier;
 import 'package:flutter/widgets.dart';
 
 /// Homeric's adaptive magnifier: the modern loupe on iOS, Flutter's default
-/// elsewhere.
+/// elsewhere. Touch selection uses it on iOS only; Android keeps
+/// [TextMagnifier.adaptiveMagnifierConfiguration], which also keeps the
+/// handles out of the lens there.
 const TextMagnifierConfiguration homericAdaptiveMagnifierConfiguration =
     TextMagnifierConfiguration(magnifierBuilder: _adaptiveMagnifierBuilder);
 

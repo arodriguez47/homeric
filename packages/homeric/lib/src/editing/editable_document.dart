@@ -13,7 +13,8 @@ import 'package:flutter/foundation.dart'
         defaultTargetPlatform,
         kIsWeb,
         visibleForTesting;
-import 'package:flutter/material.dart' show materialTextSelectionHandleControls;
+import 'package:flutter/material.dart'
+    show TextMagnifier, materialTextSelectionHandleControls;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart' show SchedulerPhase;
 import 'package:flutter/services.dart' show RawFloatingCursorPoint;
@@ -117,8 +118,8 @@ final class HomericTouchSelectionConfiguration {
   /// Optional consumer controls replacing the platform mobile default.
   final TextSelectionControls? selectionControls;
 
-  /// Optional consumer magnifier replacing Homeric's adaptive default
-  /// ([homericAdaptiveMagnifierConfiguration]).
+  /// Optional consumer magnifier replacing the default: Homeric's loupe on
+  /// iOS ([homericAdaptiveMagnifierConfiguration]), Flutter's on Android.
   final TextMagnifierConfiguration? magnifierConfiguration;
 
   /// Opts desktop platforms into touch chrome.
@@ -144,9 +145,13 @@ final class HomericTouchSelectionConfiguration {
     return HomericResolvedTouchSelectionConfiguration(
       selectionControls: controls,
       magnifierConfiguration: magnifierConfiguration ??
-          (isMobile
-              ? homericAdaptiveMagnifierConfiguration
-              : TextMagnifierConfiguration.disabled),
+          switch (platform) {
+            TargetPlatform.iOS => homericAdaptiveMagnifierConfiguration,
+            // Flutter's keeps Android's handles out of the lens.
+            TargetPlatform.android =>
+              TextMagnifier.adaptiveMagnifierConfiguration,
+            _ => TextMagnifierConfiguration.disabled,
+          },
     );
   }
 }

@@ -451,8 +451,7 @@ void main() {
 
   testWidgets(
       'iOS focused long press moves the caret, then the keyboard floating '
-      'cursor stays epoch-bound',
-      (tester) async {
+      'cursor stays epoch-bound', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final document = _document('alpha beta');
     final initial = HomericSelection.collapsed(document.positionAt(0, 1));

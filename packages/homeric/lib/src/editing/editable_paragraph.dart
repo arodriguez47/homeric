@@ -2090,9 +2090,18 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final hit = _caretForPoint(geometry, localPosition);
     _relocate(hit.position, hit.position, affinity: hit.affinity);
     final documentHost = _documentHost;
-    if (documentHost != null) {
-      documentHost.updateTouchSelectionMagnifier(globalPosition);
-    } else {
+    final render = _overlayContext?.findRenderObject();
+    if (documentHost != null && render is RenderBox && render.hasSize) {
+      // The caret stays in this block, so the loupe does too: past its edge
+      // the document magnifier would preview another block's text.
+      final clamped = Offset(
+        localPosition.dx.clamp(0, render.size.width).toDouble(),
+        localPosition.dy.clamp(0, render.size.height).toDouble(),
+      );
+      documentHost.updateTouchSelectionMagnifier(
+        globalPosition - localPosition + clamped,
+      );
+    } else if (documentHost == null) {
       _updateLocalTouchMagnifier(geometry, globalPosition);
     }
   }
@@ -2247,14 +2256,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       ),
       onStartHandleDragUpdate: (details) =>
           _updateLocalTouchHandleDrag(details.globalPosition),
-      onStartHandleDragEnd: (_) => _endLocalTouchHandleDrag(),
+      onStartHandleDragEnd: (_) => _releaseLocalTouchHandle(),
       onEndHandleDragStart: (details) => _beginLocalTouchHandleDrag(
         HomericSelectionEndpoint.end,
         details.globalPosition,
       ),
       onEndHandleDragUpdate: (details) =>
           _updateLocalTouchHandleDrag(details.globalPosition),
-      onEndHandleDragEnd: (_) => _endLocalTouchHandleDrag(),
+      onEndHandleDragEnd: (_) => _releaseLocalTouchHandle(),
     );
   }
 
@@ -2300,6 +2309,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _localTouchMovingEndpoint = null;
     _localTouchOverlayCoordinator.hideMagnifier();
     _resetPointerState();
+  }
+
+  /// A released handle brings the edit menu back, as in Notes. Teardown and
+  /// cancellation end the drag through [_endLocalTouchHandleDrag] silently.
+  void _releaseLocalTouchHandle() {
+    if (_localTouchMovingEndpoint == null) return;
+    _endLocalTouchHandleDrag();
     _showContextMenu();
   }
 
@@ -2588,32 +2604,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     return rect;
   }
 
-  Offset? _selectionMenuAnchor() {
-    final geometry = _currentGeometry();
-    final selection = _localSelection();
-    if (geometry == null || selection == null) return null;
-    if (selection.isCollapsed) {
-      return geometry
-          .caretRect(
-            DocOffset(selection.head),
-            assoc: _assoc(selection.affinity),
-          )
-          .value
-          .topCenter;
-    }
-    final boxes = geometry
-        .rectsForRange(DocRange(
-          DocOffset(selection.start),
-          DocOffset(selection.end),
-        ))
-        .value;
-    if (boxes.isEmpty) return null;
-    var rect = boxes.first.toRect();
-    for (final box in boxes.skip(1)) {
-      rect = rect.expandToInclude(box.toRect());
-    }
-    return rect.topCenter;
-  }
+  Offset? _selectionMenuAnchor() => _selectionMenuRect()?.topCenter;
 
   List<ContextMenuButtonItem> _contextMenuItems(_MenuWitness witness) {
     final selection = _localSelection();

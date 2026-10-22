@@ -1649,10 +1649,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   void _endTouchHandleDrag() {
+    final wasHandleDrag = _selectionDragActive &&
+        identical(_selectionDragOwner, _touchHandleDragOwner);
+    endPointerSelectionDrag(owner: _touchHandleDragOwner);
     // As in Notes, letting go of a handle brings the edit menu back.
-    if (endPointerSelectionDrag(owner: _touchHandleDragOwner)) {
-      _showTouchToolbar();
-    }
+    if (wasHandleDrag) _showTouchToolbar();
   }
 
   void _clearTouchStationaryWitness() {

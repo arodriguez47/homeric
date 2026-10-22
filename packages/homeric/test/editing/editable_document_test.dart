@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
     show ValueListenable, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart'
     show
+        AdaptiveTextSelectionToolbar,
         DefaultMaterialLocalizations,
         TextMagnifier,
         materialTextSelectionHandleControls;
@@ -1042,6 +1043,7 @@ void main() {
     expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
     expect(key.currentState!.debugTouchEndHandleVisible, isTrue,
         reason: 'drag-time physical endpoint mapping remains until release');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
 
     recognizer.onEnd!(DragEndDetails());
     await tester.pump();
@@ -1050,6 +1052,8 @@ void main() {
     expect(key.currentState!.debugTouchStartHandleVisible, isTrue);
     expect(key.currentState!.debugTouchEndHandleVisible, isFalse,
         reason: 'release must resync the collapsed caret overlay');
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget,
+        reason: 'letting go of a handle brings the edit menu back');
     debugDefaultTargetPlatformOverride = null;
   });
 

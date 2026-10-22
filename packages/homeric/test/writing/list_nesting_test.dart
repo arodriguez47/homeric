@@ -110,8 +110,9 @@ void main() {
       expect(syntax.listHangFor(block, caret: 1), isNull);
       final editing = syntax.decorationsFor(block, caret: 1).toList();
       expect(
-        editing.any((d) => identical(d.spec, HomericListHangSpec.instance)),
+        editing.any((d) => d.kind == DecorationKind.replace && d.start < 4),
         isFalse,
+        reason: 'neither folded nor shown as a glyph',
       );
     });
   });
@@ -159,6 +160,12 @@ void main() {
       expect(linesOf(controller), ['1. one', '1. two']);
       controller.deleteBackward();
       expect(linesOf(controller), ['1. one', 'two']);
+    });
+
+    test('a paste of lines onto an empty nested item goes in', () {
+      final controller = controllerFor(['- one', '  - ']);
+      controller.replaceSelectionStructurally('a\nb');
+      expect(linesOf(controller), ['- one', '  - a', 'b']);
     });
 
     test('Enter on an empty nested item climbs a level, then leaves', () {

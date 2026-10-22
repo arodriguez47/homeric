@@ -210,6 +210,7 @@ final class HomericSyntax {
           block,
           glyphs: listGlyphs,
           hang: hangingLists ? listHangFor(block, caret: caret) : null,
+          caret: hangingLists ? caret : null,
         ),
         ..._linkMarkDecorations(block),
       ],
@@ -906,6 +907,7 @@ Iterable<Decoration> _listMarkDecorations(
   Block block, {
   required bool glyphs,
   HomericListHang? hang,
+  int? caret,
 }) sync* {
   if (hang != null) {
     // The marker is drawn in the gutter beside the line.
@@ -914,6 +916,8 @@ Iterable<Decoration> _listMarkDecorations(
   }
   final match = HomericMarkdownListPrefix.match(block.text);
   if (match == null) return;
+  // Hung lines: a marker holding the caret shows exactly as typed.
+  if (caret != null && caret < match.prefixEnd) return;
   final mark = glyphs ? _listGlyph(block.text, match) : match.visibleMark;
   // The marker shows as a bullet or number; the space after it stays.
   yield Decoration.replace(

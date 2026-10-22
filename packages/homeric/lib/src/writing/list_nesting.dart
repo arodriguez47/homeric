@@ -172,8 +172,9 @@ final class HomericListNesting extends HomericWritingFeature {
         }
         return _prepareUnlist(document, caret.blockIndex, match);
       case HomericCommandKind.preBreak:
-        // Enter on an empty nested item.
+        // Enter on an empty nested item; a pasted run of lines goes ahead.
         if (!atWords ||
+            command.text != '\n' ||
             block.text.length != match.prefixEnd ||
             match.indentLength == 0) {
           return null;

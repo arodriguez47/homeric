@@ -1338,3 +1338,28 @@ ViewMap is unchanged.
 start or end a line on its own; use a placeholder only for content that may
 wrap freely. Glued slots must stay a single line high (the glyph's box sits
 on the baseline). Evidence: `test/render/glued_slot_test.dart`.
+## editor-architect — 2026-10-22 — Homeric draws its own iOS loupe; a focused long press asks for touch chrome
+
+**What:** Flutter 3.47 only ships the pre-iOS 17 `CupertinoTextMagnifier`
+(small oval, tinted border, no zoom). Homeric's adaptive touch configuration
+now resolves to `homericAdaptiveMagnifierConfiguration`: `HomericTextMagnifier`
+on iOS (104x74 stadium, 1.25x, hairline edge, soft shadow, 30pt above the
+line center), Flutter's default elsewhere. `RawMagnifier` paints its shadow
+above the lens, so the loupe needs `Clip.hardEdge` or the lens turns grey.
+The document magnifier lives in the touch overlay, which only exists once
+touch chrome is requested; a focused iOS long press now requests it first,
+or the first long press after a caret placed another way shows no loupe.
+
+**Rule going forward:** Keep the configuration a single top-level const (the
+overlay recreates on a non-identical configuration). Any new touch gesture
+that shows the document magnifier must request touch chrome before it.
+Mirror selection-geometry and editor-architecture learnings in Homeric and
+Nexus in the same change.
+
+**Update — system loupe:** On iOS the configuration now builds
+`HomericSystemLoupe`, which asks the app over `homeric/loupe` (`begin`,
+`move`, `end`; finger and caret in Flutter view points) for UIKit's own
+`UITextLoupeSession` over the Flutter view, so it gets the system look
+(Liquid Glass on iOS 26). An app whose iOS side doesn't answer, or answers
+`begin` with false, gets the drawn `HomericTextMagnifier` from then on. The
+Swift side lives in each app's Runner (Homeric has no native code).

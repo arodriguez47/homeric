@@ -33,6 +33,7 @@ import 'editable_paragraph.dart'
     show HomericEditableBlockGeometry, HomericEditableParagraph;
 import 'editor_controller.dart';
 import 'selection_overlay.dart';
+import 'text_magnifier.dart';
 
 typedef HomericEditableBlockBuilder = Widget Function(
   BuildContext context,
@@ -117,7 +118,9 @@ final class HomericTouchSelectionConfiguration {
   /// Optional consumer controls replacing the platform mobile default.
   final TextSelectionControls? selectionControls;
 
-  /// Optional consumer magnifier replacing Flutter's adaptive default.
+  /// Optional consumer magnifier replacing the default: the system loupe on
+  /// iOS ([homericAdaptiveMagnifierConfiguration], [HomericSystemLoupe]),
+  /// Flutter's on Android.
   final TextMagnifierConfiguration? magnifierConfiguration;
 
   /// Opts desktop platforms into touch chrome.
@@ -143,9 +146,13 @@ final class HomericTouchSelectionConfiguration {
     return HomericResolvedTouchSelectionConfiguration(
       selectionControls: controls,
       magnifierConfiguration: magnifierConfiguration ??
-          (isMobile
-              ? TextMagnifier.adaptiveMagnifierConfiguration
-              : TextMagnifierConfiguration.disabled),
+          switch (platform) {
+            TargetPlatform.iOS => homericAdaptiveMagnifierConfiguration,
+            // Flutter's keeps Android's handles out of the lens.
+            TargetPlatform.android =>
+              TextMagnifier.adaptiveMagnifierConfiguration,
+            _ => TextMagnifierConfiguration.disabled,
+          },
     );
   }
 }

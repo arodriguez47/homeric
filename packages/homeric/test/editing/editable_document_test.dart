@@ -306,10 +306,15 @@ void main() {
     expect(android, isNotNull);
     expect(
         android!.selectionControls, same(materialTextSelectionHandleControls));
+    expect(ios.magnifierConfiguration,
+        same(homericAdaptiveMagnifierConfiguration));
     expect(
       android.magnifierConfiguration,
       same(TextMagnifier.adaptiveMagnifierConfiguration),
     );
+    expect(
+        android.magnifierConfiguration.shouldDisplayHandlesInMagnifier, isFalse,
+        reason: 'Android keeps its handles out of the lens');
     expect(adaptive.resolve(TargetPlatform.macOS), isNull);
 
     const disabled = HomericTouchSelectionConfiguration.disabled();

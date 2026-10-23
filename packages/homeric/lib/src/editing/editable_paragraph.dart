@@ -5,7 +5,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/cupertino.dart' show CupertinoLocalizations;
+import 'package:flutter/cupertino.dart'
+    show CupertinoLocalizations, CupertinoTheme;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
@@ -547,6 +548,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _documentHost = documentHost;
       documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
     }
+    _syncKeyboardAppearance();
     // `valuesOf` postdates Homeric's Flutter 3.24 minimum.
     // ignore: deprecated_member_use
     final tickerEnabled = TickerMode.of(context);
@@ -597,6 +599,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (sessionChanged) {
       oldWidget.inputSession.removeListener(_inputSessionChanged);
       widget.inputSession.addListener(_inputSessionChanged);
+      _syncKeyboardAppearance();
     }
     if (sessionChanged || blockChanged) {
       _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
@@ -708,6 +711,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             blockId: widget.blockId,
             commandDelegate: _commandDelegate,
           ));
+
+  // The keyboard follows the app's theme, not the system's light or dark. A
+  // Material Theme publishes its brightness through CupertinoTheme too.
+  void _syncKeyboardAppearance() {
+    widget.inputSession.keyboardAppearance =
+        CupertinoTheme.maybeBrightnessOf(context);
+  }
 
   void _validateSession() {
     if (!identical(widget.controller, widget.inputSession.controller)) {
@@ -2027,6 +2037,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _dismissContextMenu();
       _longPressActive = true;
       _longPressMovesCaret = true;
+      // The loupe lives in the touch chrome, which a caret placed some other
+      // way (a key, a fresh open) may not have asked for yet.
+      _syncTouchSelectionChrome(PointerDeviceKind.touch);
       _moveCaretUnderLongPress(
         geometry,
         details.localPosition,

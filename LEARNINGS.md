@@ -1318,6 +1318,26 @@ actions through Homeric intents; never let UIKit edit the hidden value
 directly. Evidence: `test/editing/edit_menu_test.dart`,
 `test/input/text_input_session_test.dart` (iOS group). Device check pending.
 
+## engineer — 2026-10-22 — A placeholder always breaks; glue marks with a glyph
+
+**What:** In Sprintnotes a footnote number or note flag at the end of a
+sentence could wrap onto its own line with the period after it. SkParagraph
+allows a line break on both sides of every placeholder (U+FFFC). A U+2060
+word joiner next to it does not change that (checked in a probe).
+
+**Fix (homeric#72):** a decoration spec that implements `HomericGluedSlot`
+(footnote and annotation marks) is not a placeholder. It is one U+202F (narrow
+no-break space, UAX#14 class GL, glues on both sides) at a 0.01 font size with
+`letterSpacing` equal to the child's width, so its advance is the child's
+width. The child is centred on that glyph's line, from the line's baseline
+metrics. `slotRectsIn` is the single source of slot rects for painting and
+`ParagraphGeometry.slotRectAt`. A widget slot is still one view unit, so the
+ViewMap is unchanged.
+
+**Rule going forward:** use a glued slot for any inline mark that must not
+start or end a line on its own; use a placeholder only for content that may
+wrap freely. Glued slots must stay a single line high (the glyph's box sits
+on the baseline). Evidence: `test/render/glued_slot_test.dart`.
 ## editor-architect — 2026-10-22 — Homeric draws its own iOS loupe; a focused long press asks for touch chrome
 
 **What:** Flutter 3.47 only ships the pre-iOS 17 `CupertinoTextMagnifier`

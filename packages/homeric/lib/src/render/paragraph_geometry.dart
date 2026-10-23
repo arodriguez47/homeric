@@ -299,7 +299,7 @@ final class CaretMovementResult {
 /// A thin wrapper: nothing here is cached beyond what
 /// [RenderHomericParagraph] itself caches (the live `ui.Paragraph`) plus a
 /// couple of per-instance memoizations (see [docLength],
-/// [_placeholderBoxes]) that trade "always fresh" for "cheap within one
+/// [_slotRects]) that trade "always fresh" for "cheap within one
 /// paint's query burst." Construct fresh per query burst — cheap — and
 /// discard before the next relayout: holding one across a relayout of its
 /// render object is a bug this class catches for you (debug asserts, see
@@ -335,7 +335,7 @@ class ParagraphGeometry {
   /// lifetime) would have every result silently re-stamped with the
   /// render object's *current* generation on each query, so
   /// [GeometryResult.isStale] could never observe the relayout — even
-  /// though [docLength] and [_placeholderBoxes] below are still answering
+  /// though [docLength] and [_slotRects] below are still answering
   /// from state memoized before that relayout happened. See
   /// [_checkNotStale] for the complementary guard that makes querying such
   /// a held instance fail loudly instead.
@@ -353,7 +353,7 @@ class ParagraphGeometry {
   /// that is not itself wrapped in a [GeometryResult]) directly — so a
   /// stale-instance query fails loudly in debug builds instead of silently
   /// answering from this instance's pre-relayout memoized state
-  /// ([_docLength], [_placeholderBoxes]) while claiming, via
+  /// ([_docLength], [_slotRects]) while claiming, via
   /// [GeometryResult.isStale], to be current.
   void _checkNotStale() {
     assert(
@@ -457,18 +457,18 @@ class ParagraphGeometry {
     if (slotIndex < 0 || slotIndex >= slots.length) {
       throw UnknownSlotError(index: slotIndex);
     }
-    final boxes = _placeholderBoxes;
-    if (slotIndex >= boxes.length) {
+    final rects = _slotRects;
+    final rect = slotIndex < rects.length ? rects[slotIndex] : null;
+    if (rect == null) {
       throw UnknownSlotError(index: slotIndex);
     }
-    return _stamp(boxes[slotIndex].toRect());
+    return _stamp(rect);
   }
 
-  /// `getBoxesForPlaceholders()` is a `dart:ui` engine call; memoized here
-  /// so a burst of slot queries against one instance invokes it once
-  /// instead of once per query.
-  late final List<ui.TextBox> _placeholderBoxes =
-      _paragraph.getBoxesForPlaceholders();
+  /// The slots' rects (engine calls); memoized here so a burst of slot
+  /// queries against one instance makes them once instead of once per
+  /// query.
+  late final List<Rect?> _slotRects = _render.slotRectsIn(_paragraph);
 
   /// The rect of the slot whose decoration carries [spec] as its stable
   /// identity (see `SlotSegment.spec`).

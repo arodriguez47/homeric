@@ -2,6 +2,7 @@
 // got a light keyboard under its dark editor. Editable paragraphs hand the
 // input session their theme's brightness.
 
+import 'package:flutter/cupertino.dart' show CupertinoApp, CupertinoThemeData;
 import 'package:flutter/material.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
@@ -37,5 +38,28 @@ void main() {
     await tester.pumpWidget(app(Brightness.light));
     await tester.pumpAndSettle();
     expect(session.keyboardAppearance, Brightness.light);
+  });
+
+  testWidgets('a Cupertino app\'s brightness reaches the keyboard too',
+      (tester) async {
+    final controller = HomericEditorController(
+      document: Document(<Block>[
+        Block(id: 'a', type: 'paragraph', runs: <InlineRun>[InlineRun('Hi')]),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(CupertinoApp(
+      theme: const CupertinoThemeData(brightness: Brightness.dark),
+      home: HomericEditableParagraph(
+        controller: controller,
+        inputSession: session,
+        blockId: 'a',
+        resolveStyle: (_) => const TextStyle(fontSize: 14),
+      ),
+    ));
+    expect(session.keyboardAppearance, Brightness.dark);
   });
 }

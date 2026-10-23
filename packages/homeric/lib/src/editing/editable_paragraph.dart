@@ -5,10 +5,11 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/cupertino.dart' show CupertinoLocalizations;
+import 'package:flutter/cupertino.dart'
+    show CupertinoLocalizations, CupertinoTheme;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar, Theme;
+import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
 import 'package:flutter/rendering.dart' hide Decoration;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -711,9 +712,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             commandDelegate: _commandDelegate,
           ));
 
-  // The keyboard follows the app's theme, not the system's light or dark.
+  // The keyboard follows the app's theme, not the system's light or dark. A
+  // Material Theme publishes its brightness through CupertinoTheme too.
   void _syncKeyboardAppearance() {
-    widget.inputSession.keyboardAppearance = Theme.of(context).brightness;
+    widget.inputSession.keyboardAppearance =
+        CupertinoTheme.maybeBrightnessOf(context);
   }
 
   void _validateSession() {

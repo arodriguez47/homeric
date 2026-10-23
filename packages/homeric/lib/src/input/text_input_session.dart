@@ -96,6 +96,7 @@ final class HomericTextInputSession extends ChangeNotifier {
   final HomericEditorController controller;
 
   final TextInputConfiguration _configuration;
+  Brightness? _keyboardAppearance;
   TextInputConnection? _connection;
   _EpochTextInputClient? _client;
   TextEditingValue? _shadowValue;
@@ -113,6 +114,24 @@ final class HomericTextInputSession extends ChangeNotifier {
   bool _disposed = false;
   String? _suppressedSelector;
   Timer? _suppressedSelectorTimer;
+
+  /// The keyboard's light or dark look, or null for the configuration's own.
+  ///
+  /// [TextInputConfiguration] defaults to [Brightness.light], so an app drawn
+  /// dark gets a light iOS keyboard unless the host says otherwise. Editable
+  /// paragraphs set this from their [Theme]; a change reaches a keyboard that
+  /// is already up.
+  Brightness? get keyboardAppearance => _keyboardAppearance;
+  set keyboardAppearance(Brightness? value) {
+    if (_disposed || _keyboardAppearance == value) return;
+    _keyboardAppearance = value;
+    if (isAttached) _connection!.updateConfig(_effectiveConfiguration);
+  }
+
+  TextInputConfiguration get _effectiveConfiguration =>
+      _keyboardAppearance == null
+          ? _configuration
+          : _configuration.copyWith(keyboardAppearance: _keyboardAppearance);
 
   /// Whether this session currently owns Flutter's active input connection.
   bool get isAttached => _connection?.attached ?? false;
@@ -199,7 +218,7 @@ final class HomericTextInputSession extends ChangeNotifier {
 
     final epoch = ++_nextEpoch;
     final client = _EpochTextInputClient(this, epoch);
-    final connection = TextInput.attach(client, _configuration);
+    final connection = TextInput.attach(client, _effectiveConfiguration);
     _currentEpoch = epoch;
     _client = client;
     _connection = connection;

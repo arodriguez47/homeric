@@ -1401,6 +1401,30 @@ void main() {
       controller.dispose();
     });
 
+    test('the keyboard takes the light or dark look the host asks for', () {
+      final controller = HomericEditorController(
+        document: _document(''),
+        selection: const HomericSelection.collapsed(1),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      Object? lastArguments(String method) =>
+          calls.lastWhere((call) => call.method == method).arguments;
+
+      session.keyboardAppearance = Brightness.dark;
+      session.attach(blockId: 'a');
+      final setClient = lastArguments('TextInput.setClient')! as List<Object?>;
+      expect((setClient[1]! as Map<Object?, Object?>)['keyboardAppearance'],
+          Brightness.dark.toString());
+
+      session.keyboardAppearance = Brightness.light;
+      final updated =
+          lastArguments('TextInput.updateConfig')! as Map<Object?, Object?>;
+      expect(updated['keyboardAppearance'], Brightness.light.toString());
+
+      session.dispose();
+      controller.dispose();
+    });
+
     group('dashes typed at a line start on the soft keyboard', () {
       /// Types [typed] into an empty line one character at a time, as the
       /// iOS keyboard sends it: an insertion delta after the sentinel.

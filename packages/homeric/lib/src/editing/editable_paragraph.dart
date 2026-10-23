@@ -8,7 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart' show CupertinoLocalizations;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
+import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar, Theme;
 import 'package:flutter/rendering.dart' hide Decoration;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -547,6 +547,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _documentHost = documentHost;
       documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
     }
+    _syncKeyboardAppearance();
     // `valuesOf` postdates Homeric's Flutter 3.24 minimum.
     // ignore: deprecated_member_use
     final tickerEnabled = TickerMode.of(context);
@@ -597,6 +598,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (sessionChanged) {
       oldWidget.inputSession.removeListener(_inputSessionChanged);
       widget.inputSession.addListener(_inputSessionChanged);
+      _syncKeyboardAppearance();
     }
     if (sessionChanged || blockChanged) {
       _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
@@ -708,6 +710,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             blockId: widget.blockId,
             commandDelegate: _commandDelegate,
           ));
+
+  // The keyboard follows the app's theme, not the system's light or dark.
+  void _syncKeyboardAppearance() {
+    widget.inputSession.keyboardAppearance = Theme.of(context).brightness;
+  }
 
   void _validateSession() {
     if (!identical(widget.controller, widget.inputSession.controller)) {

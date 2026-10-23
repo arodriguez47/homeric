@@ -240,6 +240,33 @@ void main() {
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
+  testWidgets('the first iOS long press after a fresh open shows the loupe',
+      (tester) async {
+    const text = 'alpha beta';
+    await pumpParagraph(
+      tester,
+      text: text,
+      caret: 2,
+      hostItems: () => const <ContextMenuButtonItem>[],
+    );
+    final document = tester.state<HomericEditableDocumentState>(
+      find.byType(HomericEditableDocument),
+    );
+    expect(document.touchSelectionChromeVisible, isFalse,
+        reason: 'the caret came from the app, not a touch');
+
+    final press = await tester.startGesture(
+      caretPoint(tester, text, 8),
+      kind: PointerDeviceKind.touch,
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    expect(document.debugTouchMagnifierVisible, isTrue);
+    expect(find.byType(HomericSystemLoupe), findsOneWidget);
+    await press.up();
+    await tester.pump();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('typing closes a stale system edit menu', (tester) async {
     const text = 'alpha beta';
     final editor = await pumpParagraph(

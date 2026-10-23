@@ -2037,6 +2037,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _dismissContextMenu();
       _longPressActive = true;
       _longPressMovesCaret = true;
+      // The loupe lives in the touch chrome, which a caret placed some other
+      // way (a key, a fresh open) may not have asked for yet.
+      _syncTouchSelectionChrome(PointerDeviceKind.touch);
       _moveCaretUnderLongPress(
         geometry,
         details.localPosition,

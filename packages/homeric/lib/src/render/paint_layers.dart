@@ -62,6 +62,11 @@ enum PaintLayerFit {
   /// line runs on to the widest line's edge, so a selection reads as one
   /// gapless block.
   line,
+
+  /// Like [ink], but one rect per visual line: the fragments a line breaks
+  /// into (a bold word, a bidi run, a slot) are joined, so a painter that
+  /// draws a shape with ends, such as a marker stroke, draws it once.
+  inkLine,
 }
 
 /// Interprets one [PaintLayer]'s opaque [PaintLayer.spec] against a single
@@ -172,11 +177,44 @@ void paintLayerBand(
     final boxes = switch (layer.fit) {
       PaintLayerFit.ink => geometry.inkRectsForRange(layer.range).value,
       PaintLayerFit.line => geometry.rectsForRange(layer.range).value,
+      PaintLayerFit.inkLine =>
+        joinLineBoxes(geometry.inkRectsForRange(layer.range).value),
     };
     for (final box in boxes) {
       layer.painter(canvas, box.toRect().shift(origin), layer.spec);
     }
   }
+}
+
+/// [boxes] with every run of boxes on one visual line joined into one box
+/// spanning them, in the order the lines come. Two boxes share a line when
+/// each one's vertical middle lies inside the other.
+@visibleForTesting
+List<TextBox> joinLineBoxes(List<TextBox> boxes) {
+  if (boxes.length < 2) return boxes;
+  final lines = <TextBox>[];
+  for (final box in boxes) {
+    final i = lines.indexWhere((line) => _sameLine(line, box));
+    if (i < 0) {
+      lines.add(box);
+      continue;
+    }
+    final line = lines[i];
+    lines[i] = TextBox.fromLTRBD(
+      line.left < box.left ? line.left : box.left,
+      line.top < box.top ? line.top : box.top,
+      line.right > box.right ? line.right : box.right,
+      line.bottom > box.bottom ? line.bottom : box.bottom,
+      line.direction,
+    );
+  }
+  return lines;
+}
+
+bool _sameLine(TextBox a, TextBox b) {
+  final aMid = (a.top + a.bottom) / 2;
+  final bMid = (b.top + b.bottom) / 2;
+  return aMid > b.top && aMid < b.bottom && bMid > a.top && bMid < a.bottom;
 }
 
 // --- Reference painters --------------------------------------------------

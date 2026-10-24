@@ -1363,3 +1363,22 @@ Nexus in the same change.
 (Liquid Glass on iOS 26). An app whose iOS side doesn't answer, or answers
 `begin` with false, gets the drawn `HomericTextMagnifier` from then on. The
 Swift side lives in each app's Runner (Homeric has no native code).
+
+## engineer — 2026-10-24 — A shape with ends needs one rect per line, and a seed that ignores size
+
+**What:** `==highlights==` became a marker stroke (chisel ends, overshoot,
+wobble). `inkRectsForRange` returns one box per font run (tight boxes), so
+`==a *key* idea==` arrived as three rects on one line and drew three strokes
+with seams. Seeding the wobble from the rect's size made every stroke jump to
+a new shape each time a width crossed a pixel (window resize, text scale) and
+on every keystroke inside the highlight.
+
+**Fix:** `PaintLayerFit.inkLine` joins the ink boxes of each visual line
+(`joinLineBoxes`) before the painter sees them. The marker's wobble is value
+noise sampled by distance along the stroke, seeded only by which highlight it
+is in its block (block id hash + ordinal), so moving a stroke moves it and
+widening it extends it without reshaping what was drawn.
+
+**Rule going forward:** a painter that draws anything with ends or
+randomness uses `inkLine`, and never seeds from geometry. Evidence:
+`test/writing/marker_stroke_test.dart`.

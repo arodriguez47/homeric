@@ -145,10 +145,14 @@ Path _band({
 }) {
   // Points at fixed distances from where each edge starts, then its end:
   // a longer stroke adds points rather than moving the ones it had.
+  // Both ends are always there, so even a one-letter stroke is a band.
+  Offset at(double x, double y, _Noise noise) =>
+      Offset(x, y + tilt(x) + noise.at(x - left) * wobble);
   List<Offset> edge(double from, double to, double y, _Noise noise) => [
-        for (var x = from; x < to - _pointGap / 2; x += _pointGap)
-          Offset(x, y + tilt(x) + noise.at(x - left) * wobble),
-        Offset(to, y + tilt(to) + noise.at(to - left) * wobble),
+        at(from, y, noise),
+        for (var x = from + _pointGap; x < to - _pointGap / 2; x += _pointGap)
+          at(x, y, noise),
+        at(math.max(to, from + 0.5), y, noise),
       ];
   final topEdge = edge(left + slant, right, top, noise.top);
   final bottomEdge = edge(left, right - slant, bottom, noise.bottom);

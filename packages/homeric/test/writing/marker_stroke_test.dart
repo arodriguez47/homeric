@@ -58,6 +58,18 @@ void main() {
       expect(bounds.right, lessThan(200 + 12));
     });
 
+    test('a one-letter stroke is still a band, not a sliver', () {
+      const letter = Rect.fromLTWH(50, 0, 7, 30);
+      for (var seed = 0; seed < 20; seed++) {
+        final bounds = markerStrokeShape(letter, seed: seed).body.getBounds();
+        expect(bounds.width, greaterThan(letter.width));
+        expect(bounds.height, greaterThan(30 * 0.5));
+        // Its middle is inked, top to bottom.
+        final body = markerStrokeShape(letter, seed: seed).body;
+        expect(body.contains(const Offset(53.5, 15)), isTrue);
+      }
+    });
+
     test('a different seed draws a different stroke', () {
       final a = markerStrokeShape(line, seed: 1).body.getBounds();
       final b = markerStrokeShape(line, seed: 2).body.getBounds();

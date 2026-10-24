@@ -347,8 +347,16 @@ final class HomericSyntaxPaint {
   /// [HomericMarkSpec] runs in [decorations].
   List<PaintLayer> layersFor(Iterable<Decoration> decorations) {
     final layers = <PaintLayer>[];
-    var highlights = 0;
-    for (final decoration in decorations) {
+    final all = decorations.toList();
+    // Hidden text: a highlight split around a folded note continues the
+    // same mark when only hidden text lies between its pieces.
+    final hidden = [
+      for (final d in all)
+        if (d.kind == DecorationKind.replace) (d.start, d.end),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    var highlights = -1;
+    int? lastHighlightEnd;
+    for (final decoration in all) {
       final spec = decoration.spec;
       if (spec is! HomericMarkSpec) continue;
       final range = DocRange(
@@ -376,6 +384,11 @@ final class HomericSyntaxPaint {
             ),
           );
         case HomericMarkKind.highlight:
+          final last = lastHighlightEnd;
+          if (last == null || !_allHidden(last, decoration.start, hidden)) {
+            highlights++;
+          }
+          lastHighlightEnd = decoration.end;
           layers.add(
             PaintLayer(
               range: range,
@@ -387,7 +400,7 @@ final class HomericSyntaxPaint {
               // it says.
               spec: MarkerStrokeSpec(
                 highlightWash,
-                seed: _stableHash(decoration.blockId) + 7919 * highlights++,
+                seed: _stableHash(decoration.blockId) + 7919 * highlights,
               ),
             ),
           );
@@ -422,6 +435,18 @@ final class HomericSyntaxPaint {
 
   @override
   int get hashCode => Object.hash(annotationUnderline, tagWash, highlightWash);
+}
+
+/// Whether every offset from [start] to [end] lies inside one of the
+/// sorted [hidden] ranges.
+bool _allHidden(int start, int end, List<(int, int)> hidden) {
+  var at = start;
+  for (final (from, to) in hidden) {
+    if (at >= end) break;
+    if (from > at) return false;
+    if (to > at) at = to;
+  }
+  return at >= end;
 }
 
 /// [text] hashed the same way on every run and platform (FNV-1a).

@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-import 'package:flutter/painting.dart';
+import 'package:flutter/painting.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 import 'package:homeric/writing.dart';
@@ -32,6 +32,21 @@ void main() {
       ).body.getBounds();
       expect(long.left, closeTo(short.left, 1e-3));
       expect(long.right - short.right, closeTo(0.4, 0.5));
+    });
+
+    test('a stroke that grows keeps the shape it had drawn', () {
+      final short = markerStrokeShape(line, seed: 9).body;
+      final long = markerStrokeShape(
+        Rect.fromLTWH(line.left, line.top, line.width + 80, line.height),
+        seed: 9,
+      ).body;
+      // Up to the last edge point the short stroke had, both agree.
+      for (var x = line.left; x < line.left + line.width - 30; x += 3) {
+        for (var y = line.top; y < line.bottom; y += 1) {
+          final p = Offset(x, y);
+          expect(long.contains(p), short.contains(p), reason: '$p');
+        }
+      }
     });
 
     test('a tall line keeps its ends close to the words', () {
@@ -124,6 +139,34 @@ void main() {
       seedOf('==one== and ==two==', 0) == seedOf('==one== and ==two==', 1),
       isFalse,
     );
+  });
+
+  test('a fold inside a highlight keeps the next highlight\'s seed', () {
+    List<int> seeds(List<Decoration> ds) => [
+          for (final l in const HomericSyntaxPaint().layersFor(ds))
+            if (l.spec case final MarkerStrokeSpec m) m.seed,
+        ];
+    const mark = HomericMarkSpec(HomericMarkKind.highlight);
+    final plain = seeds([
+      Decoration.inline('b', 2, 10, spec: mark),
+      Decoration.inline('b', 20, 25, spec: mark),
+    ]);
+    final folded = seeds([
+      Decoration.inline('b', 2, 5, spec: mark),
+      Decoration.replace('b', 5, 8, replacementLength: 0),
+      Decoration.inline('b', 8, 10, spec: mark),
+      Decoration.inline('b', 20, 25, spec: mark),
+    ]);
+    expect(folded.first, folded[1]);
+    expect(folded.last, plain.last);
+  });
+
+  test('bidi pieces with other words between them stay apart', () {
+    final boxes = joinLineBoxes([
+      const TextBox.fromLTRBD(10, 0, 40, 20, TextDirection.ltr),
+      const TextBox.fromLTRBD(80, 0, 110, 20, TextDirection.rtl),
+    ]);
+    expect(boxes, hasLength(2));
   });
 
   test('fragments on one line join into one box per line', () {

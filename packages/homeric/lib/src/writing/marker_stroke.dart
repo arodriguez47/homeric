@@ -64,18 +64,19 @@ MarkerStrokeShape markerStrokeShape(Rect rect, {int seed = 0}) {
   final left = rect.left - 1.5 - random.nextDouble() * 2.5;
   final right = rect.right + 1.5 + random.nextDouble() * 2.5;
   final width = right - left;
-  // About a degree of tilt, never more than a sixth of the band end to end.
-  final degrees = spread(1.1);
-  final rise = (width * math.tan(degrees * math.pi / 180))
-      .clamp(-band / 6, band / 6)
-      .toDouble();
-  double tilt(double x) => rise * ((x - left) / width - 0.5);
+  // About a degree of tilt from where the pen lands, drifting no more than
+  // a sixth of the band, so a long line levels out instead of climbing.
+  final slope = math.tan(spread(1.1) * math.pi / 180);
+  // Starts a twelfth of the band off centre, so its drift stays centred.
+  final lift = slope.sign * band / 12;
+  double tilt(double x) =>
+      (slope * (x - left)).clamp(-band / 6, band / 6).toDouble() - lift;
   // The chisel tip, held at an angle: the top edge sits a little to the
   // right of the bottom one, so both ends are cut on a slant.
   final slant = math.min(math.min(band * 0.32, 6.0), width * 0.2);
-  // Where the pen doubles back: over the start or the end, for a fifth to
-  // a third of the way, a little narrower than the stroke.
-  final reachShare = 0.2 + random.nextDouble() * 0.15;
+  // Where the pen doubles back: over the start or the end, for 40 to 60
+  // pixels (at most a third of a short stroke), a little narrower.
+  final reachPx = 40 + random.nextDouble() * 20;
   final atStart = random.nextBool();
   final inset = 0.12 + random.nextDouble() * 0.1;
   final insetTop = inset * (random.nextBool() ? 1 : 0.4);
@@ -96,7 +97,7 @@ MarkerStrokeShape markerStrokeShape(Rect rect, {int seed = 0}) {
 
   Path? overlap;
   if (width > 36) {
-    final reach = width * reachShare;
+    final reach = math.min(reachPx, width / 3);
     overlap = _band(
       left: atStart ? left + 0.5 : right - reach,
       right: atStart ? left + reach : right - 0.5,
@@ -142,24 +143,15 @@ Path _band({
   required double wobble,
   required ({_Noise top, _Noise bottom}) noise,
 }) {
-  final width = right - left;
-  final steps = math.max(2, (width / 34).ceil());
-  final topEdge = <Offset>[];
-  final bottomEdge = <Offset>[];
-  for (var i = 0; i <= steps; i++) {
-    final t = i / steps;
-    final topX = left + slant + (width - slant) * t;
-    final bottomX = left + (width - slant) * t;
-    topEdge.add(
-      Offset(topX, top + tilt(topX) + noise.top.at(topX - left) * wobble),
-    );
-    bottomEdge.add(
-      Offset(
-        bottomX,
-        bottom + tilt(bottomX) + noise.bottom.at(bottomX - left) * wobble,
-      ),
-    );
-  }
+  // Points at fixed distances from where each edge starts, then its end:
+  // a longer stroke adds points rather than moving the ones it had.
+  List<Offset> edge(double from, double to, double y, _Noise noise) => [
+        for (var x = from; x < to - _pointGap / 2; x += _pointGap)
+          Offset(x, y + tilt(x) + noise.at(x - left) * wobble),
+        Offset(to, y + tilt(to) + noise.at(to - left) * wobble),
+      ];
+  final topEdge = edge(left + slant, right, top, noise.top);
+  final bottomEdge = edge(left, right - slant, bottom, noise.bottom);
   // Ink pools where the pen lands and lifts: the ends bulge a touch.
   final bulge = math.min((bottom - top) * 0.22, 4.0);
   final path = Path()..moveTo(topEdge.first.dx, topEdge.first.dy);
@@ -185,6 +177,9 @@ Path _band({
     ..close();
   return path;
 }
+
+/// How far apart the points along a stroke's edge are.
+const _pointGap = 17.0;
 
 /// Continues [path] (already at `points.first`) through [points] on a
 /// smooth curve: each point is a control, the midpoints between are on

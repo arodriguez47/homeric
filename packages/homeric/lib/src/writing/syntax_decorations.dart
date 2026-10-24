@@ -26,6 +26,7 @@ import 'checklists.dart';
 import 'divider.dart';
 import 'list_glyphs.dart';
 import 'list_hang.dart';
+import 'marker_stroke.dart';
 import 'note_marks.dart';
 import 'tags.dart';
 import 'wiki_links.dart';
@@ -338,14 +339,24 @@ final class HomericSyntaxPaint {
   /// The pill behind an inline `#tag`.
   final Color tagWash;
 
-  /// The wash behind `==highlight==`.
+  /// The marker ink behind `==highlight==`, drawn as a hand-drawn stroke
+  /// ([markerStrokePainter]) rather than a flat box.
   final Color highlightWash;
 
-  /// Annotation underlines, tag pills and highlight washes for the
+  /// Annotation underlines, tag pills and highlight strokes for the
   /// [HomericMarkSpec] runs in [decorations].
   List<PaintLayer> layersFor(Iterable<Decoration> decorations) {
     final layers = <PaintLayer>[];
-    for (final decoration in decorations) {
+    final all = decorations.toList();
+    // Hidden text: a highlight split around a folded note continues the
+    // same mark when only hidden text lies between its pieces.
+    final hidden = [
+      for (final d in all)
+        if (d.kind == DecorationKind.replace) (d.start, d.end),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    var highlights = -1;
+    int? lastHighlightEnd;
+    for (final decoration in all) {
       final spec = decoration.spec;
       if (spec is! HomericMarkSpec) continue;
       final range = DocRange(
@@ -373,12 +384,24 @@ final class HomericSyntaxPaint {
             ),
           );
         case HomericMarkKind.highlight:
+          final last = lastHighlightEnd;
+          if (last == null || !_allHidden(last, decoration.start, hidden)) {
+            highlights++;
+          }
+          lastHighlightEnd = decoration.end;
           layers.add(
             PaintLayer(
               range: range,
               band: PaintBand.underlay,
-              painter: solidWashPainter,
-              spec: SolidWashSpec(highlightWash),
+              painter: markerStrokePainter,
+              fit: PaintLayerFit.inkLine,
+              // Each highlight in a block keeps its own stroke while its
+              // words are edited: the seed is which one it is, not what
+              // it says.
+              spec: MarkerStrokeSpec(
+                highlightWash,
+                seed: _stableHash(decoration.blockId) + 7919 * highlights,
+              ),
             ),
           );
         default:
@@ -412,6 +435,27 @@ final class HomericSyntaxPaint {
 
   @override
   int get hashCode => Object.hash(annotationUnderline, tagWash, highlightWash);
+}
+
+/// Whether every offset from [start] to [end] lies inside one of the
+/// sorted [hidden] ranges.
+bool _allHidden(int start, int end, List<(int, int)> hidden) {
+  var at = start;
+  for (final (from, to) in hidden) {
+    if (at >= end) break;
+    if (from > at) return false;
+    if (to > at) at = to;
+  }
+  return at >= end;
+}
+
+/// [text] hashed the same way on every run and platform (FNV-1a).
+int _stableHash(String text) {
+  var h = 0x811c9dc5;
+  for (final unit in text.codeUnits) {
+    h = ((h ^ unit) * 0x01000193) & 0x7fffffff;
+  }
+  return h;
 }
 
 /// [d] with the folded spans taken out. A style that runs across a fold,

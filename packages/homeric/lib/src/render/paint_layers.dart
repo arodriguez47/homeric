@@ -32,6 +32,8 @@
 /// against U6's semantics dirty-tracking in `paint_layers_test.dart`).
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 
@@ -62,6 +64,11 @@ enum PaintLayerFit {
   /// line runs on to the widest line's edge, so a selection reads as one
   /// gapless block.
   line,
+
+  /// Like [ink], but one rect per visual line: the fragments a line breaks
+  /// into (a bold word, a bidi run, a slot) are joined, so a painter that
+  /// draws a shape with ends, such as a marker stroke, draws it once.
+  inkLine,
 }
 
 /// Interprets one [PaintLayer]'s opaque [PaintLayer.spec] against a single
@@ -172,12 +179,52 @@ void paintLayerBand(
     final boxes = switch (layer.fit) {
       PaintLayerFit.ink => geometry.inkRectsForRange(layer.range).value,
       PaintLayerFit.line => geometry.rectsForRange(layer.range).value,
+      PaintLayerFit.inkLine =>
+        joinLineBoxes(geometry.inkRectsForRange(layer.range).value),
     };
     for (final box in boxes) {
       layer.painter(canvas, box.toRect().shift(origin), layer.spec);
     }
   }
 }
+
+/// [boxes] with each run of touching boxes on one visual line joined into
+/// one box spanning them. Two boxes share a line when each one's vertical
+/// middle lies inside the other; they touch when no more than a pixel lies
+/// between them. Boxes with other text between them (a bidi run reordered
+/// into the middle of a range) stay apart.
+@visibleForTesting
+List<TextBox> joinLineBoxes(List<TextBox> boxes) {
+  if (boxes.length < 2) return boxes;
+  final joined = <TextBox>[];
+  for (final box in boxes) {
+    var current = box;
+    // Joining can make a box touch one joined earlier: keep folding.
+    for (var i = joined.length - 1; i >= 0; i--) {
+      final other = joined[i];
+      if (!_sameLine(other, current) || !_touch(other, current)) continue;
+      current = TextBox.fromLTRBD(
+        math.min(other.left, current.left),
+        math.min(other.top, current.top),
+        math.max(other.right, current.right),
+        math.max(other.bottom, current.bottom),
+        other.direction,
+      );
+      joined.removeAt(i);
+    }
+    joined.add(current);
+  }
+  return joined;
+}
+
+bool _sameLine(TextBox a, TextBox b) {
+  final aMid = (a.top + a.bottom) / 2;
+  final bMid = (b.top + b.bottom) / 2;
+  return aMid > b.top && aMid < b.bottom && bMid > a.top && bMid < a.bottom;
+}
+
+bool _touch(TextBox a, TextBox b) =>
+    a.left <= b.right + 1 && b.left <= a.right + 1;
 
 // --- Reference painters --------------------------------------------------
 

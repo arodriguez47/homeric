@@ -53,7 +53,9 @@ final class HomericFocusDimController extends ChangeNotifier {
   HomericFocusDimController({
     required TickerProvider vsync,
     HomericFocusGranularity initialGranularity = HomericFocusGranularity.off,
+    double strength = homericFocusDimDefaultStrength,
   })  : _granularity = initialGranularity,
+        _strength = _validStrength(strength),
         _fromAmount = initialGranularity == HomericFocusGranularity.off ? 0 : 1,
         _toAmount = initialGranularity == HomericFocusGranularity.off ? 0 : 1,
         _paintGranularity = initialGranularity,
@@ -85,6 +87,7 @@ final class HomericFocusDimController extends ChangeNotifier {
   int? _outgoingDocumentRevision;
   final Map<({Color foreground, Color background}), double> _washOpacities =
       <({Color foreground, Color background}), double>{};
+  double _strength;
   HomericFocusGranularity _granularity;
   HomericFocusGranularity _paintGranularity;
   double _fromAmount;
@@ -103,6 +106,21 @@ final class HomericFocusDimController extends ChangeNotifier {
 
   /// Whether dimming is coming in or going out.
   bool get isAnimating => _animation.isAnimating;
+
+  /// How far the rest of the text fades, from 0 (not at all) to 1 (as
+  /// faint as still reads); [homericFocusDimDefaultStrength] by default.
+  /// See [homericFocusWashOpacity].
+  double get strength => _strength;
+
+  /// Changes [strength] at once, without fading: the writer is choosing it
+  /// and should see each step as it lands.
+  set strength(double value) {
+    final next = _validStrength(value);
+    if (_disposed || next == _strength) return;
+    _strength = next;
+    _washOpacities.clear();
+    notifyListeners();
+  }
 
   /// Moves to the [HomericFocusGranularity.next] focus.
   void cycle() => setGranularity(_granularity.next);
@@ -257,6 +275,7 @@ final class HomericFocusDimController extends ChangeNotifier {
     final resolved = homericFocusWashOpacity(
       foreground: foreground,
       background: background,
+      strength: _strength,
     );
     if (_washOpacities.length == 8) {
       _washOpacities.remove(_washOpacities.keys.first);
@@ -306,19 +325,37 @@ final class HomericFocusDimController extends ChangeNotifier {
   }
 }
 
-/// Maximum background wash that keeps focused prose at WCAG AA contrast.
+/// The [HomericFocusDimController.strength] dimming starts at: the rest of
+/// the text fades as far as it can while still reading at WCAG AA contrast.
+const double homericFocusDimDefaultStrength = 0.5;
+
+/// The background wash that dims text by [strength], 0 to 1.
 ///
 /// A range overlay is the only current Homeric paint-only primitive that can
 /// follow arbitrary canonical line/sentence boundaries without reshaping the
-/// paragraph. The cap is therefore solved against the *actual* foreground and
-/// surface colors rather than hard-coded: low-contrast palettes dim less, and
-/// warm Zen uses its own fixed text/background pair.
+/// paragraph. The wash is therefore solved against the *actual* foreground
+/// and surface colors rather than hard-coded: low-contrast palettes dim
+/// less, and warm Zen uses its own fixed text/background pair.
+///
+/// Up to [homericFocusDimDefaultStrength] the wash grows toward 0.38 and
+/// never takes dimmed text below 4.5:1 (WCAG AA). Past it the writer has
+/// asked for more than AA allows, so the wash grows on to 0.85 and the floor
+/// eases down to 1.6:1, faint but still there to read. [desiredOpacity] and
+/// [minimumContrast], when given, override what [strength] picks.
 double homericFocusWashOpacity({
   required Color foreground,
   required Color background,
-  double desiredOpacity = 0.38,
-  double minimumContrast = 4.5,
+  double strength = homericFocusDimDefaultStrength,
+  double? desiredOpacity,
+  double? minimumContrast,
 }) {
+  final s = _validStrength(strength);
+  const base = homericFocusDimDefaultStrength;
+  final beyond = s <= base ? 0.0 : (s - base) / (1 - base);
+  desiredOpacity ??=
+      s <= base ? 0.38 * s / base : 0.38 + (0.85 - 0.38) * beyond;
+  minimumContrast ??= 4.5 - (4.5 - 1.6) * beyond;
+  if (desiredOpacity <= 0) return 0;
   double contrastAt(double opacity) {
     final composited = Color.alphaBlend(
       background.withValues(alpha: opacity),
@@ -348,6 +385,10 @@ double homericFocusWashOpacity({
   }
   return lower;
 }
+
+/// [strength] within 0 to 1; a NaN reads as the default.
+double _validStrength(double strength) =>
+    strength.isNaN ? homericFocusDimDefaultStrength : strength.clamp(0.0, 1.0);
 
 ({int start, int end})? _localSelectionForBlock(
   Document document,

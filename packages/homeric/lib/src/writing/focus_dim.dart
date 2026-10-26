@@ -55,7 +55,7 @@ final class HomericFocusDimController extends ChangeNotifier {
     HomericFocusGranularity initialGranularity = HomericFocusGranularity.off,
     double strength = homericFocusDimDefaultStrength,
   })  : _granularity = initialGranularity,
-        _strength = strength.clamp(0.0, 1.0),
+        _strength = _validStrength(strength),
         _fromAmount = initialGranularity == HomericFocusGranularity.off ? 0 : 1,
         _toAmount = initialGranularity == HomericFocusGranularity.off ? 0 : 1,
         _paintGranularity = initialGranularity,
@@ -115,7 +115,7 @@ final class HomericFocusDimController extends ChangeNotifier {
   /// Changes [strength] at once, without fading: the writer is choosing it
   /// and should see each step as it lands.
   set strength(double value) {
-    final next = value.clamp(0.0, 1.0);
+    final next = _validStrength(value);
     if (_disposed || next == _strength) return;
     _strength = next;
     _washOpacities.clear();
@@ -349,7 +349,7 @@ double homericFocusWashOpacity({
   double? desiredOpacity,
   double? minimumContrast,
 }) {
-  final s = strength.clamp(0.0, 1.0);
+  final s = _validStrength(strength);
   const base = homericFocusDimDefaultStrength;
   final beyond = s <= base ? 0.0 : (s - base) / (1 - base);
   desiredOpacity ??=
@@ -385,6 +385,10 @@ double homericFocusWashOpacity({
   }
   return lower;
 }
+
+/// [strength] within 0 to 1; a NaN reads as the default.
+double _validStrength(double strength) =>
+    strength.isNaN ? homericFocusDimDefaultStrength : strength.clamp(0.0, 1.0);
 
 ({int start, int end})? _localSelectionForBlock(
   Document document,

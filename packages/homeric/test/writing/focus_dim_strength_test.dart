@@ -106,5 +106,7 @@ void main() {
     expect(notified, 1);
     controller.strength = 4;
     expect(controller.strength, 1);
+    controller.strength = double.nan;
+    expect(controller.strength, homericFocusDimDefaultStrength);
   });
 }

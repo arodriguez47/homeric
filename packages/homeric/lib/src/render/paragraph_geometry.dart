@@ -995,7 +995,7 @@ class ParagraphGeometry {
         offset: view,
         affinity:
             assoc < 0 ? ui.TextAffinity.upstream : ui.TextAffinity.downstream);
-    final range = _paragraph.getWordBoundary(position);
+    final range = _validOr(_paragraph.getWordBoundary(position), view);
     return _stamp(_docRangeOf(range.start, range.end));
   }
 
@@ -1150,14 +1150,23 @@ class ParagraphGeometry {
         _caretMetrics(view, -1).top != _caretMetrics(view, 1).top;
     final range = atSoftWrap
         ? _lineContainingCodeUnit(assoc < 0 ? view - 1 : view)
-        : _paragraph.getLineBoundary(ui.TextPosition(
-            offset: view,
-            affinity: assoc < 0
-                ? ui.TextAffinity.upstream
-                : ui.TextAffinity.downstream,
-          ));
+        : _validOr(
+            _paragraph.getLineBoundary(ui.TextPosition(
+              offset: view,
+              affinity: assoc < 0
+                  ? ui.TextAffinity.upstream
+                  : ui.TextAffinity.downstream,
+            )),
+            view,
+          );
     return _stamp(_docRangeOf(range.start, range.end));
   }
+
+  /// [range], or the empty range at view offset [view] when the laid-out
+  /// paragraph has no boundary to give: an empty paragraph answers word
+  /// and line queries with the invalid range (-1, -1).
+  static ui.TextRange _validOr(ui.TextRange range, int view) =>
+      range.isValid ? range : ui.TextRange.collapsed(view);
 }
 
 /// One caret's geometric anchor: an x-coordinate and a vertical span.

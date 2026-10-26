@@ -2,6 +2,7 @@ import 'dart:ui' show Color;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:homeric/homeric.dart';
 import 'package:homeric/writing.dart';
 
 double _contrast(Color foreground, Color background, double opacity) {
@@ -108,5 +109,42 @@ void main() {
     expect(controller.strength, 1);
     controller.strength = double.nan;
     expect(controller.strength, homericFocusDimDefaultStrength);
+  });
+
+  testWidgets('the wash a block gets follows strength', (tester) async {
+    final doc = Document([
+      Block(id: 'a', type: 'paragraph', runs: [InlineRun('Bright here.')]),
+      Block(id: 'b', type: 'paragraph', runs: [InlineRun('Dimmed there.')]),
+    ]);
+    final editor = HomericEditorController(
+      document: doc,
+      selection: HomericSelection.collapsed(doc.positionAt(0, 2)),
+    );
+    addTearDown(editor.dispose);
+    final controller = HomericFocusDimController(
+      vsync: const TestVSync(),
+      initialGranularity: HomericFocusGranularity.paragraph,
+    );
+    addTearDown(controller.dispose);
+    double alpha() {
+      final layers = controller.paintLayersFor(
+        block: doc.blocks[1],
+        editor: editor,
+        foregroundColor: ink,
+        backgroundColor: paper,
+      );
+      return (layers.single.spec as SolidWashSpec).color.a;
+    }
+
+    final medium = alpha();
+    expect(
+      medium,
+      closeTo(
+          homericFocusWashOpacity(foreground: ink, background: paper), 0.002),
+    );
+    controller.strength = 0.9;
+    expect(alpha(), greaterThan(medium + 0.1));
+    controller.strength = 0.2;
+    expect(alpha(), lessThan(medium));
   });
 }

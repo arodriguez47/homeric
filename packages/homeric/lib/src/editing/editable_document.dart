@@ -3518,11 +3518,13 @@ class _RenderBaselineGrabberRow extends RenderBox
     if (_onBaseline && contentBaseline != null && grabberBaseline != null) {
       grabberTop = contentBaseline - grabberBaseline;
     } else {
-      // A row shorter than the grabber keeps the glyph inside it, so the
-      // glyph a pointer lands on belongs to its own row, not the next.
-      final centerY = _holdsRowHeight
+      // A row too short to hold the glyph's centre centres it on the row,
+      // so the glyph a pointer lands on belongs to its own row, not the
+      // next. A row that holds it keeps it where the host put it.
+      final rowHeight = _content.size.height;
+      final centerY = _holdsRowHeight || _fallbackCenterY < rowHeight
           ? _fallbackCenterY
-          : math.min(_fallbackCenterY, _content.size.height / 2);
+          : rowHeight / 2;
       grabberTop = centerY - _grabberWidth / 2;
     }
     final rtl = _textDirection == TextDirection.rtl;

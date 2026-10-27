@@ -190,4 +190,23 @@ void main() {
     expect(text().left, closeTo(held.text.left, 0.01));
     expect(glyph().center.dx, greaterThan(text().right));
   });
+
+  testWidgets('without holdsRowHeight a row that holds the centre keeps it',
+      (tester) async {
+    double glyphCenter() =>
+        tester.getCenter(find.text('⋮').first).dy - firstLineTop(tester);
+    // A 34px line: the default 22px centre is inside it.
+    const style = TextStyle(fontSize: 20, height: 1.7);
+    await pump(tester, alignment: HomericBlockGrabberAlignment.center);
+    final held = glyphCenter();
+
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      holdsRowHeight: false,
+      style: style,
+    );
+
+    expect(glyphCenter(), closeTo(held, 0.01));
+  });
 }

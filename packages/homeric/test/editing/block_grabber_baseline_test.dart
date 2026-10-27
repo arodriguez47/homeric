@@ -6,6 +6,8 @@ void main() {
   Future<HomericEditorController> pump(
     WidgetTester tester, {
     required HomericBlockGrabberAlignment alignment,
+    bool holdsRowHeight = true,
+    TextDirection textDirection = TextDirection.ltr,
     TextStyle style = const TextStyle(fontSize: 20, height: 1.7),
     EdgeInsets padding = EdgeInsets.zero,
   }) async {
@@ -20,22 +22,26 @@ void main() {
     addTearDown(controller.dispose);
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
-        body: HomericEditableDocument.builder(
-          controller: controller,
-          inputSession: session,
-          blockGrabberStyle: HomericBlockGrabberStyle(
-            alignment: alignment,
-            textStyle: const TextStyle(fontSize: 14, height: 1),
-          ),
-          blockBuilder: (context, block, focusNode) => Padding(
-            padding: padding,
-            child: HomericEditableParagraph(
-              controller: controller,
-              inputSession: session,
-              blockId: block.id,
-              focusNode: focusNode,
-              resolveStyle: (_) => style,
-              baseStyle: style,
+        body: Directionality(
+          textDirection: textDirection,
+          child: HomericEditableDocument.builder(
+            controller: controller,
+            inputSession: session,
+            blockGrabberStyle: HomericBlockGrabberStyle(
+              alignment: alignment,
+              holdsRowHeight: holdsRowHeight,
+              textStyle: const TextStyle(fontSize: 14, height: 1),
+            ),
+            blockBuilder: (context, block, focusNode) => Padding(
+              padding: padding,
+              child: HomericEditableParagraph(
+                controller: controller,
+                inputSession: session,
+                blockId: block.id,
+                focusNode: focusNode,
+                resolveStyle: (_) => style,
+                baseStyle: style,
+              ),
             ),
           ),
         ),
@@ -99,5 +105,108 @@ void main() {
       (glyphBaseline(tester) - firstLineBaseline(tester)).abs(),
       greaterThan(1),
     );
+  });
+
+  double secondLineTop(WidgetTester tester) => tester
+      .renderObject<RenderBox>(find.byType(HomericParagraph).at(1))
+      .localToGlobal(Offset.zero)
+      .dy;
+
+  double firstLineTop(WidgetTester tester) => tester
+      .renderObject<RenderBox>(find.byType(HomericParagraph).first)
+      .localToGlobal(Offset.zero)
+      .dy;
+
+  for (final alignment in HomericBlockGrabberAlignment.values) {
+    testWidgets('${alignment.name}: a short row is held to the grabber',
+        (tester) async {
+      // A 12px line, under the 44px grabber square.
+      await pump(
+        tester,
+        alignment: alignment,
+        style: const TextStyle(fontSize: 10, height: 1.2),
+      );
+
+      expect(secondLineTop(tester) - firstLineTop(tester),
+          closeTo(kHomericBlockGrabberWidth, 0.01));
+    });
+
+    testWidgets('${alignment.name}: without holdsRowHeight a row is its line',
+        (tester) async {
+      await pump(
+        tester,
+        alignment: alignment,
+        holdsRowHeight: false,
+        style: const TextStyle(fontSize: 10, height: 1.2),
+      );
+
+      expect(secondLineTop(tester) - firstLineTop(tester), closeTo(12, 0.01));
+      // The text keeps its column.
+      expect(
+        tester
+            .renderObject<RenderBox>(find.byType(HomericParagraph).first)
+            .localToGlobal(Offset.zero)
+            .dx,
+        closeTo(kHomericBlockGrabberWidth, 0.01),
+      );
+      // The glyph keeps its alignment, and stays inside its own row.
+      if (alignment == HomericBlockGrabberAlignment.firstBaseline) {
+        expect(glyphBaseline(tester), closeTo(firstLineBaseline(tester), 0.01));
+      }
+      final glyph = tester.getCenter(find.text('⋮').first).dy;
+      expect(glyph, greaterThanOrEqualTo(firstLineTop(tester)));
+      expect(glyph, lessThan(secondLineTop(tester)));
+      // A pointer on the glyph reaches its own row's drag handle.
+      final hit =
+          tester.hitTestOnBinding(tester.getCenter(find.text('⋮').first));
+      final handles = find.byType(ReorderableDragStartListener);
+      final first = tester.renderObject(handles.first);
+      final second = tester.renderObject(handles.at(1));
+      final targets = hit.path.map((e) => e.target).toList();
+      expect(targets, contains(first));
+      expect(targets, isNot(contains(second)));
+    });
+  }
+
+  testWidgets('without holdsRowHeight the grabber still leads in RTL',
+      (tester) async {
+    Rect glyph() => tester.getRect(find.text('⋮').first);
+    Rect text() => tester.getRect(find.byType(HomericParagraph).first);
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      textDirection: TextDirection.rtl,
+    );
+    final held = (glyph: glyph(), text: text());
+
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      textDirection: TextDirection.rtl,
+      holdsRowHeight: false,
+    );
+
+    expect(glyph().center.dx, closeTo(held.glyph.center.dx, 0.01));
+    expect(text().left, closeTo(held.text.left, 0.01));
+    expect(glyph().center.dx, greaterThan(text().right));
+  });
+
+  testWidgets('without holdsRowHeight a row that holds the centre keeps it',
+      (tester) async {
+    double glyphCenter() =>
+        tester.getCenter(find.text('⋮').first).dy - firstLineTop(tester);
+    // A 34px line: the default 22px centre is inside it.
+    const style = TextStyle(fontSize: 20, height: 1.7);
+    await pump(tester, alignment: HomericBlockGrabberAlignment.center);
+    final held = glyphCenter();
+
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      holdsRowHeight: false,
+      style: style,
+    );
+
+    expect(glyphCenter(), closeTo(held, 0.01));
   });
 }

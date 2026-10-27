@@ -77,11 +77,19 @@ final class HomericBlockGrabberStyle {
     this.fadeDuration = const Duration(milliseconds: 100),
     this.textStyle,
     this.alignment = HomericBlockGrabberAlignment.center,
+    this.holdsRowHeight = true,
   })  : assert(idleOpacity >= 0 && idleOpacity <= 1),
         assert(hoverOpacity >= 0 && hoverOpacity <= 1);
 
   /// Vertical placement of the glyph. Changing it changes row layout.
   final HomericBlockGrabberAlignment alignment;
+
+  /// Whether a block's row is at least as tall as the grabber's square
+  /// slot. Off, a row is as tall as its block, so blocks the host sets with
+  /// no gap between them (list items) sit a line apart, and a grabber
+  /// taller than its row reaches past it, where it paints but takes no
+  /// pointers. Changing it changes row layout.
+  final bool holdsRowHeight;
 
   /// Glyph opacity while the pointer is outside this block's handle.
   final double idleOpacity;
@@ -2825,6 +2833,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       widget.layoutRevision,
       widget.blockGrabberCenterY,
       widget.blockGrabberStyle.alignment,
+      widget.blockGrabberStyle.holdsRowHeight,
     );
     if (_globalLayoutSignature != globalLayoutSignature) {
       _globalLayoutSignature = globalLayoutSignature;
@@ -2889,6 +2898,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                     widget.blockGrabberCenterY,
                     widget.blockGrabberWidth,
                     widget.blockGrabberStyle.alignment,
+                    widget.blockGrabberStyle.holdsRowHeight,
                   ),
                 );
                 return _DocumentBlockRow(
@@ -3302,11 +3312,15 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           ),
         );
     final Widget row;
-    if (widget.grabberStyle.alignment ==
-        HomericBlockGrabberAlignment.firstBaseline) {
+    final onBaseline = widget.grabberStyle.alignment ==
+        HomericBlockGrabberAlignment.firstBaseline;
+    if (onBaseline || !widget.grabberStyle.holdsRowHeight) {
       row = _BaselineGrabberRow(
         grabberWidth: grabberWidth,
         fallbackCenterY: centerY,
+        onBaseline: onBaseline,
+        holdsRowHeight: widget.grabberStyle.holdsRowHeight,
+        textDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
         children: <Widget>[
           grabberSlot(shiftByCenter: false),
           content,
@@ -3347,19 +3361,32 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
 /// The content is laid out first at its full column width and keeps its own
 /// position; only the grabber moves, so switching alignment never reflows the
 /// text. Children: `[grabber, content]`.
+///
+/// Without [onBaseline] the grabber is centred on [fallbackCenterY]; without
+/// [holdsRowHeight] the row is only as tall as its content. As a [Row]
+/// does, the grabber leads: on the right under [TextDirection.rtl].
 class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
   const _BaselineGrabberRow({
     required this.grabberWidth,
     required this.fallbackCenterY,
+    required this.onBaseline,
+    required this.holdsRowHeight,
+    required this.textDirection,
     required super.children,
   }) : assert(children.length == 2);
 
   final double grabberWidth;
   final double fallbackCenterY;
+  final bool onBaseline;
+  final bool holdsRowHeight;
+  final TextDirection textDirection;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
-      _RenderBaselineGrabberRow(grabberWidth, fallbackCenterY);
+      _RenderBaselineGrabberRow(grabberWidth, fallbackCenterY)
+        ..onBaseline = onBaseline
+        ..holdsRowHeight = holdsRowHeight
+        ..textDirection = textDirection;
 
   @override
   void updateRenderObject(
@@ -3368,7 +3395,10 @@ class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
   ) {
     renderObject
       ..grabberWidth = grabberWidth
-      ..fallbackCenterY = fallbackCenterY;
+      ..fallbackCenterY = fallbackCenterY
+      ..onBaseline = onBaseline
+      ..holdsRowHeight = holdsRowHeight
+      ..textDirection = textDirection;
   }
 }
 
@@ -3395,6 +3425,30 @@ class _RenderBaselineGrabberRow extends RenderBox
     markNeedsLayout();
   }
 
+  bool _onBaseline = true;
+  set onBaseline(bool value) {
+    if (value == _onBaseline) return;
+    _onBaseline = value;
+    markNeedsLayout();
+  }
+
+  bool _holdsRowHeight = true;
+  set holdsRowHeight(bool value) {
+    if (value == _holdsRowHeight) return;
+    _holdsRowHeight = value;
+    markNeedsLayout();
+  }
+
+  TextDirection _textDirection = TextDirection.ltr;
+  set textDirection(TextDirection value) {
+    if (value == _textDirection) return;
+    _textDirection = value;
+    markNeedsLayout();
+  }
+
+  /// The least height of a row: the grabber's square, or nothing.
+  double get _floor => _holdsRowHeight ? _grabberWidth : 0;
+
   RenderBox get _grabber => firstChild!;
   RenderBox get _content => lastChild!;
 
@@ -3408,13 +3462,13 @@ class _RenderBaselineGrabberRow extends RenderBox
   @override
   double computeMinIntrinsicHeight(double width) => math.max(
         _content.getMinIntrinsicHeight(math.max(0, width - _grabberWidth)),
-        _grabberWidth,
+        _floor,
       );
 
   @override
   double computeMaxIntrinsicHeight(double width) => math.max(
         _content.getMaxIntrinsicHeight(math.max(0, width - _grabberWidth)),
-        _grabberWidth,
+        _floor,
       );
 
   @override
@@ -3439,7 +3493,7 @@ class _RenderBaselineGrabberRow extends RenderBox
     ));
     return constraints.constrain(Size(
       constraints.maxWidth,
-      math.max(contentSize.height, _grabberWidth),
+      math.max(contentSize.height, _floor),
     ));
   }
 
@@ -3461,20 +3515,31 @@ class _RenderBaselineGrabberRow extends RenderBox
     final grabberBaseline =
         _grabber.getDistanceToBaseline(TextBaseline.alphabetic, onlyReal: true);
     final double grabberTop;
-    if (contentBaseline != null && grabberBaseline != null) {
+    if (_onBaseline && contentBaseline != null && grabberBaseline != null) {
       grabberTop = contentBaseline - grabberBaseline;
     } else {
-      grabberTop = _fallbackCenterY - _grabberWidth / 2;
+      // A row too short to hold the glyph's centre centres it on the row,
+      // so the glyph a pointer lands on belongs to its own row, not the
+      // next. A row that holds it keeps it where the host put it.
+      final rowHeight = _content.size.height;
+      final centerY = _holdsRowHeight || _fallbackCenterY < rowHeight
+          ? _fallbackCenterY
+          : rowHeight / 2;
+      grabberTop = centerY - _grabberWidth / 2;
     }
+    final rtl = _textDirection == TextDirection.rtl;
     (_content.parentData! as _BaselineGrabberRowParentData).offset =
-        Offset(_grabberWidth, 0);
+        Offset(rtl ? 0 : _grabberWidth, 0);
     // A grabber pushed above the row keeps its glyph on the baseline; only
     // the part of its hit box above the row stops taking pointers.
     (_grabber.parentData! as _BaselineGrabberRowParentData).offset =
-        Offset(0, grabberTop);
+        Offset(rtl ? width - _grabberWidth : 0, grabberTop);
     size = constraints.constrain(Size(
       width,
-      math.max(_content.size.height, math.max(0, grabberTop) + _grabberWidth),
+      _holdsRowHeight
+          ? math.max(
+              _content.size.height, math.max(0, grabberTop) + _grabberWidth)
+          : _content.size.height,
     ));
   }
 

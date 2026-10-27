@@ -3320,6 +3320,7 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
         fallbackCenterY: centerY,
         onBaseline: onBaseline,
         holdsRowHeight: widget.grabberStyle.holdsRowHeight,
+        textDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
         children: <Widget>[
           grabberSlot(shiftByCenter: false),
           content,
@@ -3362,13 +3363,15 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
 /// text. Children: `[grabber, content]`.
 ///
 /// Without [onBaseline] the grabber is centred on [fallbackCenterY]; without
-/// [holdsRowHeight] the row is only as tall as its content.
+/// [holdsRowHeight] the row is only as tall as its content. As a [Row]
+/// does, the grabber leads: on the right under [TextDirection.rtl].
 class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
   const _BaselineGrabberRow({
     required this.grabberWidth,
     required this.fallbackCenterY,
     required this.onBaseline,
     required this.holdsRowHeight,
+    required this.textDirection,
     required super.children,
   }) : assert(children.length == 2);
 
@@ -3376,12 +3379,14 @@ class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
   final double fallbackCenterY;
   final bool onBaseline;
   final bool holdsRowHeight;
+  final TextDirection textDirection;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
       _RenderBaselineGrabberRow(grabberWidth, fallbackCenterY)
         ..onBaseline = onBaseline
-        ..holdsRowHeight = holdsRowHeight;
+        ..holdsRowHeight = holdsRowHeight
+        ..textDirection = textDirection;
 
   @override
   void updateRenderObject(
@@ -3392,7 +3397,8 @@ class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
       ..grabberWidth = grabberWidth
       ..fallbackCenterY = fallbackCenterY
       ..onBaseline = onBaseline
-      ..holdsRowHeight = holdsRowHeight;
+      ..holdsRowHeight = holdsRowHeight
+      ..textDirection = textDirection;
   }
 }
 
@@ -3430,6 +3436,13 @@ class _RenderBaselineGrabberRow extends RenderBox
   set holdsRowHeight(bool value) {
     if (value == _holdsRowHeight) return;
     _holdsRowHeight = value;
+    markNeedsLayout();
+  }
+
+  TextDirection _textDirection = TextDirection.ltr;
+  set textDirection(TextDirection value) {
+    if (value == _textDirection) return;
+    _textDirection = value;
     markNeedsLayout();
   }
 
@@ -3507,12 +3520,13 @@ class _RenderBaselineGrabberRow extends RenderBox
     } else {
       grabberTop = _fallbackCenterY - _grabberWidth / 2;
     }
+    final rtl = _textDirection == TextDirection.rtl;
     (_content.parentData! as _BaselineGrabberRowParentData).offset =
-        Offset(_grabberWidth, 0);
+        Offset(rtl ? 0 : _grabberWidth, 0);
     // A grabber pushed above the row keeps its glyph on the baseline; only
     // the part of its hit box above the row stops taking pointers.
     (_grabber.parentData! as _BaselineGrabberRowParentData).offset =
-        Offset(0, grabberTop);
+        Offset(rtl ? width - _grabberWidth : 0, grabberTop);
     size = constraints.constrain(Size(
       width,
       _holdsRowHeight

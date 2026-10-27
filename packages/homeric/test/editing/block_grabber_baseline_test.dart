@@ -7,6 +7,7 @@ void main() {
     WidgetTester tester, {
     required HomericBlockGrabberAlignment alignment,
     bool holdsRowHeight = true,
+    TextDirection textDirection = TextDirection.ltr,
     TextStyle style = const TextStyle(fontSize: 20, height: 1.7),
     EdgeInsets padding = EdgeInsets.zero,
   }) async {
@@ -21,23 +22,26 @@ void main() {
     addTearDown(controller.dispose);
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
-        body: HomericEditableDocument.builder(
-          controller: controller,
-          inputSession: session,
-          blockGrabberStyle: HomericBlockGrabberStyle(
-            alignment: alignment,
-            holdsRowHeight: holdsRowHeight,
-            textStyle: const TextStyle(fontSize: 14, height: 1),
-          ),
-          blockBuilder: (context, block, focusNode) => Padding(
-            padding: padding,
-            child: HomericEditableParagraph(
-              controller: controller,
-              inputSession: session,
-              blockId: block.id,
-              focusNode: focusNode,
-              resolveStyle: (_) => style,
-              baseStyle: style,
+        body: Directionality(
+          textDirection: textDirection,
+          child: HomericEditableDocument.builder(
+            controller: controller,
+            inputSession: session,
+            blockGrabberStyle: HomericBlockGrabberStyle(
+              alignment: alignment,
+              holdsRowHeight: holdsRowHeight,
+              textStyle: const TextStyle(fontSize: 14, height: 1),
+            ),
+            blockBuilder: (context, block, focusNode) => Padding(
+              padding: padding,
+              child: HomericEditableParagraph(
+                controller: controller,
+                inputSession: session,
+                blockId: block.id,
+                focusNode: focusNode,
+                resolveStyle: (_) => style,
+                baseStyle: style,
+              ),
             ),
           ),
         ),
@@ -147,4 +151,27 @@ void main() {
       );
     });
   }
+
+  testWidgets('without holdsRowHeight the grabber still leads in RTL',
+      (tester) async {
+    Rect glyph() => tester.getRect(find.text('⋮').first);
+    Rect text() => tester.getRect(find.byType(HomericParagraph).first);
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      textDirection: TextDirection.rtl,
+    );
+    final held = (glyph: glyph(), text: text());
+
+    await pump(
+      tester,
+      alignment: HomericBlockGrabberAlignment.center,
+      textDirection: TextDirection.rtl,
+      holdsRowHeight: false,
+    );
+
+    expect(glyph().center.dx, closeTo(held.glyph.center.dx, 0.01));
+    expect(text().left, closeTo(held.text.left, 0.01));
+    expect(glyph().center.dx, greaterThan(text().right));
+  });
 }

@@ -149,6 +149,22 @@ void main() {
             .dx,
         closeTo(kHomericBlockGrabberWidth, 0.01),
       );
+      // The glyph keeps its alignment, and stays inside its own row.
+      if (alignment == HomericBlockGrabberAlignment.firstBaseline) {
+        expect(glyphBaseline(tester), closeTo(firstLineBaseline(tester), 0.01));
+      }
+      final glyph = tester.getCenter(find.text('⋮').first).dy;
+      expect(glyph, greaterThanOrEqualTo(firstLineTop(tester)));
+      expect(glyph, lessThan(secondLineTop(tester)));
+      // A pointer on the glyph reaches its own row's drag handle.
+      final hit =
+          tester.hitTestOnBinding(tester.getCenter(find.text('⋮').first));
+      final handles = find.byType(ReorderableDragStartListener);
+      final first = tester.renderObject(handles.first);
+      final second = tester.renderObject(handles.at(1));
+      final targets = hit.path.map((e) => e.target).toList();
+      expect(targets, contains(first));
+      expect(targets, isNot(contains(second)));
     });
   }
 

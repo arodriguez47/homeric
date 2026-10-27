@@ -172,6 +172,28 @@ void main() {
           reason: 'the grapheme after the wrap remains on line 2');
     });
 
+    testWidgets('an empty paragraph has one empty line at its start',
+        (tester) async {
+      // An empty paragraph lays out no text, and Flutter answers its line
+      // boundary with the invalid range (-1, -1). Line focus dimming asks
+      // for it the moment an empty note opens.
+      final source = sourceOf('');
+      await tester.pumpWidget(harness(HomericParagraph(source: source)));
+      final geometry = ParagraphGeometry(renderOf(tester));
+      for (final assoc in const [-1, 1]) {
+        expect(
+          geometry.lineBoundaryAt(const DocOffset(0), assoc: assoc).value,
+          DocRange(const DocOffset(0), const DocOffset(0)),
+          reason: 'assoc $assoc',
+        );
+        expect(
+          geometry.wordBoundaryAt(const DocOffset(0), assoc: assoc).value,
+          DocRange(const DocOffset(0), const DocOffset(0)),
+          reason: 'assoc $assoc',
+        );
+      }
+    });
+
     testWidgets(
         'a wrap between one-grapheme lines does not skip the selected line',
         (tester) async {

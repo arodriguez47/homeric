@@ -77,11 +77,19 @@ final class HomericBlockGrabberStyle {
     this.fadeDuration = const Duration(milliseconds: 100),
     this.textStyle,
     this.alignment = HomericBlockGrabberAlignment.center,
+    this.holdsRowHeight = true,
   })  : assert(idleOpacity >= 0 && idleOpacity <= 1),
         assert(hoverOpacity >= 0 && hoverOpacity <= 1);
 
   /// Vertical placement of the glyph. Changing it changes row layout.
   final HomericBlockGrabberAlignment alignment;
+
+  /// Whether a block's row is at least as tall as the grabber's square
+  /// slot. Off, a row is as tall as its block, so blocks the host sets with
+  /// no gap between them (list items) sit a line apart, and a grabber
+  /// taller than its row reaches past it, where it paints but takes no
+  /// pointers. Changing it changes row layout.
+  final bool holdsRowHeight;
 
   /// Glyph opacity while the pointer is outside this block's handle.
   final double idleOpacity;
@@ -2825,6 +2833,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       widget.layoutRevision,
       widget.blockGrabberCenterY,
       widget.blockGrabberStyle.alignment,
+      widget.blockGrabberStyle.holdsRowHeight,
     );
     if (_globalLayoutSignature != globalLayoutSignature) {
       _globalLayoutSignature = globalLayoutSignature;
@@ -2889,6 +2898,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
                     widget.blockGrabberCenterY,
                     widget.blockGrabberWidth,
                     widget.blockGrabberStyle.alignment,
+                    widget.blockGrabberStyle.holdsRowHeight,
                   ),
                 );
                 return _DocumentBlockRow(
@@ -3302,11 +3312,14 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           ),
         );
     final Widget row;
-    if (widget.grabberStyle.alignment ==
-        HomericBlockGrabberAlignment.firstBaseline) {
+    final onBaseline = widget.grabberStyle.alignment ==
+        HomericBlockGrabberAlignment.firstBaseline;
+    if (onBaseline || !widget.grabberStyle.holdsRowHeight) {
       row = _BaselineGrabberRow(
         grabberWidth: grabberWidth,
         fallbackCenterY: centerY,
+        onBaseline: onBaseline,
+        holdsRowHeight: widget.grabberStyle.holdsRowHeight,
         children: <Widget>[
           grabberSlot(shiftByCenter: false),
           content,
@@ -3347,19 +3360,28 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
 /// The content is laid out first at its full column width and keeps its own
 /// position; only the grabber moves, so switching alignment never reflows the
 /// text. Children: `[grabber, content]`.
+///
+/// Without [onBaseline] the grabber is centred on [fallbackCenterY]; without
+/// [holdsRowHeight] the row is only as tall as its content.
 class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
   const _BaselineGrabberRow({
     required this.grabberWidth,
     required this.fallbackCenterY,
+    required this.onBaseline,
+    required this.holdsRowHeight,
     required super.children,
   }) : assert(children.length == 2);
 
   final double grabberWidth;
   final double fallbackCenterY;
+  final bool onBaseline;
+  final bool holdsRowHeight;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
-      _RenderBaselineGrabberRow(grabberWidth, fallbackCenterY);
+      _RenderBaselineGrabberRow(grabberWidth, fallbackCenterY)
+        ..onBaseline = onBaseline
+        ..holdsRowHeight = holdsRowHeight;
 
   @override
   void updateRenderObject(
@@ -3368,7 +3390,9 @@ class _BaselineGrabberRow extends MultiChildRenderObjectWidget {
   ) {
     renderObject
       ..grabberWidth = grabberWidth
-      ..fallbackCenterY = fallbackCenterY;
+      ..fallbackCenterY = fallbackCenterY
+      ..onBaseline = onBaseline
+      ..holdsRowHeight = holdsRowHeight;
   }
 }
 
@@ -3395,6 +3419,23 @@ class _RenderBaselineGrabberRow extends RenderBox
     markNeedsLayout();
   }
 
+  bool _onBaseline = true;
+  set onBaseline(bool value) {
+    if (value == _onBaseline) return;
+    _onBaseline = value;
+    markNeedsLayout();
+  }
+
+  bool _holdsRowHeight = true;
+  set holdsRowHeight(bool value) {
+    if (value == _holdsRowHeight) return;
+    _holdsRowHeight = value;
+    markNeedsLayout();
+  }
+
+  /// The least height of a row: the grabber's square, or nothing.
+  double get _floor => _holdsRowHeight ? _grabberWidth : 0;
+
   RenderBox get _grabber => firstChild!;
   RenderBox get _content => lastChild!;
 
@@ -3408,13 +3449,13 @@ class _RenderBaselineGrabberRow extends RenderBox
   @override
   double computeMinIntrinsicHeight(double width) => math.max(
         _content.getMinIntrinsicHeight(math.max(0, width - _grabberWidth)),
-        _grabberWidth,
+        _floor,
       );
 
   @override
   double computeMaxIntrinsicHeight(double width) => math.max(
         _content.getMaxIntrinsicHeight(math.max(0, width - _grabberWidth)),
-        _grabberWidth,
+        _floor,
       );
 
   @override
@@ -3439,7 +3480,7 @@ class _RenderBaselineGrabberRow extends RenderBox
     ));
     return constraints.constrain(Size(
       constraints.maxWidth,
-      math.max(contentSize.height, _grabberWidth),
+      math.max(contentSize.height, _floor),
     ));
   }
 
@@ -3461,7 +3502,7 @@ class _RenderBaselineGrabberRow extends RenderBox
     final grabberBaseline =
         _grabber.getDistanceToBaseline(TextBaseline.alphabetic, onlyReal: true);
     final double grabberTop;
-    if (contentBaseline != null && grabberBaseline != null) {
+    if (_onBaseline && contentBaseline != null && grabberBaseline != null) {
       grabberTop = contentBaseline - grabberBaseline;
     } else {
       grabberTop = _fallbackCenterY - _grabberWidth / 2;
@@ -3474,7 +3515,10 @@ class _RenderBaselineGrabberRow extends RenderBox
         Offset(0, grabberTop);
     size = constraints.constrain(Size(
       width,
-      math.max(_content.size.height, math.max(0, grabberTop) + _grabberWidth),
+      _holdsRowHeight
+          ? math.max(
+              _content.size.height, math.max(0, grabberTop) + _grabberWidth)
+          : _content.size.height,
     ));
   }
 

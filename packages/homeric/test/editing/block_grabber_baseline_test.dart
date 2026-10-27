@@ -6,6 +6,7 @@ void main() {
   Future<HomericEditorController> pump(
     WidgetTester tester, {
     required HomericBlockGrabberAlignment alignment,
+    bool holdsRowHeight = true,
     TextStyle style = const TextStyle(fontSize: 20, height: 1.7),
     EdgeInsets padding = EdgeInsets.zero,
   }) async {
@@ -25,6 +26,7 @@ void main() {
           inputSession: session,
           blockGrabberStyle: HomericBlockGrabberStyle(
             alignment: alignment,
+            holdsRowHeight: holdsRowHeight,
             textStyle: const TextStyle(fontSize: 14, height: 1),
           ),
           blockBuilder: (context, block, focusNode) => Padding(
@@ -100,4 +102,49 @@ void main() {
       greaterThan(1),
     );
   });
+
+  double secondLineTop(WidgetTester tester) => tester
+      .renderObject<RenderBox>(find.byType(HomericParagraph).at(1))
+      .localToGlobal(Offset.zero)
+      .dy;
+
+  double firstLineTop(WidgetTester tester) => tester
+      .renderObject<RenderBox>(find.byType(HomericParagraph).first)
+      .localToGlobal(Offset.zero)
+      .dy;
+
+  for (final alignment in HomericBlockGrabberAlignment.values) {
+    testWidgets('${alignment.name}: a short row is held to the grabber',
+        (tester) async {
+      // A 12px line, under the 44px grabber square.
+      await pump(
+        tester,
+        alignment: alignment,
+        style: const TextStyle(fontSize: 10, height: 1.2),
+      );
+
+      expect(secondLineTop(tester) - firstLineTop(tester),
+          closeTo(kHomericBlockGrabberWidth, 0.01));
+    });
+
+    testWidgets('${alignment.name}: without holdsRowHeight a row is its line',
+        (tester) async {
+      await pump(
+        tester,
+        alignment: alignment,
+        holdsRowHeight: false,
+        style: const TextStyle(fontSize: 10, height: 1.2),
+      );
+
+      expect(secondLineTop(tester) - firstLineTop(tester), closeTo(12, 0.01));
+      // The text keeps its column.
+      expect(
+        tester
+            .renderObject<RenderBox>(find.byType(HomericParagraph).first)
+            .localToGlobal(Offset.zero)
+            .dx,
+        closeTo(kHomericBlockGrabberWidth, 0.01),
+      );
+    });
+  }
 }

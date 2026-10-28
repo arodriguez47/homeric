@@ -2662,7 +2662,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             .value
             .height ??
         rect.height;
-    final handle = controls?.getHandleSize(lineHeight).height ?? 0;
+    // Only the part of the end handle that hangs below the line: iOS counts
+    // the stem on the line in the handle's height.
+    final handle = controls == null
+        ? 0.0
+        : controls.getHandleSize(lineHeight).height -
+            controls
+                .getHandleAnchor(TextSelectionHandleType.right, lineHeight)
+                .dy;
     return render.localToGlobal(rect.bottomCenter + Offset(0, handle));
   }
 

@@ -1175,15 +1175,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   /// Extends the current pointer selection through mounted row geometry.
+  ///
+  /// [autoscrollPoint] is where the finger is when that differs from the
+  /// selection point, as for a touch handle held away from its line; the
+  /// viewport edges scroll for the finger.
   bool updatePointerSelectionDrag(
     Offset globalPoint, {
     Object? owner,
+    Offset? autoscrollPoint,
   }) {
     if (owner != null && !identical(owner, _selectionDragOwner)) return false;
     if (!_selectionDragActive || _selectionDragAnchor == null) return false;
     _selectionDragPointer = globalPoint;
     _updatePointerSelectionHead(globalPoint);
-    _syncSelectionAutoscroll(globalPoint);
+    _syncSelectionAutoscroll(autoscrollPoint ?? globalPoint);
     return true;
   }
 
@@ -1662,8 +1667,16 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _touchStationaryHostOwner = stationaryOwner;
     _touchStationaryLayoutGeneration = stationaryGeometry?.layoutGeneration;
     final moving = selectionEndpointGeometry(endpoint)?.globalRect;
-    _touchHandleGrabDy =
-        moving == null ? 0 : moving.center.dy - globalPosition.dy;
+    final render = context.findRenderObject();
+    // Endpoint rects carry a global top-left and a local size; a zoomed host
+    // draws the line taller by its scale.
+    final scale = render is RenderBox && render.attached
+        ? render.localToGlobal(const Offset(0, 1)).dy -
+            render.localToGlobal(Offset.zero).dy
+        : 1.0;
+    _touchHandleGrabDy = moving == null
+        ? 0
+        : moving.top + moving.height * scale / 2 - globalPosition.dy;
     _updateTouchMagnifier(globalPosition.translate(0, _touchHandleGrabDy));
   }
 
@@ -1673,7 +1686,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       return;
     }
     final point = globalPosition.translate(0, _touchHandleGrabDy);
-    updatePointerSelectionDrag(point, owner: _touchHandleDragOwner);
+    updatePointerSelectionDrag(
+      point,
+      owner: _touchHandleDragOwner,
+      autoscrollPoint: globalPosition,
+    );
     _updateTouchMagnifier(point);
   }
 

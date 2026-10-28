@@ -2314,11 +2314,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         ? selection.end
         : selection.start;
     final render = _overlayContext?.findRenderObject();
-    final moving = render is RenderBox && render.attached
-        ? _localTouchEndpoint(endpoint, geometry, render)?.globalRect
+    final local = _localSelectionEndpoint(endpoint);
+    final moving = render is RenderBox && render.attached && local != null
+        ? render.localToGlobal(geometry
+            .caretRect(DocOffset(local.offset), assoc: _assoc(local.affinity))
+            .value
+            .center)
         : null;
     _localTouchHandleGrabDy =
-        moving == null ? 0 : moving.center.dy - globalPosition.dy;
+        moving == null ? 0 : moving.dy - globalPosition.dy;
     _updateLocalTouchMagnifier(
       geometry,
       globalPosition.translate(0, _localTouchHandleGrabDy),
@@ -2670,7 +2674,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             controls
                 .getHandleAnchor(TextSelectionHandleType.right, lineHeight)
                 .dy;
-    return render.localToGlobal(rect.bottomCenter + Offset(0, handle));
+    final below = render.localToGlobal(rect.bottomCenter + Offset(0, handle));
+    // A selection running past the keyboard would put the menu off screen;
+    // keep a menu's height of room above the screen's bottom.
+    final media = MediaQuery.maybeOf(context);
+    if (media == null) return below;
+    final floor = media.size.height -
+        media.viewInsets.bottom -
+        media.padding.bottom -
+        _kDrawnMenuRoom;
+    return Offset(below.dx, below.dy.clamp(0, floor < 0 ? 0 : floor));
   }
 
   List<ContextMenuButtonItem> _contextMenuItems(_MenuWitness witness) {
@@ -4204,6 +4217,10 @@ final class _EditableHostCommandDelegate
     state._cancelPlatformTransientInput();
   }
 }
+
+/// Room a drawn edit menu needs above the screen's bottom: its 44-point bar
+/// and the gap Flutter leaves around it.
+const _kDrawnMenuRoom = 52.0;
 
 const _selectAllSemanticsAction = CustomSemanticsAction(label: 'Select all');
 

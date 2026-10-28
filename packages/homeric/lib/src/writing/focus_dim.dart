@@ -191,6 +191,7 @@ final class HomericFocusDimController extends ChangeNotifier {
     final next = _HomericLineWitness(
       documentRevision: geometry.documentRevision,
       range: BlockTextRange(first.start, last.end),
+      contentLength: block.contentLength,
     );
     if (_lineWitnesses[block.id] == next) return;
     _lineWitnesses[block.id] = next;
@@ -298,9 +299,18 @@ final class HomericFocusDimController extends ChangeNotifier {
         return BlockTextRange(0, block.contentLength);
       case HomericFocusGranularity.line:
         final witness = _lineWitnesses[block.id];
-        if (witness == null ||
-            witness.documentRevision != editor.documentRevision) {
-          return BlockTextRange(0, block.contentLength);
+        if (witness == null) return BlockTextRange(0, block.contentLength);
+        if (witness.documentRevision != editor.documentRevision) {
+          // Typed or deleted since the lines were last measured; this
+          // edit's lines arrive after the frame lays them out. Until then
+          // the measured line stretches by what changed and keeps the
+          // selection, so a keystroke never lights the whole paragraph
+          // for a frame.
+          return witness.carriedTo(
+            contentLength: block.contentLength,
+            start: local.start,
+            end: local.end,
+          );
         }
         return witness.range;
       case HomericFocusGranularity.sentence:
@@ -442,17 +452,37 @@ final class _HomericLineWitness {
   const _HomericLineWitness({
     required this.documentRevision,
     required this.range,
+    required this.contentLength,
   });
 
   final int documentRevision;
   final BlockTextRange range;
 
+  /// The block's length when [range] was measured.
+  final int contentLength;
+
+  /// [range] after the block changed to [contentLength] with the selection
+  /// at [start] to [end]: its end moves by the change, and it grows to
+  /// hold the selection.
+  BlockTextRange carriedTo({
+    required int contentLength,
+    required int start,
+    required int end,
+  }) {
+    final grown = range.end + contentLength - this.contentLength;
+    final from =
+        (start < range.start ? start : range.start).clamp(0, contentLength);
+    final to = (end > grown ? end : grown).clamp(from, contentLength);
+    return BlockTextRange(from, to);
+  }
+
   @override
   bool operator ==(Object other) =>
       other is _HomericLineWitness &&
       documentRevision == other.documentRevision &&
-      range == other.range;
+      range == other.range &&
+      contentLength == other.contentLength;
 
   @override
-  int get hashCode => Object.hash(documentRevision, range);
+  int get hashCode => Object.hash(documentRevision, range, contentLength);
 }

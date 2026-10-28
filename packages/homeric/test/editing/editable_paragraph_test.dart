@@ -3175,6 +3175,102 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  group('a spelled slot', () {
+    Future<
+            ({
+              HomericEditorController controller,
+              _FakeSpellProvider provider,
+            })>
+        pumpInitial(WidgetTester tester, String text, int fold,
+            String spelledAs) async {
+      final provider = _FakeSpellProvider();
+      final controller = HomericEditorController(document: _document(text));
+      final session = HomericTextInputSession(controller: controller);
+      final focusNode = FocusNode();
+      addTearDown(focusNode.dispose);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 200,
+            child: HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              focusNode: focusNode,
+              blockId: 'b',
+              resolveStyle: (_) => _style,
+              spellCheckProvider: provider,
+              // A sunk initial: `^^` and its letter fold into a gap.
+              deriveDecorations: (_) => <Decoration>[
+                Decoration.widget('b', 0, spec: _SpelledGap(spelledAs)),
+                Decoration.replace('b', 0, fold, replacementLength: 0),
+              ],
+              slotBuilder: (_) => const SizedBox(width: 20, height: 12),
+            ),
+          ),
+        ),
+      ));
+      focusNode.requestFocus();
+      await tester.pump();
+      await tester.pump();
+      return (controller: controller, provider: provider);
+    }
+
+    testWidgets('reads the folded initial so the first word stays whole',
+        (tester) async {
+      final pumped = await pumpInitial(tester, '^^Remember this', 3, 'R');
+      expect(pumped.provider.requests.single.text, 'Remember this');
+    });
+
+    testWidgets('a fix edits the word and keeps the fold before its letter',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final pumped = await pumpInitial(tester, '^^Rmember this', 3, 'R');
+      expect(pumped.provider.requests.single.text, 'Rmember this');
+      pumped.provider.complete(const <SuggestionSpan>[
+        SuggestionSpan(TextRange(start: 0, end: 7), <String>['Remember']),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
+      final geometry = ParagraphGeometry(tester
+          .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph)));
+      final word = geometry
+          .rectsForRange(DocRange(const DocOffset(3), const DocOffset(9)))
+          .value
+          .first
+          .toRect()
+          .center;
+      await tester.tapAt(origin + word, buttons: kSecondaryMouseButton);
+      await tester.pump();
+      final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+      expect(find.descendant(of: toolbar, matching: find.text('Remember')),
+          findsOneWidget);
+      tester
+          .widget<CupertinoButton>(find
+              .descendant(of: toolbar, matching: find.byType(CupertinoButton))
+              .first)
+          .onPressed!();
+      await tester.pump();
+      expect(pumped.controller.document.blocks.single.text, '^^Remember this');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('a hung quote reads with its letter', (tester) async {
+      final pumped =
+          await pumpInitial(tester, '^^\u201CRemember', 4, '\u201CR');
+      expect(pumped.provider.requests.single.text, '\u201CRemember');
+    });
+
+    testWidgets('letters the fold does not end with read as the slot',
+        (tester) async {
+      final pumped = await pumpInitial(tester, '^^Remember', 3, 'Q');
+      expect(pumped.provider.requests.single.text, '\uFFFCemember');
+    });
+  });
+
   testWidgets('no spell provider leaves ordinary editing enabled',
       (tester) async {
     final controller = HomericEditorController(document: _document('plain'));
@@ -3530,6 +3626,13 @@ final class _FakeClipboard implements HomericClipboardAdapter {
 
   @override
   Future<void> writeText(String text) async => writes.add(text);
+}
+
+final class _SpelledGap implements HomericSpelledSlot {
+  const _SpelledGap(this.spelledAs);
+
+  @override
+  final String spelledAs;
 }
 
 final class _FakeSpellProvider implements HomericSpellCheckProvider {

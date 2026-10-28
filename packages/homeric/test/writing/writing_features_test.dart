@@ -555,6 +555,17 @@ void main() {
           isFalse);
     });
 
+    test('a sunk initial is spelled as its letter, a hung quote with it', () {
+      Iterable<String?> spelled(String text) => HomericSyntax.all
+          .decorationsFor(_block(text),
+              dropCap: const HomericDropCapLayout(indent: 30))
+          .map((d) => d.spec)
+          .whereType<HomericGapSpec>()
+          .map((gap) => gap.spelledAs);
+      expect(spelled('^^Remember'), ['R']);
+      expect(spelled('^^\u201CRemember'), ['\u201CR']);
+    });
+
     test('paint washes tags and highlights and underlines annotations', () {
       final ds = derive('a #tag ==hi== {{p|n}}', HomericSyntax.all);
       final layers = const HomericSyntaxPaint().layersFor(ds);

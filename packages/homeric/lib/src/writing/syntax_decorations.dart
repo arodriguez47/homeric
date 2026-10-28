@@ -17,6 +17,7 @@ import '../decoration/decoration.dart';
 import '../decoration/markdown_mark_visibility.dart';
 import '../editing/markdown_inline.dart';
 import '../editing/markdown_list_indent.dart';
+import '../editing/spell_check.dart' show HomericSpelledSlot;
 import '../model/block.dart';
 import '../render/homeric_paragraph.dart' show HomericGluedSlot;
 import '../render/paint_layers.dart';
@@ -663,17 +664,25 @@ class HomericDividerSpec {
 }
 
 /// An empty slot [width] wide: room beside a sunk initial.
+///
+/// The gap where a sunk initial sits is [spelledAs] that letter, so
+/// spelling reads the first word whole.
 @immutable
-class HomericGapSpec {
-  const HomericGapSpec(this.width);
+class HomericGapSpec implements HomericSpelledSlot {
+  const HomericGapSpec(this.width, {this.spelledAs});
   final double width;
 
   @override
-  bool operator ==(Object other) =>
-      other is HomericGapSpec && other.width == width;
+  final String? spelledAs;
 
   @override
-  int get hashCode => width.hashCode;
+  bool operator ==(Object other) =>
+      other is HomericGapSpec &&
+      other.width == width &&
+      other.spelledAs == spelledAs;
+
+  @override
+  int get hashCode => Object.hash(width, spelledAs);
 }
 
 /// Widget-slot payload for an `(img src|caption)` mark: the picture, shown
@@ -748,7 +757,10 @@ Iterable<Decoration> _layerDecorations(
     if (dropCap != null && !onInitial) {
       yield markdownMarkHideReplacement(id, m.start, m.letterEnd);
       yield Decoration.widget(id, m.start,
-          spec: HomericGapSpec(dropCap.indent));
+          spec: HomericGapSpec(
+            dropCap.indent,
+            spelledAs: block.text.substring(m.end, m.letterEnd),
+          ));
       final lineTwo = dropCap.lineTwo;
       // The layout is measured after each frame, so right after an edit
       // it can name an offset the shortened text no longer has.

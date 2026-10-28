@@ -1382,3 +1382,25 @@ widening it extends it without reshaping what was drawn.
 **Rule going forward:** a painter that draws anything with ends or
 randomness uses `inkLine`, and never seeds from geometry. Evidence:
 `test/writing/marker_stroke_test.dart`.
+
+## engineer — 2026-10-28 — Touch handles hang from the foot of the line
+
+**What:** On iPhone both selection handles drew one line above the selection.
+Flutter's `SelectionOverlay` places each handle relative to its layer link's
+leader, and EditableText puts that leader at the selection point, which is the
+bottom of the caret's line. Homeric's `CompositedTransformTarget` for each
+endpoint covered the caret rect, so the leader sat at the caret's top and the
+iOS handles (anchored at the line's foot) moved up by a line height.
+
+**Fix:** The endpoint target sits on the caret's bottom edge. Once the handles
+hang below the line, a drag that feeds the raw fingertip into hit testing pulls
+the selection onto the next line, so a handle drag keeps the finger's vertical
+distance from the line's middle from where the drag began (as EditableText
+does). The drawn edit menu gets a `secondaryAnchor` under the selection plus
+the handle height, so without room above it doesn't cover the handles.
+
+**Rule going forward:** anything that feeds `SelectionOverlay` uses Flutter's
+selection points (the caret's bottom), never the caret rect's top-left. Touch
+drags of a handle map `finger + grab offset`, not the finger. Evidence:
+`test/editing/editable_document_test.dart` "iOS handles stand on the selected
+line".

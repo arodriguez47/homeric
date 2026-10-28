@@ -123,6 +123,7 @@ final class HomericSyntax {
     this.images = true,
     this.listGlyphs = true,
     this.hangingLists = false,
+    this.hangingTodos = false,
   });
 
   /// Every form.
@@ -190,6 +191,13 @@ final class HomericSyntax {
   /// out with [HomericListLine], or their markers go missing.
   final bool hangingLists;
 
+  /// With [hangingLists], a to-do line hangs too: its marker is folded out
+  /// of the line, [HomericListLine] draws its box in the gutter with the
+  /// host's `todoMark`, and a wrapped line starts under the words, not
+  /// under the box. Off, the box is a slot in the line
+  /// ([HomericChecklistSpec]) and wrapped lines run back under it.
+  final bool hangingTodos;
+
   /// The decorations for [block].
   ///
   /// A `[[link]]`, `{{annotation}}`, `++aside++` or `~~strike~~` holding
@@ -218,6 +226,7 @@ final class HomericSyntax {
       ];
     }
     final scan = HomericMarkScan(block.text);
+    final hang = hangingLists ? listHangFor(block, caret: caret) : null;
     final layer = _layerDecorations(
       this,
       block,
@@ -234,14 +243,19 @@ final class HomericSyntax {
         ..._listMarkDecorations(
           block,
           glyphs: listGlyphs,
-          hang: hangingLists ? listHangFor(block, caret: caret) : null,
+          hang: hang,
           caret: hangingLists ? caret : null,
         ),
         ..._linkMarkDecorations(block),
       ],
       if (wikiLinks) ..._wikiLinkMarkDecorations(block, caret: caret),
       if (tags) ..._tagMarkDecorations(block),
-      if (checklists) ..._checklistDecorations(block, caret: caret),
+      if (checklists)
+        ..._checklistDecorations(
+          block,
+          caret: caret,
+          hung: hang?.checklist != null,
+        ),
     ];
     final folded = [
       if (annotations || footnotes) ...scan.foldedSpans,
@@ -265,7 +279,12 @@ final class HomericSyntax {
   /// otherwise. The host passes it to [HomericListLine].
   HomericListHang? listHangFor(Block block, {int? caret}) =>
       markdown && hangingLists
-          ? HomericListHang.of(block, caret: caret, glyphs: listGlyphs)
+          ? HomericListHang.of(
+              block,
+              caret: caret,
+              glyphs: listGlyphs,
+              todos: hangingTodos && checklists,
+            )
           : null;
 
   /// Homeric refuses a paragraph whose hidden ranges overlap, so where two
@@ -304,7 +323,8 @@ final class HomericSyntax {
       other.dropCaps == dropCaps &&
       other.images == images &&
       other.listGlyphs == listGlyphs &&
-      other.hangingLists == hangingLists;
+      other.hangingLists == hangingLists &&
+      other.hangingTodos == hangingTodos;
 
   @override
   int get hashCode => Object.hash(
@@ -321,6 +341,7 @@ final class HomericSyntax {
         images,
         listGlyphs,
         hangingLists,
+        hangingTodos,
       );
 }
 
@@ -1149,11 +1170,17 @@ class HomericChecklistSpec {
 
 /// `[ ] task` / `- [x] done` / `☐ task` lines: the marker becomes a box
 /// that ticks on click, and a done line reads struck through. With the
-/// caret on the marker it shows as typed, so it can be edited.
-Iterable<Decoration> _checklistDecorations(Block block, {int? caret}) sync* {
+/// caret on the marker it shows as typed, so it can be edited. A [hung]
+/// first line's box is drawn in the gutter, and its marker folded with the
+/// hang, so only its strike is left here.
+Iterable<Decoration> _checklistDecorations(
+  Block block, {
+  int? caret,
+  bool hung = false,
+}) sync* {
   final text = block.text;
   var lineStart = 0;
-  for (final line in text.split('\n')) {
+  for (final (index, line) in text.split('\n').indexed) {
     final m = HomericChecklists.line.firstMatch(line);
     if (m != null) {
       final body = m.group(3) ?? '';
@@ -1162,7 +1189,7 @@ Iterable<Decoration> _checklistDecorations(Block block, {int? caret}) sync* {
       final markerEnd = text.lastIndexOf(RegExp(r'\S'), bodyStart - 1) + 1;
       final editing = caret != null && caret >= lineStart && caret < bodyStart;
       final done = HomericChecklists.isDone(line, m);
-      if (!editing && markerEnd > markerStart) {
+      if (!editing && markerEnd > markerStart && !(hung && index == 0)) {
         // The box opens the hidden marker rather than following it: the
         // two fold into one span, so the caret at the start of the words
         // draws after the box, where typed text goes. A slot right after

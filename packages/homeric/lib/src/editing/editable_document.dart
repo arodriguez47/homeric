@@ -28,6 +28,7 @@ import '../model/position.dart';
 import '../model/selection.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/homeric_paragraph.dart';
+import '../render/letter_metrics.dart';
 import 'block_height_cache.dart';
 import 'editable_paragraph.dart'
     show HomericEditableBlockGeometry, HomericEditableParagraph;
@@ -68,6 +69,14 @@ enum HomericBlockGrabberAlignment {
   /// line height. `blockGrabberCenterY` is ignored; a block that reports no
   /// baseline (an image, a divider) falls back to [center].
   firstBaseline,
+
+  /// The glyph, drawn as three dots, centres on the middle of the block's
+  /// first-line lower-case letters: half an x-height above its baseline
+  /// ([HomericLetterMetrics]), in the face
+  /// [HomericBlockGrabberStyle.letterStyle] names. It reads as level with
+  /// the words whatever the font, size or line height. A block that
+  /// reports no baseline falls back to [center].
+  firstLineLetters,
 }
 
 final class HomericBlockGrabberStyle {
@@ -78,6 +87,7 @@ final class HomericBlockGrabberStyle {
     this.textStyle,
     this.alignment = HomericBlockGrabberAlignment.center,
     this.holdsRowHeight = true,
+    this.letterStyle,
   })  : assert(idleOpacity >= 0 && idleOpacity <= 1),
         assert(hoverOpacity >= 0 && hoverOpacity <= 1);
 
@@ -102,6 +112,11 @@ final class HomericBlockGrabberStyle {
 
   /// Optional glyph style merged over the inherited text color.
   final TextStyle? textStyle;
+
+  /// The text style of [block]'s first line, whose letters the glyph
+  /// centres on under [HomericBlockGrabberAlignment.firstLineLetters].
+  /// Null, or a null answer, reads the inherited text style.
+  final TextStyle? Function(Block block)? letterStyle;
 }
 
 /// Platform-adaptive touch-selection policy for an editable host.
@@ -610,6 +625,22 @@ final class HomericMountedBlockGeometry {
     final rects = text.rectsForRange(range);
     if (rects == null) return null;
     return List<Rect>.unmodifiable(rects.where((rect) => rect.isFinite));
+  }
+
+  /// The alphabetic baseline of the visual line holding canonical block
+  /// [offset], in link space: where that line's letters stand. A host
+  /// lines a mark up with the letters from it, half an x-height above
+  /// ([HomericLetterMetrics.midlineAboveBaseline]).
+  ///
+  /// Returns `null` once stale, for blocks without text or with none
+  /// typed, or when [offset] lies outside the block.
+  double? baselineAt(int offset) {
+    final text = _text;
+    if (!isCurrent || text == null || offset < 0 || offset > _contentLength) {
+      return null;
+    }
+    final baseline = text.baselineAt(offset);
+    return baseline != null && baseline.isFinite ? baseline : null;
   }
 
   /// Caret rectangle at a canonical block [offset], in link space.
@@ -3274,10 +3305,36 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           widget.onMove(1);
         },
     };
-    Widget grabber = Text(
-      '⋮',
-      style: grabberTextStyle,
-    );
+    final onLetters = widget.grabberStyle.alignment ==
+        HomericBlockGrabberAlignment.firstLineLetters;
+    Widget grabber;
+    if (onLetters) {
+      final letters = widget.grabberStyle.letterStyle?.call(widget.block) ??
+          DefaultTextStyle.of(context).style;
+      final scaler =
+          MediaQuery.maybeTextScalerOf(context) ?? TextScaler.noScaling;
+      grabber = Semantics(
+        label: '⋮',
+        child: ListenableBuilder(
+          listenable: HomericLetterMetrics.changes,
+          builder: (context, _) => _GrabberDots(
+            key: const ValueKey<String>('homeric-grabber-glyph'),
+            color: grabberTextStyle.color!,
+            size: grabberTextStyle.fontSize ?? 14,
+            midline: HomericLetterMetrics.midlineAboveBaseline(
+              letters,
+              textScaler: scaler,
+            ),
+          ),
+        ),
+      );
+    } else {
+      grabber = Text(
+        '⋮',
+        key: const ValueKey<String>('homeric-grabber-glyph'),
+        style: grabberTextStyle,
+      );
+    }
     if (hoverChangesOpacity) {
       final hovered = _grabberHovered ??= ValueNotifier<bool>(false);
       grabber = ValueListenableBuilder<bool>(
@@ -3338,7 +3395,8 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
         );
     final Widget row;
     final onBaseline = widget.grabberStyle.alignment ==
-        HomericBlockGrabberAlignment.firstBaseline;
+            HomericBlockGrabberAlignment.firstBaseline ||
+        onLetters;
     if (onBaseline || !widget.grabberStyle.holdsRowHeight) {
       row = _BaselineGrabberRow(
         grabberWidth: grabberWidth,
@@ -3378,6 +3436,95 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
             )
           : row,
     );
+  }
+}
+
+/// Three dots stacked, the grabber's glyph under
+/// [HomericBlockGrabberAlignment.firstLineLetters]. It reports its baseline
+/// [midline] below its middle, so a row that lines the grabber up with its
+/// words by baseline centres the dots on the letters.
+class _GrabberDots extends LeafRenderObjectWidget {
+  const _GrabberDots({
+    super.key,
+    required this.color,
+    required this.size,
+    required this.midline,
+  });
+
+  final Color color;
+
+  /// The glyph's text size; the dots span 0.8 of it.
+  final double size;
+
+  /// How far above the words' baseline the dots' middle sits.
+  final double midline;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderGrabberDots(color, size, midline);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderGrabberDots render) {
+    render
+      ..color = color
+      ..glyphSize = size
+      ..midline = midline;
+  }
+}
+
+class _RenderGrabberDots extends RenderBox {
+  _RenderGrabberDots(this._color, this._glyphSize, this._midline);
+
+  Color _color;
+  set color(Color value) {
+    if (value == _color) return;
+    _color = value;
+    markNeedsPaint();
+  }
+
+  double _glyphSize;
+  set glyphSize(double value) {
+    if (value == _glyphSize) return;
+    _glyphSize = value;
+    markNeedsLayout();
+  }
+
+  double _midline;
+  set midline(double value) {
+    if (value == _midline) return;
+    _midline = value;
+    markNeedsLayout();
+  }
+
+  Size get _box => Size(_glyphSize * 0.5, _glyphSize * 0.8);
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) =>
+      constraints.constrain(_box);
+
+  @override
+  void performLayout() => size = constraints.constrain(_box);
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) =>
+      size.height / 2 + _midline;
+
+  @override
+  double? computeDryBaseline(
+          BoxConstraints constraints, TextBaseline baseline) =>
+      constraints.constrain(_box).height / 2 + _midline;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final radius = _glyphSize * 0.075;
+    final paint = Paint()
+      ..color = _color
+      ..isAntiAlias = true;
+    final center = offset + size.center(Offset.zero);
+    final pitch = _glyphSize * 0.26;
+    for (final dy in [-pitch, 0.0, pitch]) {
+      context.canvas.drawCircle(center + Offset(0, dy), radius, paint);
+    }
   }
 }
 

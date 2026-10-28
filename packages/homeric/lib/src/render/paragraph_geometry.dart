@@ -1162,6 +1162,20 @@ class ParagraphGeometry {
     return _stamp(_docRangeOf(range.start, range.end));
   }
 
+  /// The alphabetic baseline of the visual line holding document offset
+  /// [doc], from the paragraph's top: where its letters stand, whatever
+  /// the line's height or leading. Null for a paragraph with no text,
+  /// which has no line to measure.
+  GeometryResult<double?> baselineAt(DocOffset doc) {
+    _checkOffset(doc);
+    if (_viewText.isEmpty) return _stamp<double?>(null);
+    final view = _viewMap.docToView(doc.value, assoc: 1);
+    final line = _paragraph
+        .getLineNumberAt(view < _viewText.length ? view : _viewText.length - 1);
+    final metrics = line == null ? null : _paragraph.getLineMetricsAt(line);
+    return _stamp<double?>(metrics?.baseline);
+  }
+
   /// [range], or the empty range at view offset [view] when the laid-out
   /// paragraph has no boundary to give: an empty paragraph answers word
   /// and line queries with the invalid range (-1, -1).

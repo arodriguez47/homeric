@@ -123,6 +123,11 @@ final class HomericEditableBlockGeometry {
               .value
           : null;
 
+  /// The baseline of the visual line holding canonical block [offset],
+  /// paragraph-local; null after invalidation or for an empty paragraph.
+  double? baselineAt(int offset) =>
+      isCurrent ? _geometry.baselineAt(DocOffset(offset)).value : null;
+
   /// Returns paragraph-local rectangles for one canonical block range,
   /// hugging its glyphs on each line
   /// ([ParagraphGeometry.inkRectsForRange]).

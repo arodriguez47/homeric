@@ -331,6 +331,8 @@ final class HomericSyntaxPaint {
     this.annotationUnderline = const Color(0x992F6F66),
     this.tagWash = const Color(0x2E5FA89C),
     this.highlightWash = const Color(0x55E8C547),
+    this.commentWash,
+    this.commentWashFill = 1,
   });
 
   /// The soft underline under an annotated passage.
@@ -342,6 +344,17 @@ final class HomericSyntaxPaint {
   /// The marker ink behind `==highlight==`, drawn as a hand-drawn stroke
   /// ([markerStrokePainter]) rather than a flat box.
   final Color highlightWash;
+
+  /// The wash behind an aside ([HomericMarkKind.comment]: `++aside++`, and
+  /// an open `{{passage|note}}`'s note), hugging its letters on each line.
+  /// A host whose aside sets a taller line than its letters (so a wrapped
+  /// note keeps the prose's pitch) paints its wash here rather than with a
+  /// `backgroundColor`, which would fill the whole line. Null draws none.
+  final Color? commentWash;
+
+  /// How much of the aside's line box, centred on it, [commentWash]
+  /// covers: under 1 when the aside's line is taller than its letters.
+  final double commentWashFill;
 
   /// Annotation underlines, tag pills and highlight strokes for the
   /// [HomericMarkSpec] runs in [decorations].
@@ -404,11 +417,36 @@ final class HomericSyntaxPaint {
               ),
             ),
           );
+        case HomericMarkKind.comment:
+          final wash = commentWash;
+          if (wash == null) break;
+          layers.add(
+            PaintLayer(
+              range: range,
+              band: PaintBand.underlay,
+              painter: commentWashPainter,
+              fit: PaintLayerFit.inkLine,
+              spec: CommentWashSpec(wash, fill: commentWashFill),
+            ),
+          );
         default:
           break;
       }
     }
     return layers;
+  }
+
+  /// A flat wash over an aside's letters on one line: the middle
+  /// [CommentWashSpec.fill] of its line box.
+  static void commentWashPainter(Canvas canvas, Rect rect, Object? spec) {
+    final wash = spec is CommentWashSpec
+        ? spec
+        : const CommentWashSpec(Color(0x14000000));
+    final height = rect.height * wash.fill.clamp(0.0, 1.0);
+    canvas.drawRect(
+      Rect.fromCenter(center: rect.center, width: rect.width, height: height),
+      Paint()..color = wash.color,
+    );
   }
 
   /// A rounded wash a little wider than a tag's text.
@@ -431,10 +469,39 @@ final class HomericSyntaxPaint {
       other is HomericSyntaxPaint &&
       other.annotationUnderline == annotationUnderline &&
       other.tagWash == tagWash &&
-      other.highlightWash == highlightWash;
+      other.highlightWash == highlightWash &&
+      other.commentWash == commentWash &&
+      other.commentWashFill == commentWashFill;
 
   @override
-  int get hashCode => Object.hash(annotationUnderline, tagWash, highlightWash);
+  int get hashCode => Object.hash(
+        annotationUnderline,
+        tagWash,
+        highlightWash,
+        commentWash,
+        commentWashFill,
+      );
+}
+
+/// [HomericSyntaxPaint.commentWashPainter]'s colour and how much of the
+/// line box it covers.
+@immutable
+final class CommentWashSpec {
+  /// A wash of [color] over the middle [fill] of the line box.
+  const CommentWashSpec(this.color, {this.fill = 1});
+
+  /// The wash's colour.
+  final Color color;
+
+  /// The share of the line box's height it covers, centred.
+  final double fill;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CommentWashSpec && other.color == color && other.fill == fill;
+
+  @override
+  int get hashCode => Object.hash(color, fill);
 }
 
 /// Whether every offset from [start] to [end] lies inside one of the

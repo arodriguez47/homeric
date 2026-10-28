@@ -1,3 +1,5 @@
+import 'dart:ui' show PictureRecorder;
+
 import 'package:flutter/material.dart' hide Decoration;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -559,5 +561,49 @@ void main() {
       expect(layers, hasLength(3));
       expect(layers.where((l) => l.band == PaintBand.overlay), hasLength(1));
     });
+
+    test('an aside is washed only when the host asks for it', () {
+      final ds = derive('a ++aside++ b', HomericSyntax.all);
+      expect(const HomericSyntaxPaint().layersFor(ds), isEmpty);
+      final layers = const HomericSyntaxPaint(
+        commentWash: Color(0x14000000),
+        commentWashFill: 0.6,
+      ).layersFor(ds);
+      expect(layers, hasLength(1));
+      expect(layers.single.band, PaintBand.underlay);
+      expect(layers.single.fit, PaintLayerFit.inkLine);
+      expect(
+        layers.single.spec,
+        const CommentWashSpec(Color(0x14000000), fill: 0.6),
+      );
+    });
+
+    test('the aside wash covers the middle of its line box', () {
+      final recorder = PictureRecorder();
+      final canvas = _RectCanvas(Canvas(recorder));
+      HomericSyntaxPaint.commentWashPainter(
+        canvas,
+        const Rect.fromLTWH(10, 100, 50, 40),
+        const CommentWashSpec(Color(0x14000000), fill: 0.5),
+      );
+      recorder.endRecording().dispose();
+      expect(canvas.rects.single, const Rect.fromLTWH(10, 110, 50, 20));
+    });
   });
+}
+
+/// Records the rects drawn on it.
+class _RectCanvas implements Canvas {
+  _RectCanvas(this._inner);
+  final Canvas _inner;
+  final rects = <Rect>[];
+
+  @override
+  void drawRect(Rect rect, Paint paint) {
+    rects.add(rect);
+    _inner.drawRect(rect, paint);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

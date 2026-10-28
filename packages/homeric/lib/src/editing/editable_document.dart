@@ -818,6 +818,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       HomericSelectionOverlayCoordinator();
   final Object _touchHandleDragOwner = Object();
   HomericSelectionEndpoint? _touchMovingEndpoint;
+
+  /// How far the finger landed from the middle of its handle's line. A drag
+  /// carries the selection point, not the fingertip, as in EditableText.
+  double _touchHandleGrabDy = 0;
   String? _touchStationaryBlockId;
   Object? _touchStationaryHostOwner;
   int? _touchStationaryLayoutGeneration;
@@ -1171,15 +1175,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   /// Extends the current pointer selection through mounted row geometry.
+  ///
+  /// [autoscrollPoint] is where the finger is when that differs from the
+  /// selection point, as for a touch handle held away from its line; the
+  /// viewport edges scroll for the finger.
   bool updatePointerSelectionDrag(
     Offset globalPoint, {
     Object? owner,
+    Offset? autoscrollPoint,
   }) {
     if (owner != null && !identical(owner, _selectionDragOwner)) return false;
     if (!_selectionDragActive || _selectionDragAnchor == null) return false;
     _selectionDragPointer = globalPoint;
     _updatePointerSelectionHead(globalPoint);
-    _syncSelectionAutoscroll(globalPoint);
+    _syncSelectionAutoscroll(autoscrollPoint ?? globalPoint);
     return true;
   }
 
@@ -1657,7 +1666,18 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _touchStationaryBlockId = resolved.block.id;
     _touchStationaryHostOwner = stationaryOwner;
     _touchStationaryLayoutGeneration = stationaryGeometry?.layoutGeneration;
-    _updateTouchMagnifier(globalPosition);
+    final moving = selectionEndpointGeometry(endpoint)?.globalRect;
+    final render = context.findRenderObject();
+    // Endpoint rects carry a global top-left and a local size; a zoomed host
+    // draws the line taller by its scale.
+    final scale = render is RenderBox && render.attached
+        ? render.localToGlobal(const Offset(0, 1)).dy -
+            render.localToGlobal(Offset.zero).dy
+        : 1.0;
+    _touchHandleGrabDy = moving == null
+        ? 0
+        : moving.top + moving.height * scale / 2 - globalPosition.dy;
+    _updateTouchMagnifier(globalPosition.translate(0, _touchHandleGrabDy));
   }
 
   void _updateTouchHandleDrag(Offset globalPosition) {
@@ -1665,8 +1685,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         !identical(_selectionDragOwner, _touchHandleDragOwner)) {
       return;
     }
-    updatePointerSelectionDrag(globalPosition, owner: _touchHandleDragOwner);
-    _updateTouchMagnifier(globalPosition);
+    final point = globalPosition.translate(0, _touchHandleGrabDy);
+    updatePointerSelectionDrag(
+      point,
+      owner: _touchHandleDragOwner,
+      autoscrollPoint: globalPosition,
+    );
+    _updateTouchMagnifier(point);
   }
 
   void _endTouchHandleDrag() {

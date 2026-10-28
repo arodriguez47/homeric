@@ -1256,6 +1256,61 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('iOS handles stand on the selected line', (tester) async {
+    final document = _document(const <String>['alpha', 'beta gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(1, 5),
+        head: document.positionAt(1, 10),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+
+    final paragraph = find.byType(HomericParagraph).at(1);
+    final geometry = ParagraphGeometry(
+      tester.renderObject<RenderHomericParagraph>(paragraph),
+    );
+    final origin = tester.getTopLeft(paragraph);
+    Rect caret(int offset) =>
+        geometry.caretRect(DocOffset(offset)).value.shift(origin);
+    Rect handle(HomericSelectionEndpoint endpoint) {
+      final target = tester.widget<CompositedTransformTarget>(find.byKey(
+        ValueKey<(HomericSelectionEndpoint, String)>((endpoint, 'block-1')),
+      ));
+      return tester.getRect(find.descendant(
+        of: find.byWidgetPredicate(
+          (widget) =>
+              widget is CompositedTransformFollower &&
+              identical(widget.link, target.link),
+        ),
+        matching: find.byType(CustomPaint),
+      ));
+    }
+
+    final start = caret(5);
+    final end = caret(10);
+    final startHandle = handle(HomericSelectionEndpoint.start);
+    final endHandle = handle(HomericSelectionEndpoint.end);
+    // The start handle's bar runs down the selected line to its foot, with
+    // the knob above; the end handle's bar runs down to a knob below it.
+    expect(startHandle.bottom, moreOrLessEquals(start.bottom, epsilon: 1));
+    expect(startHandle.top, lessThan(start.top));
+    expect(startHandle.center.dx, moreOrLessEquals(start.left, epsilon: 2));
+    expect(endHandle.top, lessThanOrEqualTo(end.top + 1));
+    expect(endHandle.bottom, greaterThan(end.bottom));
+    expect(endHandle.center.dx, moreOrLessEquals(end.left, epsilon: 2));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('touch handle keeps physical ownership across mounted rows',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -1310,16 +1365,20 @@ void main() {
           widget is CompositedTransformFollower &&
           identical(widget.link, startTarget.link),
     );
+    final grip = tester.getCenter(find.descendant(
+      of: startHandle,
+      matching: find.byType(GestureDetector),
+    ));
     final drag = await tester.startGesture(
-      tester.getCenter(find.descendant(
-        of: startHandle,
-        matching: find.byType(GestureDetector),
-      )),
+      grip,
       kind: PointerDeviceKind.touch,
     );
     await drag.moveBy(const Offset(0, 24));
     await tester.pump();
-    await drag.moveTo(secondWord);
+    // The drag carries the selection point, which sits where the drag began
+    // relative to the line, not under the fingertip.
+    final held = grip.dy + 24 - firstStart.dy;
+    await drag.moveTo(secondWord.translate(0, held));
     await tester.pump();
     await tester.pump();
 
@@ -1339,7 +1398,7 @@ void main() {
       reason: 'the moving physical handle retains one document-owned link',
     );
 
-    await drag.moveTo(firstStart);
+    await drag.moveTo(firstStart.translate(0, held));
     await tester.pump();
     await tester.pump();
     expect(controller.selection!.isCollapsed, isFalse);

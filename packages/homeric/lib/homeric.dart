@@ -18,7 +18,8 @@ export 'src/editing/spell_check.dart'
     show
         HomericPlatformSpellCheckProvider,
         HomericSpellCheckProvider,
-        HomericSpellCheckRequest;
+        HomericSpellCheckRequest,
+        HomericSpelledSlot;
 export 'src/editing/text_magnifier.dart'
     show
         HomericSystemLoupe,

@@ -854,7 +854,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       resolveStyle: (_) => null,
       spec: widget.paragraphSpec,
     );
-    _ensureSpellCheck(semanticsSource);
+    _ensureSpellCheck(semanticsSource, block.text);
     final focused = localSelection != null &&
         (_ownsEditingFocus || (_documentHost?.hasEditingFocus ?? false));
     final brightness = MediaQuery.maybePlatformBrightnessOf(context) ??
@@ -3216,18 +3216,19 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             suggestion.contentRevision == _controller.contentRevision,
       );
 
-  void _ensureSpellCheck(ParagraphSource<Object?> source) {
+  void _ensureSpellCheck(ParagraphSource<Object?> source, String docText) {
     final provider = widget.spellCheckProvider;
     if (provider == null ||
         _controller.composing != null ||
         !_isHostEpochCurrent(_hostEpoch)) {
       return;
     }
+    final spelled = _SpelledText.of(source, docText);
     final key = _SpellRequestKey(
       provider: provider,
       blockId: widget.blockId,
       contentRevision: _controller.contentRevision,
-      text: source.viewText,
+      text: spelled.text,
       viewMap: source.viewMap,
     );
     if (_spellRequestKey == key) return;
@@ -3258,13 +3259,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       for (final suggestion in suggestions) {
         if (suggestion.range.start < 0 ||
             suggestion.range.end <= suggestion.range.start ||
-            suggestion.range.end > source.viewText.length ||
+            suggestion.range.end > spelled.text.length ||
             suggestion.suggestions.isEmpty) {
           continue;
         }
-        final start =
-            source.viewMap.viewToDoc(suggestion.range.start, assoc: -1);
-        final end = source.viewMap.viewToDoc(suggestion.range.end, assoc: 1);
+        final start = spelled.toDoc(suggestion.range.start, assoc: -1);
+        final end = spelled.toDoc(suggestion.range.end, assoc: 1);
         if (start >= end) continue;
         resolved.add(_ResolvedSpellingSuggestion(
           range: BlockTextRange(start, end),
@@ -3963,6 +3963,60 @@ final class _MenuWitness {
 
   final int epoch;
   final int stateRevision;
+}
+
+/// What spelling reads for one paragraph: its view text, with each
+/// [HomericSpelledSlot] read as the letters it stands for.
+final class _SpelledText {
+  const _SpelledText._(this.text, this._viewMap, this._standIns);
+
+  factory _SpelledText.of(ParagraphSource<Object?> source, String docText) {
+    final viewText = source.viewText;
+    final map = source.viewMap;
+    final standIns = <({int start, int length, int doc})>[];
+    final text = StringBuffer();
+    var view = 0;
+    for (final slot in source.slots) {
+      final spec = slot.spec;
+      final spelling = spec is HomericSpelledSlot ? spec.spelledAs : null;
+      if (spelling == null || spelling.isEmpty) continue;
+      // The letters must be the end of what the slot folds, so a fix
+      // edits them and leaves the rest of the fold.
+      final docStart = map.viewToDoc(slot.viewOffset, assoc: -1);
+      final docEnd = map.viewToDoc(slot.viewEnd, assoc: 1);
+      final doc = docEnd - spelling.length;
+      if (doc < docStart ||
+          docEnd > docText.length ||
+          docText.substring(doc, docEnd) != spelling) {
+        continue;
+      }
+      text.write(viewText.substring(view, slot.viewOffset));
+      standIns.add((start: text.length, length: spelling.length, doc: doc));
+      text.write(spelling);
+      view = slot.viewEnd;
+    }
+    if (standIns.isEmpty) return _SpelledText._(viewText, map, const []);
+    text.write(viewText.substring(view));
+    return _SpelledText._(text.toString(), map, standIns);
+  }
+
+  final String text;
+  final ViewMap _viewMap;
+  final List<({int start, int length, int doc})> _standIns;
+
+  /// The document offset of [offset] in [text].
+  int toDoc(int offset, {required int assoc}) {
+    // Each stand-in reads as its letters where the view has one slot.
+    var shift = 0;
+    for (final standIn in _standIns) {
+      if (offset < standIn.start) break;
+      if (offset <= standIn.start + standIn.length) {
+        return standIn.doc + offset - standIn.start;
+      }
+      shift += standIn.length - 1;
+    }
+    return _viewMap.viewToDoc(offset - shift, assoc: assoc);
+  }
 }
 
 final class _SpellRequestKey {

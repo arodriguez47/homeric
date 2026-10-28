@@ -13,6 +13,18 @@ abstract interface class HomericSpellCheckProvider {
   );
 }
 
+/// A widget slot spec that stands for folded letters, such as a drop cap
+/// drawn beside its paragraph while its source letter folds away.
+///
+/// Spelling reads [spelledAs] where the slot sits, so the word the slot
+/// starts stays whole (`Remember`, not `emember`). The folded text the
+/// slot replaces must end with [spelledAs]; a fix offered for that word
+/// then edits those letters and keeps the rest of the fold.
+abstract interface class HomericSpelledSlot {
+  /// The text spelling reads in place of the slot, or null for none.
+  String? get spelledAs;
+}
+
 /// Immutable input to a [HomericSpellCheckProvider].
 @immutable
 final class HomericSpellCheckRequest {

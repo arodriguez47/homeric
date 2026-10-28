@@ -1383,6 +1383,25 @@ widening it extends it without reshaping what was drawn.
 randomness uses `inkLine`, and never seeds from geometry. Evidence:
 `test/writing/marker_stroke_test.dart`.
 
+## editor-architect — 2026-10-28 — Line focus carries its line across a keystroke
+
+**What:** Line focus dimming learns where the caret's visual line runs from
+the paragraph's layout (`observeGeometry`, called while the overlay builds,
+notifying after the frame). Paint layers are derived at build, before that
+layout. Each keystroke bumps the document revision, so the stored line went
+stale and `_activeRangeFor` fell back to the whole paragraph: the caret's
+paragraph lit up for one frame on every key, a flicker while typing.
+
+**Fix:** a stale line witness carries across the edit. Its end moves by how
+much the block's length changed, and it widens to hold the selection, until
+the new layout reports the line. What remains is a keystroke that wraps a
+word onto the next line: that word settles one frame late, with the reflow.
+
+**Rule going forward:** anything derived at build from layout geometry is a
+frame behind an edit. Carry the last measured value through the edit; never
+fall back to a wider default for that frame. A frame-exact fix would resolve
+the line at paint time inside `paintLayerBand`. Evidence:
+`test/writing/focus_dim_line_typing_test.dart`.
 ## engineer — 2026-10-28 — Touch handles hang from the foot of the line
 
 **What:** On iPhone both selection handles drew one line above the selection.

@@ -818,6 +818,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       HomericSelectionOverlayCoordinator();
   final Object _touchHandleDragOwner = Object();
   HomericSelectionEndpoint? _touchMovingEndpoint;
+
+  /// How far the finger landed from the middle of its handle's line. A drag
+  /// carries the selection point, not the fingertip, as in EditableText.
+  double _touchHandleGrabDy = 0;
   String? _touchStationaryBlockId;
   Object? _touchStationaryHostOwner;
   int? _touchStationaryLayoutGeneration;
@@ -1657,7 +1661,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _touchStationaryBlockId = resolved.block.id;
     _touchStationaryHostOwner = stationaryOwner;
     _touchStationaryLayoutGeneration = stationaryGeometry?.layoutGeneration;
-    _updateTouchMagnifier(globalPosition);
+    final moving = selectionEndpointGeometry(endpoint)?.globalRect;
+    _touchHandleGrabDy =
+        moving == null ? 0 : moving.center.dy - globalPosition.dy;
+    _updateTouchMagnifier(globalPosition.translate(0, _touchHandleGrabDy));
   }
 
   void _updateTouchHandleDrag(Offset globalPosition) {
@@ -1665,8 +1672,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         !identical(_selectionDragOwner, _touchHandleDragOwner)) {
       return;
     }
-    updatePointerSelectionDrag(globalPosition, owner: _touchHandleDragOwner);
-    _updateTouchMagnifier(globalPosition);
+    final point = globalPosition.translate(0, _touchHandleGrabDy);
+    updatePointerSelectionDrag(point, owner: _touchHandleDragOwner);
+    _updateTouchMagnifier(point);
   }
 
   void _endTouchHandleDrag() {

@@ -417,6 +417,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   final HomericSelectionOverlayCoordinator _localTouchOverlayCoordinator =
       HomericSelectionOverlayCoordinator();
   HomericSelectionEndpoint? _localTouchMovingEndpoint;
+
+  /// How far the finger landed from the middle of its handle's line. A drag
+  /// carries the selection point, not the fingertip, as in EditableText.
+  double _localTouchHandleGrabDy = 0;
   bool _localTouchSelectionRequested = false;
   bool _localTouchSelectionSyncScheduled = false;
   int _hostEpoch = 0;
@@ -1843,13 +1847,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             assoc: _assoc(local.affinity),
           )
           .value;
+      // Flutter's handles hang from the selection point at the foot of the
+      // line, as EditableText leads them, so the target sits on that line's
+      // bottom edge rather than over the caret.
       targets.add(
         Positioned.fromRect(
           rect: Rect.fromLTWH(
             rect.left,
-            rect.top,
+            rect.bottom,
             rect.width <= 0 ? 1 : rect.width,
-            rect.height <= 0 ? 1 : rect.height,
+            0,
           ),
           child: IgnorePointer(
             child: CompositedTransformTarget(
@@ -2306,7 +2313,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _dragAnchor = endpoint == HomericSelectionEndpoint.start
         ? selection.end
         : selection.start;
-    _updateLocalTouchMagnifier(geometry, globalPosition);
+    final render = _overlayContext?.findRenderObject();
+    final moving = render is RenderBox && render.attached
+        ? _localTouchEndpoint(endpoint, geometry, render)?.globalRect
+        : null;
+    _localTouchHandleGrabDy =
+        moving == null ? 0 : moving.center.dy - globalPosition.dy;
+    _updateLocalTouchMagnifier(
+      geometry,
+      globalPosition.translate(0, _localTouchHandleGrabDy),
+    );
   }
 
   void _updateLocalTouchHandleDrag(Offset globalPosition) {
@@ -2321,8 +2337,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _endLocalTouchHandleDrag();
       return;
     }
-    _updateSelectionDrag(geometry, render.globalToLocal(globalPosition));
-    _updateLocalTouchMagnifier(geometry, globalPosition);
+    final point = globalPosition.translate(0, _localTouchHandleGrabDy);
+    _updateSelectionDrag(geometry, render.globalToLocal(point));
+    _updateLocalTouchMagnifier(geometry, point);
   }
 
   void _endLocalTouchHandleDrag() {
@@ -2525,6 +2542,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     }
     if (Overlay.maybeOf(context, rootOverlay: true) == null) return;
     final anchor = render.localToGlobal(point);
+    final below = useSecondaryAnchor ? null : _selectionMenuBelow(render);
     _dismissContextMenu();
     late final ContextMenuController menu;
     menu = ContextMenuController(onRemove: () {
@@ -2574,7 +2592,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                   return KeyEventResult.ignored;
                 },
                 child: AdaptiveTextSelectionToolbar(
-                  anchors: TextSelectionToolbarAnchors(primaryAnchor: anchor),
+                  anchors: TextSelectionToolbarAnchors(
+                    primaryAnchor: anchor,
+                    secondaryAnchor: below,
+                  ),
                   children: <Widget>[
                     for (var index = 0; index < adaptiveButtons.length; index++)
                       Actions(
@@ -2626,6 +2647,24 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   }
 
   Offset? _selectionMenuAnchor() => _selectionMenuRect()?.topCenter;
+
+  /// Where a drawn menu without room above the selection goes instead: under
+  /// the selection and the touch handles hanging from it, as EditableText
+  /// places its own.
+  Offset? _selectionMenuBelow(RenderBox render) {
+    final rect = _selectionMenuRect();
+    if (rect == null) return null;
+    final controls = _resolvedTouchSelectionConfiguration?.selectionControls;
+    final lineHeight = _currentGeometry()
+            ?.caretRect(
+              DocOffset(_localSelection()?.end ?? 0),
+            )
+            .value
+            .height ??
+        rect.height;
+    final handle = controls?.getHandleSize(lineHeight).height ?? 0;
+    return render.localToGlobal(rect.bottomCenter + Offset(0, handle));
+  }
 
   List<ContextMenuButtonItem> _contextMenuItems(_MenuWitness witness) {
     final selection = _localSelection();

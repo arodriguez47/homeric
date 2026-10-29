@@ -143,7 +143,8 @@ final class HomericLinkQuery {
     required this.end,
     required this.target,
     this.alias,
-  });
+    int? sourceEnd,
+  }) : sourceEnd = sourceEnd ?? end;
 
   /// The block being typed in.
   final String blockId;
@@ -158,8 +159,16 @@ final class HomericLinkQuery {
   final String target;
 
   /// What is typed after `|`, when the writer is giving the link their own
-  /// words.
+  /// words, or the words a wrap kept after the caret (`[[|words]]`).
   final String? alias;
+
+  /// Where the link's source ends: the caret while typing, or after the
+  /// `|words]]` a wrap left after it. Picking a note replaces
+  /// `[start, sourceEnd)`.
+  final int sourceEnd;
+
+  /// `|words]]` right after the caret, as a typed wrap leaves it.
+  static final RegExp _keptAlias = RegExp(r'\|([^\[\]\n|]+)\]\]');
 
   /// Longest query read as a link being typed.
   static const maxLength = 80;
@@ -168,8 +177,15 @@ final class HomericLinkQuery {
   ///
   /// The query runs from the `[[` to the caret on one line, holds no other
   /// bracket, and is not already closed by `]]` after the caret (that is a
-  /// finished link being edited).
-  static HomericLinkQuery? at(String blockId, String text, int caret) {
+  /// finished link being edited). The one exception is the `[[` at
+  /// [wrappedAt], which a typed wrap wrote as `[[|words]]`: there the
+  /// `|words]]` after the caret is the alias the link will keep.
+  static HomericLinkQuery? at(
+    String blockId,
+    String text,
+    int caret, {
+    int? wrappedAt,
+  }) {
     if (caret < 2 || caret > text.length) return null;
     final open = text.lastIndexOf('[[', caret - 2);
     if (open < 0 || caret - open - 2 > maxLength) return null;
@@ -180,6 +196,19 @@ final class HomericLinkQuery {
     // starting one.
     final lineEnd = text.indexOf('\n', caret);
     final rest = text.substring(caret, lineEnd < 0 ? text.length : lineEnd);
+    if (open == wrappedAt && !typed.contains('|')) {
+      final kept = _keptAlias.matchAsPrefix(rest);
+      if (kept != null) {
+        return HomericLinkQuery(
+          blockId: blockId,
+          start: open,
+          end: caret,
+          target: typed.trim(),
+          alias: kept.group(1)!.trim(),
+          sourceEnd: caret + kept.end,
+        );
+      }
+    }
     final close = rest.indexOf(']]');
     final reopen = rest.indexOf('[[');
     if (close >= 0 && (reopen < 0 || close < reopen)) return null;
@@ -201,8 +230,10 @@ final class HomericLinkQuery {
       other.start == start &&
       other.end == end &&
       other.target == target &&
-      other.alias == alias;
+      other.alias == alias &&
+      other.sourceEnd == sourceEnd;
 
   @override
-  int get hashCode => Object.hash(blockId, start, end, target, alias);
+  int get hashCode =>
+      Object.hash(blockId, start, end, target, alias, sourceEnd);
 }

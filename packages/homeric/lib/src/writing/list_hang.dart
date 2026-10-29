@@ -19,8 +19,10 @@ import 'package:flutter/widgets.dart' hide Decoration;
 import '../decoration/decoration.dart';
 import '../editing/markdown_list_indent.dart';
 import '../model/block.dart';
+import '../render/letter_metrics.dart';
 import 'checklists.dart';
 import 'list_glyphs.dart';
+import 'syntax_decorations.dart' show HomericChecklistSpec;
 
 /// Replacement spec for the folded marker of a hung list line.
 final class HomericListHangSpec {
@@ -40,6 +42,7 @@ final class HomericListHang {
     required this.mark,
     required this.prefixEnd,
     required this.kind,
+    this.checklist,
   });
 
   /// The block the line is.
@@ -54,22 +57,49 @@ final class HomericListHang {
   /// End of the folded source (indent, marker and its space).
   final int prefixEnd;
 
-  /// Bullet or numbered.
+  /// Bullet or numbered; a to-do counts as a bullet.
   final HomericMarkdownListKind kind;
 
-  /// The hang for [block], or null when it is not a list line, is a to-do
-  /// (its box stays in the line), or holds [caret] (a caret offset in the
-  /// block) inside its marker. [glyphs] off shows • and numbers as typed.
+  /// A to-do line's box: where its marker is and whether it is ticked.
+  /// Null for a bullet or a number.
+  final HomericChecklistSpec? checklist;
+
+  /// The hang for [block], or null when it is not a list line, or holds
+  /// [caret] (a caret offset in the block) inside its marker. A to-do hangs
+  /// only with [todos]; otherwise its box stays in the line. [glyphs] off
+  /// shows • and numbers as typed.
   static HomericListHang? of(
     Block block, {
     int? caret,
     bool glyphs = true,
+    bool todos = false,
   }) {
     final text = block.text;
+    final firstLine = text.split('\n').first;
+    final todo = HomericChecklists.line.firstMatch(firstLine);
+    if (todo != null) {
+      if (!todos) return null;
+      final bodyStart = firstLine.length - (todo.group(3) ?? '').length;
+      if (caret != null && caret < bodyStart) return null;
+      final markerStart = firstLine.length - firstLine.trimLeft().length;
+      final markerEnd = firstLine.lastIndexOf(RegExp(r'\S'), bodyStart - 1) + 1;
+      final done = HomericChecklists.isDone(firstLine, todo);
+      return HomericListHang(
+        blockId: block.id,
+        depth: depthOf(firstLine.substring(0, markerStart)),
+        mark: done ? '☑' : '☐',
+        prefixEnd: bodyStart,
+        kind: HomericMarkdownListKind.bullet,
+        checklist: HomericChecklistSpec(
+          blockId: block.id,
+          markerStart: markerStart,
+          markerEnd: markerEnd,
+          done: done,
+        ),
+      );
+    }
     final match = HomericMarkdownListPrefix.match(text);
     if (match == null) return null;
-    final firstLine = text.split('\n').first;
-    if (HomericChecklists.line.hasMatch(firstLine)) return null;
     if (caret != null && caret < match.prefixEnd) return null;
     final depth = depthOf(text.substring(0, match.indentLength));
     final String mark;
@@ -112,10 +142,12 @@ final class HomericListHang {
       other.depth == depth &&
       other.mark == mark &&
       other.prefixEnd == prefixEnd &&
-      other.kind == kind;
+      other.kind == kind &&
+      other.checklist == checklist;
 
   @override
-  int get hashCode => Object.hash(blockId, depth, mark, prefixEnd, kind);
+  int get hashCode =>
+      Object.hash(blockId, depth, mark, prefixEnd, kind, checklist);
 }
 
 /// Lays out a list line: its marker in a gutter, its words (the [child]
@@ -123,8 +155,9 @@ final class HomericListHang {
 /// line's words.
 ///
 /// Each level of nesting moves the gutter one [step] to the right, so a
-/// nested item's marker sits under its parent's words. The marker shares
-/// the first line's baseline.
+/// nested item's marker sits under its parent's words. The marker is a
+/// [HomericListMark]: a number shares the first line's baseline, and a
+/// bullet or a to-do's box centres on the middle of its letters.
 ///
 /// With [onIndent], a horizontal swipe on the line nests it (right) or
 /// takes it out a level (left): the touch path for Tab and Shift-Tab. The
@@ -140,27 +173,54 @@ class HomericListLine extends StatefulWidget {
     required this.child,
     this.step,
     this.onIndent,
+    this.todoMark,
+    this.todoSize,
+    this.textScaler,
+    this.textHeightBehavior = const TextHeightBehavior(),
   });
 
   /// The line, or null when [child] is not hung.
   final HomericListHang? hang;
 
-  /// The marker's style; the line's own text style, usually.
+  /// The marker's style: the line's own text style, the one its paragraph
+  /// is laid out with, so the marker's line is exactly as tall.
   final TextStyle markStyle;
 
   /// Width of one level and of the marker's column. Defaults to 1.5 times
-  /// [markStyle]'s font size.
+  /// [markStyle]'s font size as drawn (after the text scaler).
   final double? step;
 
   /// Called with `false` for a swipe right (nest) and `true` for a swipe
   /// left (out a level). Null turns swiping off.
   final ValueChanged<bool>? onIndent;
 
+  /// Builds a to-do line's box ([HomericListHang.checklist]), which
+  /// [HomericListMark.box] centres on the line's letters. Without it a
+  /// to-do shows a plain drawn box.
+  final Widget Function(BuildContext context, HomericListHang hang)? todoMark;
+
+  /// The box [todoMark] draws. Defaults to a square 0.8 of the line's text
+  /// size, at the system text size.
+  final Size? todoSize;
+
+  /// The paragraph's text scaler, when the host gives it one; otherwise
+  /// the system text size, as the paragraph's own.
+  final TextScaler? textScaler;
+
+  /// The paragraph's line-height behaviour.
+  final TextHeightBehavior textHeightBehavior;
+
   /// The paragraph.
   final Widget child;
 
-  /// Width of one level for [style]: 1.5 times its font size.
-  static double stepFor(TextStyle style) => (style.fontSize ?? 14) * 1.5;
+  /// Width of one level for [style] at [textScaler]'s size: 1.5 times its
+  /// font size as drawn, so the gutter keeps its proportion to the words
+  /// at every text size.
+  static double stepFor(
+    TextStyle style, {
+    TextScaler textScaler = TextScaler.noScaling,
+  }) =>
+      textScaler.scale(style.fontSize ?? 14) * 1.5;
 
   /// How far [hang]'s words sit from the line's left edge.
   static double gutterFor(HomericListHang hang, double step) =>
@@ -189,14 +249,54 @@ class _HomericListLineState extends State<HomericListLine> {
     if (widget.hang == null) _drag = 0;
   }
 
+  Widget _mark(BuildContext context, HomericListHang hang) {
+    final scaler = widget.textScaler;
+    final behavior = widget.textHeightBehavior;
+    if (hang.checklist != null) {
+      final size = widget.todoSize ??
+          Size.square(
+            (scaler ?? HomericListMark._scalerOf(context))
+                    .scale(widget.markStyle.fontSize ?? 14) *
+                0.8,
+          );
+      return HomericListMark.box(
+        style: widget.markStyle,
+        size: size,
+        textScaler: scaler,
+        textHeightBehavior: behavior,
+        child: widget.todoMark?.call(context, hang) ??
+            _PlainBox(done: hang.checklist!.done, style: widget.markStyle),
+      );
+    }
+    return switch (hang.kind) {
+      HomericMarkdownListKind.bullet => HomericListMark.bullet(
+          depth: hang.depth,
+          style: widget.markStyle,
+          textScaler: scaler,
+          textHeightBehavior: behavior,
+        ),
+      HomericMarkdownListKind.ordered => HomericListMark.label(
+          hang.mark,
+          style: widget.markStyle,
+          textScaler: scaler,
+          textHeightBehavior: behavior,
+        ),
+    };
+  }
+
   // The tree has one shape whether or not the line is hung, so a paragraph
   // that becomes a list line as `- ` is typed keeps its state and focus.
   @override
   Widget build(BuildContext context) {
     final hang = widget.hang;
-    final step = widget.step ?? HomericListLine.stepFor(widget.markStyle);
+    final step = widget.step ??
+        HomericListLine.stepFor(
+          widget.markStyle,
+          textScaler: widget.textScaler ?? HomericListMark._scalerOf(context),
+        );
     final gutter = hang == null ? 0.0 : HomericListLine.gutterFor(hang, step);
-    final bullet = hang?.kind == HomericMarkdownListKind.bullet;
+    final todo = hang?.checklist != null;
+    final bullet = hang?.kind == HomericMarkdownListKind.bullet && !todo;
     final onIndent = hang == null ? null : widget.onIndent;
     final line = Transform.translate(
       offset: Offset(_drag, 0),
@@ -211,24 +311,17 @@ class _HomericListLineState extends State<HomericListLine> {
                 : Padding(
                     padding: EdgeInsetsDirectional.only(
                       start: hang.depth * step,
-                      end: step * (bullet ? 0.3 : 0.2),
+                      end: step * (bullet ? 0.3 : (todo ? 0.27 : 0.2)),
                     ),
                     child: Align(
+                      // As tall as the mark, whatever room the row has.
+                      heightFactor: 1,
                       alignment: bullet
                           ? Alignment.center
                           : AlignmentDirectional.centerEnd,
                       child: KeyedSubtree(
                         key: const ValueKey<String>('homeric-list-mark'),
-                        child: bullet
-                            ? _Bullet(
-                                depth: hang.depth, style: widget.markStyle)
-                            : Text(
-                                hang.mark,
-                                maxLines: 1,
-                                softWrap: false,
-                                overflow: TextOverflow.visible,
-                                style: widget.markStyle,
-                              ),
+                        child: _mark(context, hang),
                       ),
                     ),
                   ),
@@ -289,72 +382,217 @@ class _HomericListLineState extends State<HomericListLine> {
   }
 }
 
-/// A bullet drawn rather than typed, so it never depends on the font
-/// having ● ◯ □: a dot, a ring, then a small square, by depth. It shares the
-/// line's baseline through an invisible letter and sits on the middle of
-/// the lower-case letters.
-class _Bullet extends StatelessWidget {
-  const _Bullet({required this.depth, required this.style});
+/// A list line's marker, for a [Row] that lines it up with its words by
+/// baseline ([CrossAxisAlignment.baseline]).
+///
+/// It is laid out as one line of [style] exactly as the words' paragraph
+/// lays out its first line: the same text size (the system's, unless
+/// [textScaler] says otherwise), the same leading, and none of the
+/// surrounding [DefaultTextStyle], so sharing the baseline never makes the
+/// row taller than the words' own line. A number sits on that baseline as
+/// text; a bullet or a box centres on the middle of the line's lower-case
+/// letters, half an x-height above the baseline
+/// ([HomericLetterMetrics]), whatever the face, size or line height.
+class HomericListMark extends StatelessWidget {
+  /// A drawn bullet: a dot, a ring, then a small square, by [depth].
+  const HomericListMark.bullet({
+    super.key,
+    required int depth,
+    required this.style,
+    this.textScaler,
+    this.textHeightBehavior = const TextHeightBehavior(),
+  })  : _depth = depth,
+        _label = null,
+        _child = null,
+        _size = null;
 
-  final int depth;
+  /// A number or other [label] set as text on the line's baseline.
+  const HomericListMark.label(
+    String label, {
+    super.key,
+    required this.style,
+    this.textScaler,
+    this.textHeightBehavior = const TextHeightBehavior(),
+  })  : _label = label,
+        _depth = 0,
+        _child = null,
+        _size = null;
+
+  /// [child], [size] big, centred on the line's letters: a to-do's box.
+  const HomericListMark.box({
+    super.key,
+    required Widget child,
+    required Size size,
+    required this.style,
+    this.textScaler,
+    this.textHeightBehavior = const TextHeightBehavior(),
+  })  : _child = child,
+        _size = size,
+        _depth = 0,
+        _label = null;
+
+  /// The words' text style.
   final TextStyle style;
+
+  /// The words' text scaler; null for the system text size.
+  final TextScaler? textScaler;
+
+  /// The words' line-height behaviour.
+  final TextHeightBehavior textHeightBehavior;
+
+  final int _depth;
+  final String? _label;
+  final Widget? _child;
+  final Size? _size;
+
+  /// A bullet's nesting depth (0 for a label or a box).
+  int get depth => _depth;
+
+  /// A label's text; null for a bullet or a box.
+  String? get label => _label;
+
+  static TextScaler _scalerOf(BuildContext context) =>
+      MediaQuery.maybeTextScalerOf(context) ?? TextScaler.noScaling;
+
+  /// [style] as the words' paragraph reads it: nothing inherited, so the
+  /// leading is the face's own unless [style] sets it.
+  static TextStyle _line(TextStyle style) => style.copyWith(inherit: false);
 
   @override
   Widget build(BuildContext context) {
-    final fontSize = style.fontSize ?? 14;
-    final color = style.color ?? DefaultTextStyle.of(context).style.color;
-    return Semantics(
-      label: HomericListGlyphs.bullet(depth),
-      child: Stack(
-        children: [
-          // Sets the line's baseline and height; never seen.
-          ExcludeSemantics(
-            child: Text(
-              'x',
-              style: style.copyWith(color: const Color(0x00000000)),
-            ),
-          ),
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _BulletPainter(
-                shape: depth % 3,
-                color: color ?? const Color(0xFF000000),
-                style: style,
-                size: fontSize * 0.3,
+    final scaler = textScaler ?? _scalerOf(context);
+    final color = style.color ??
+        DefaultTextStyle.of(context).style.color ??
+        const Color(0xFF000000);
+    final line = _line(style).copyWith(color: color);
+    final label = _label;
+    if (label != null) {
+      return Text(
+        label,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.visible,
+        style: line,
+        textScaler: scaler,
+        textHeightBehavior: textHeightBehavior,
+      );
+    }
+    return ListenableBuilder(
+      listenable: HomericLetterMetrics.changes,
+      builder: (context, _) {
+        final probe = TextPainter(
+          text: TextSpan(text: 'x', style: line),
+          textDirection: TextDirection.ltr,
+          textScaler: scaler,
+          textHeightBehavior: textHeightBehavior,
+        )..layout();
+        final baseline =
+            probe.computeDistanceToActualBaseline(TextBaseline.alphabetic);
+        final xWidth = probe.width;
+        probe.dispose();
+        final mid = baseline -
+            HomericLetterMetrics.midlineAboveBaseline(line, textScaler: scaler);
+        final fontSize = scaler.scale(style.fontSize ?? 14);
+        final size = _size ?? Size.square(fontSize * 0.3);
+        final mark = _child ??
+            CustomPaint(
+              painter: _BulletPainter(shape: _depth % 3, color: color),
+            );
+        final body = SizedBox(
+          width: math.max(xWidth, size.width),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // Sets the line's height and baseline; never seen.
+              ExcludeSemantics(
+                child: Text(
+                  'x',
+                  style: line.copyWith(color: const Color(0x00000000)),
+                  textScaler: scaler,
+                  textHeightBehavior: textHeightBehavior,
+                ),
               ),
-            ),
+              // Centred across the column it is given as well as on the
+              // letters.
+              Positioned(
+                left: (math.max(xWidth, size.width) - size.width) / 2,
+                width: size.width,
+                top: mid - size.height / 2,
+                height: size.height,
+                child: mark,
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+        return _child == null
+            ? Semantics(
+                label: HomericListGlyphs.bullet(_depth),
+                child: body,
+              )
+            : body;
+      },
     );
   }
 }
 
+/// A to-do's box when the host draws none: a rounded square, filled and
+/// ticked when done.
+class _PlainBox extends StatelessWidget {
+  const _PlainBox({required this.done, required this.style});
+
+  final bool done;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        checked: done,
+        child: CustomPaint(
+          painter: _PlainBoxPainter(
+            done: done,
+            color: style.color ??
+                DefaultTextStyle.of(context).style.color ??
+                const Color(0xFF000000),
+          ),
+        ),
+      );
+}
+
+class _PlainBoxPainter extends CustomPainter {
+  _PlainBoxPainter({required this.done, required this.color});
+
+  final bool done;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final box = RRect.fromRectAndRadius(
+      (Offset.zero & size).deflate(0.75),
+      Radius.circular(size.width * 0.2),
+    );
+    canvas.drawRRect(
+      box,
+      Paint()
+        ..color = color
+        ..style = done ? PaintingStyle.fill : PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_PlainBoxPainter old) =>
+      old.done != done || old.color != color;
+}
+
 class _BulletPainter extends CustomPainter {
-  _BulletPainter({
-    required this.shape,
-    required this.color,
-    required this.style,
-    required this.size,
-  });
+  _BulletPainter({required this.shape, required this.color});
 
   final int shape;
   final Color color;
-  final TextStyle style;
-  final double size;
 
   @override
   void paint(Canvas canvas, Size box) {
-    final probe = TextPainter(
-      text: TextSpan(text: 'x', style: style),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    final baseline =
-        probe.computeDistanceToActualBaseline(TextBaseline.alphabetic);
-    final xHeight = (style.fontSize ?? 14) * 0.46;
-    probe.dispose();
-    // On the middle of an x.
-    final center = Offset(box.width / 2, baseline - xHeight / 2);
+    final size = box.shortestSide;
+    final center = box.center(Offset.zero);
     final paint = Paint()
       ..color = color
       ..isAntiAlias = true;
@@ -377,8 +615,5 @@ class _BulletPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_BulletPainter old) =>
-      old.shape != shape ||
-      old.color != color ||
-      old.style != style ||
-      old.size != size;
+      old.shape != shape || old.color != color;
 }

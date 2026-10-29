@@ -1423,3 +1423,25 @@ selection points (the caret's bottom), never the caret rect's top-left. Touch
 drags of a handle map `finger + grab offset`, not the finger. Evidence:
 `test/editing/editable_document_test.dart` "iOS handles stand on the selected
 line".
+
+## engineer — 2026-10-29 — Marks centre on the letters, measured from the ink of an x
+
+**What:** Bullets, to-do boxes and grips were placed from line metrics
+(line height, ascent), so they sat low against lower-case text and drifted
+further at large text sizes. A mark reads as level with its line when its
+middle meets the middle of the lower-case letters: baseline − x-height / 2.
+Flutter exposes ascent and descent but not x-height, so `HomericLetterMetrics`
+measures it per face from the ink of an `x` (alpha ≥ 128, drawn at 96px with
+a probe style that keeps only what shapes the glyph, never the host's paint),
+or takes a host's registered `sxHeight` so the first frame is exact. Fonts
+that load later re-measure (systemFonts listener); a measurement started
+before that is discarded by identity, never stored.
+
+**Rule going forward:** anything placed beside a line (marker, box, grip,
+tick) derives its vertical centre from `midlineAboveBaseline` at the current
+`TextScaler`, and its size and the list gutter (`HomericListLine.stepFor`)
+scale with the same scaler. Never position from a fixed offset or line
+height. Lay out a mark with `copyWith(inherit: false)` of the line's style so
+its leading matches the paragraph. Prove changes across the real range
+(text scale 0.55–3.1). Evidence: `test/render/letter_metrics_test.dart`,
+`test/writing/list_mark_test.dart` (homeric#83).

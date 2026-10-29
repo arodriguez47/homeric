@@ -86,8 +86,7 @@ abstract final class HomericLetterMetrics {
   /// have loaded), and for tests.
   static Future<void> ensure(Iterable<TextStyle> styles) => Future.wait([
         for (final style in styles)
-          if (_known(_Face.of(style)) == null)
-            _measure(_Face.of(style), style),
+          if (_known(_Face.of(style)) == null) _measure(_Face.of(style), style),
       ]);
 
   /// Forgets every measured and registered face.
@@ -103,19 +102,25 @@ abstract final class HomericLetterMetrics {
   /// every build.
   static Future<void> _measure(_Face face, TextStyle style) {
     _watchFonts();
-    return _pending[face] ??= () async {
+    final running = _pending[face];
+    if (running != null) return running;
+    late final Future<void> measurement;
+    measurement = () async {
       double? ratio;
       try {
         ratio = await _inkRatio(style);
       } catch (_) {
         ratio = null;
       }
-      if (!identical(_pending[face], null)) {
-        _measured[face] = ratio ?? fallback;
-        _pending.remove(face);
-        if (ratio != null && ratio != fallback) _changes.value++;
-      }
+      // Fonts changed while this one ran (its entry was dropped, or a new
+      // measurement took its place): it read the old letters, so it is
+      // thrown away.
+      if (!identical(_pending[face], measurement)) return;
+      _measured[face] = ratio ?? fallback;
+      _pending.remove(face);
+      if (ratio != null && ratio != fallback) _changes.value++;
     }();
+    return _pending[face] = measurement;
   }
 
   /// A font that loads after a face was measured (a downloaded one, say)
@@ -145,15 +150,19 @@ abstract final class HomericLetterMetrics {
     final painter = TextPainter(
       text: TextSpan(
         text: 'x',
-        style: style.copyWith(
+        // Only what shapes the glyph: a host's paint (a foreground
+        // shader, a background, shadows, decorations) would add ink that
+        // isn't the letter's, so nothing else is carried over.
+        style: TextStyle(
+          fontFamily: style.fontFamily,
+          fontFamilyFallback: style.fontFamilyFallback,
+          fontWeight: style.fontWeight,
+          fontStyle: style.fontStyle,
+          fontVariations: style.fontVariations,
+          fontFeatures: style.fontFeatures,
           fontSize: _probeSize,
           height: 1,
           color: const Color(0xFF000000),
-          decoration: TextDecoration.none,
-          background: null,
-          backgroundColor: null,
-          foreground: null,
-          shadows: const <Shadow>[],
         ),
       ),
       textDirection: TextDirection.ltr,

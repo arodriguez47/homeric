@@ -52,7 +52,7 @@ abstract final class HomericLetterMetrics {
 
   static double? _known(_Face face) {
     for (final key in [
-      face,
+      _Face(face.family, face.weight, face.style),
       _Face(face.family, face.weight, null),
       _Face(face.family, null, face.style),
       _Face(face.family, null, null),
@@ -199,24 +199,41 @@ abstract final class HomericLetterMetrics {
   }
 }
 
+/// A face as Homeric remembers it. Registered x-heights are keyed by
+/// family, weight and style alone; measured ones also by [shaping] (the
+/// fallback chain, variations and features), since those can pick a
+/// different `x`.
 @immutable
 final class _Face {
-  const _Face(this.family, this.weight, this.style);
+  const _Face(this.family, this.weight, this.style, [this.shaping = const []]);
 
-  factory _Face.of(TextStyle style) =>
-      _Face(style.fontFamily, style.fontWeight, style.fontStyle);
+  factory _Face.of(TextStyle style) => _Face(
+        style.fontFamily,
+        style.fontWeight,
+        style.fontStyle,
+        [
+          ...?style.fontFamilyFallback,
+          '|',
+          ...?style.fontVariations,
+          '|',
+          ...?style.fontFeatures,
+        ],
+      );
 
   final String? family;
   final FontWeight? weight;
   final FontStyle? style;
+  final List<Object> shaping;
 
   @override
   bool operator ==(Object other) =>
       other is _Face &&
       other.family == family &&
       other.weight == weight &&
-      other.style == style;
+      other.style == style &&
+      listEquals(other.shaping, shaping);
 
   @override
-  int get hashCode => Object.hash(family, weight, style);
+  int get hashCode =>
+      Object.hash(family, weight, style, Object.hashAll(shaping));
 }

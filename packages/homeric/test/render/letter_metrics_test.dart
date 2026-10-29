@@ -84,4 +84,23 @@ void main() {
     expect(HomericLetterMetrics.ratioOf(style),
         isNot(HomericLetterMetrics.fallback));
   });
+
+  testWidgets('styles that shape a different x are measured on their own',
+      (tester) async {
+    const plain = TextStyle(fontFamily: 'Shaped', fontSize: 30);
+    final featured =
+        plain.copyWith(fontFeatures: const [FontFeature.enable('smcp')]);
+    var fired = 0;
+    void count() => fired++;
+    HomericLetterMetrics.changes.addListener(count);
+    addTearDown(() => HomericLetterMetrics.changes.removeListener(count));
+
+    await tester.runAsync(() => HomericLetterMetrics.ensure([plain]));
+    expect(fired, 1);
+    await tester.runAsync(() => HomericLetterMetrics.ensure([featured]));
+    expect(fired, 2);
+    // A registered family still covers every shaping of it.
+    HomericLetterMetrics.register('Shaped', 0.44);
+    expect(HomericLetterMetrics.ratioOf(featured), 0.44);
+  });
 }

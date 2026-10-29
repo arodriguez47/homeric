@@ -286,6 +286,45 @@ void main() {
       expect(textOf(controller), 'a word here');
     });
 
+    test('deletes at the caret once the caret moved', () {
+      final controller = controllerFor('a word here', 2, 6);
+      controller.replaceSelection('=');
+      controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 13)),
+      );
+      controller.deleteBackward();
+      expect(textOf(controller), 'a =word= her');
+    });
+
+    test('keeps the words\' own formatting', () {
+      final document = Document([
+        Block(id: 'b', type: 'paragraph', runs: [
+          InlineRun('a '),
+          InlineRun('word', attributes: const {'bold': true}),
+          InlineRun(' here'),
+        ]),
+      ]);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection(
+          anchor: document.positionAt(0, 2),
+          head: document.positionAt(0, 6),
+        ),
+      );
+      addTearDown(controller.dispose);
+      addTearDown(const HomericTypedWraps().installOn(controller));
+      controller
+        ..replaceSelection('=')
+        ..replaceSelection('=');
+      controller.deleteBackward();
+      final runs = controller.document.blocks.single.runs;
+      expect(controller.document.blocks.single.text, 'a word here');
+      expect(
+        runs.where((run) => run.attributes['bold'] == true).single.text,
+        'word',
+      );
+    });
+
     test('deletes as usual once something else happened', () {
       final controller = controllerFor('a word here', 2, 6);
       controller.replaceSelection('=');

@@ -234,6 +234,7 @@ final class HomericTypedWrapsSession {
     if (last != null &&
         identical(last.document, document) &&
         last.blockId == block.id &&
+        last.selection == selection &&
         _deletesAtSelection(text, result, start, end)) {
       return _revert(document, anchor.blockIndex, last);
     }
@@ -411,6 +412,7 @@ final class HomericTypedWrapsSession {
       original: continuing?.original ?? text.substring(outerStart, outerEnd),
       leading: continuing?.leading ?? start - outerStart,
       originalWords: continuing?.originalWords ?? words,
+      wordsAt: innerStart,
       forward: forward,
       affinity: selection.affinity,
     );
@@ -442,27 +444,39 @@ final class HomericTypedWrapsSession {
     int index,
     _LastWrap last,
   ) {
+    // Only the markers go back; the words keep their runs.
+    final wordsEnd = last.wordsAt + last.originalWords.length;
+    final before = last.original.substring(0, last.leading);
+    final after = last.original.substring(
+      last.leading + last.originalWords.length,
+    );
     final transaction = Transaction(document);
     try {
       transaction
         ..deleteRange(
-          document.positionAt(index, last.start),
+          document.positionAt(index, wordsEnd),
           document.positionAt(index, last.end),
         )
-        ..insertText(document.positionAt(index, last.start), last.original);
+        ..insertText(document.positionAt(index, wordsEnd), after);
+      transaction
+        ..deleteRange(
+          transaction.doc.positionAt(index, last.start),
+          transaction.doc.positionAt(index, last.wordsAt),
+        )
+        ..insertText(transaction.doc.positionAt(index, last.start), before);
     } on ArgumentError {
       return null;
     } on StepFailedError {
       return null;
     }
-    final after = transaction.doc;
-    final wordsStart = last.start + last.leading;
-    final wordsEnd = wordsStart + last.originalWords.length;
+    final reverted = transaction.doc;
+    final from = last.start + last.leading;
+    final to = from + last.originalWords.length;
     return HomericPreparedCommand(
       stages: <Transaction>[transaction],
       selection: HomericSelection(
-        anchor: after.positionAt(index, last.forward ? wordsStart : wordsEnd),
-        head: after.positionAt(index, last.forward ? wordsEnd : wordsStart),
+        anchor: reverted.positionAt(index, last.forward ? from : to),
+        head: reverted.positionAt(index, last.forward ? to : from),
         affinity: last.affinity,
       ),
     );
@@ -520,6 +534,7 @@ final class _LastWrap {
     required this.original,
     required this.leading,
     required this.originalWords,
+    required this.wordsAt,
     required this.forward,
     required this.affinity,
   });
@@ -543,6 +558,9 @@ final class _LastWrap {
 
   /// The words as they were.
   final String originalWords;
+
+  /// Block-local offset of the words after the wrap.
+  final int wordsAt;
 
   final bool forward;
   final HomericCaretAffinity affinity;

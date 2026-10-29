@@ -28,11 +28,14 @@ abstract final class HomericLetterMetrics {
   /// Size the `x` is drawn at to measure it.
   static const double _probeSize = 96;
 
-  static final Map<_Face, double> _ratios = <_Face, double>{};
-  static final Set<_Face> _measuring = <_Face>{};
+  static final Map<_Face, double> _registered = <_Face, double>{};
+  static final Map<_Face, double> _measured = <_Face, double>{};
+  static final Map<_Face, Future<void>> _pending = <_Face, Future<void>>{};
   static final ValueNotifier<int> _changes = ValueNotifier<int>(0);
+  static bool _watchingFonts = false;
 
-  /// Fires when a face's x-height becomes known.
+  /// Fires when a face's x-height becomes known, or when fonts load and
+  /// the measured ones are taken again.
   static Listenable get changes => _changes;
 
   /// Records [family]'s x-height as [ratio] of its size, for every weight
@@ -44,19 +47,29 @@ abstract final class HomericLetterMetrics {
     FontStyle? style,
   }) {
     assert(ratio > 0 && ratio < 1.5);
-    _ratios[_Face(family, weight, style)] = ratio;
+    _registered[_Face(family, weight, style)] = ratio;
+  }
+
+  static double? _known(_Face face) {
+    for (final key in [
+      face,
+      _Face(face.family, face.weight, null),
+      _Face(face.family, null, face.style),
+      _Face(face.family, null, null),
+    ]) {
+      final ratio = _registered[key];
+      if (ratio != null) return ratio;
+    }
+    return _measured[face];
   }
 
   /// [style]'s x-height as a fraction of its font size: registered,
   /// measured, or [fallback] while a measurement is under way.
   static double ratioOf(TextStyle style) {
     final face = _Face.of(style);
-    final known = _ratios[face] ??
-        _ratios[_Face(face.family, face.weight, null)] ??
-        _ratios[_Face(face.family, null, face.style)] ??
-        _ratios[_Face(face.family, null, null)];
+    final known = _known(face);
     if (known != null) return known;
-    _measure(face, style);
+    unawaited(_measure(face, style));
     return fallback;
   }
 
@@ -68,37 +81,62 @@ abstract final class HomericLetterMetrics {
   }) =>
       textScaler.scale(style.fontSize ?? 14) * ratioOf(style) / 2;
 
-  /// Measures each of [styles]' faces, completing once all are known.
-  /// For a host that wants its first frame exact, and for tests.
+  /// Measures each of [styles]' faces not yet known, completing once all
+  /// are. For a host that wants its first frame exact (after its fonts
+  /// have loaded), and for tests.
   static Future<void> ensure(Iterable<TextStyle> styles) => Future.wait([
         for (final style in styles)
-          if (!_ratios.containsKey(_Face.of(style)))
-            _measureNow(_Face.of(style), style),
+          if (_known(_Face.of(style)) == null)
+            _measure(_Face.of(style), style),
       ]);
 
   /// Forgets every measured and registered face.
   @visibleForTesting
   static void debugReset() {
-    _ratios.clear();
-    _measuring.clear();
+    _registered.clear();
+    _measured.clear();
+    _pending.clear();
   }
 
-  static void _measure(_Face face, TextStyle style) {
-    if (!_measuring.add(face)) return;
-    unawaited(_measureNow(face, style));
-  }
-
-  static Future<void> _measureNow(_Face face, TextStyle style) async {
-    _measuring.add(face);
-    try {
-      final ratio = await _inkRatio(style);
-      if (ratio != null) {
-        _ratios[face] = ratio;
-        _changes.value++;
+  /// One measurement per face at a time; a face that draws nothing (or
+  /// fails) is remembered at [fallback], so it is not measured again on
+  /// every build.
+  static Future<void> _measure(_Face face, TextStyle style) {
+    _watchFonts();
+    return _pending[face] ??= () async {
+      double? ratio;
+      try {
+        ratio = await _inkRatio(style);
+      } catch (_) {
+        ratio = null;
       }
-    } finally {
-      _measuring.remove(face);
+      if (!identical(_pending[face], null)) {
+        _measured[face] = ratio ?? fallback;
+        _pending.remove(face);
+        if (ratio != null && ratio != fallback) _changes.value++;
+      }
+    }();
+  }
+
+  /// A font that loads after a face was measured (a downloaded one, say)
+  /// changes its letters: measured faces are forgotten and measured again
+  /// as they are next asked for.
+  static void _watchFonts() {
+    if (_watchingFonts) return;
+    final PaintingBinding binding;
+    try {
+      binding = PaintingBinding.instance;
+    } catch (_) {
+      return;
     }
+    _watchingFonts = true;
+    binding.systemFonts.addListener(() {
+      if (_measured.isEmpty && _pending.isEmpty) return;
+      _measured.clear();
+      // A measurement under way read the old letters: dropped on landing.
+      _pending.clear();
+      _changes.value++;
+    });
   }
 
   /// The top of an `x`'s ink above its baseline, over the size it is drawn

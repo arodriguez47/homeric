@@ -3320,7 +3320,8 @@ class _DocumentBlockRowState extends State<_DocumentBlockRow>
           builder: (context, _) => _GrabberDots(
             key: const ValueKey<String>('homeric-grabber-glyph'),
             color: grabberTextStyle.color!,
-            size: grabberTextStyle.fontSize ?? 14,
+            // Grows with the text it sits beside.
+            size: scaler.scale(grabberTextStyle.fontSize ?? 14),
             midline: HomericLetterMetrics.midlineAboveBaseline(
               letters,
               textScaler: scaler,

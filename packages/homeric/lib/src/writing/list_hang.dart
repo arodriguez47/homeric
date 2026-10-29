@@ -187,7 +187,7 @@ class HomericListLine extends StatefulWidget {
   final TextStyle markStyle;
 
   /// Width of one level and of the marker's column. Defaults to 1.5 times
-  /// [markStyle]'s font size.
+  /// [markStyle]'s font size as drawn (after the text scaler).
   final double? step;
 
   /// Called with `false` for a swipe right (nest) and `true` for a swipe
@@ -213,8 +213,14 @@ class HomericListLine extends StatefulWidget {
   /// The paragraph.
   final Widget child;
 
-  /// Width of one level for [style]: 1.5 times its font size.
-  static double stepFor(TextStyle style) => (style.fontSize ?? 14) * 1.5;
+  /// Width of one level for [style] at [textScaler]'s size: 1.5 times its
+  /// font size as drawn, so the gutter keeps its proportion to the words
+  /// at every text size.
+  static double stepFor(
+    TextStyle style, {
+    TextScaler textScaler = TextScaler.noScaling,
+  }) =>
+      textScaler.scale(style.fontSize ?? 14) * 1.5;
 
   /// How far [hang]'s words sit from the line's left edge.
   static double gutterFor(HomericListHang hang, double step) =>
@@ -283,7 +289,11 @@ class _HomericListLineState extends State<HomericListLine> {
   @override
   Widget build(BuildContext context) {
     final hang = widget.hang;
-    final step = widget.step ?? HomericListLine.stepFor(widget.markStyle);
+    final step = widget.step ??
+        HomericListLine.stepFor(
+          widget.markStyle,
+          textScaler: widget.textScaler ?? HomericListMark._scalerOf(context),
+        );
     final gutter = hang == null ? 0.0 : HomericListLine.gutterFor(hang, step);
     final todo = hang?.checklist != null;
     final bullet = hang?.kind == HomericMarkdownListKind.bullet && !todo;
@@ -435,6 +445,12 @@ class HomericListMark extends StatelessWidget {
   final Widget? _child;
   final Size? _size;
 
+  /// A bullet's nesting depth (0 for a label or a box).
+  int get depth => _depth;
+
+  /// A label's text; null for a bullet or a box.
+  String? get label => _label;
+
   static TextScaler _scalerOf(BuildContext context) =>
       MediaQuery.maybeTextScalerOf(context) ?? TextScaler.noScaling;
 
@@ -496,8 +512,10 @@ class HomericListMark extends StatelessWidget {
                   textHeightBehavior: textHeightBehavior,
                 ),
               ),
+              // Centred across the column it is given as well as on the
+              // letters.
               Positioned(
-                left: 0,
+                left: (math.max(xWidth, size.width) - size.width) / 2,
                 width: size.width,
                 top: mid - size.height / 2,
                 height: size.height,

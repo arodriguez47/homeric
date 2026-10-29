@@ -77,15 +77,31 @@ void main() {
             .first,
       );
 
-  for (final scale in [0.87, 1.0, 1.3]) {
+  for (final scale in [0.55, 0.87, 1.0, 1.3, 3.1]) {
     testWidgets('a bullet centres on the letters at ${scale}x', (tester) async {
       await pumpLine(tester, HomericListHang.of(block('- xenon'))!,
           scale: scale);
 
       final bullet = markRect(tester, find.byType(CustomPaint));
+      // Centred across its column, clear of the words.
+      final column = markRect(tester, find.byType(Stack));
+      expect(bullet.center.dx, closeTo(column.center.dx, 0.01));
+      expect(bullet.right,
+          lessThan(tester.getRect(find.byKey(const ValueKey('words'))).left));
       final letters = wordsBaseline(tester) - 20 * scale * 0.5 / 2;
       expect(bullet.center.dy, closeTo(letters, 0.01));
       expect(bullet.height, closeTo(20 * scale * 0.3, 0.01));
+    });
+
+    testWidgets('the gutter grows with the words at ${scale}x', (tester) async {
+      await pumpLine(tester, HomericListHang.of(block('  - xenon'))!,
+          scale: scale);
+
+      // Two levels deep: two steps of 1.5 times the size as drawn.
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('words'))).dx,
+        closeTo(2 * 20 * scale * 1.5, 0.01),
+      );
     });
 
     testWidgets('a hung line is as tall as its words at ${scale}x',
@@ -110,6 +126,10 @@ void main() {
           scale: scale);
 
       final box = tester.getRect(find.byKey(const ValueKey('box')));
+      // In the gutter, clear of the words, however large the text.
+      final words = tester.getRect(find.byKey(const ValueKey('words')));
+      expect(box.left, greaterThanOrEqualTo(0));
+      expect(box.right, lessThan(words.left));
       expect(box.center.dy,
           closeTo(wordsBaseline(tester) - 20 * scale * 0.5 / 2, 0.01));
       expect(box.height, closeTo(20 * scale * 0.8, 0.01));

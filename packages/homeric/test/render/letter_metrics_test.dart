@@ -49,4 +49,39 @@ void main() {
     expect(ratio, inInclusiveRange(0.6, 0.9));
     expect(fired, 1);
   });
+
+  testWidgets('ensure leaves a face registered by family alone as it is',
+      (tester) async {
+    HomericLetterMetrics.register('Family', 0.41);
+    const style = TextStyle(
+      fontFamily: 'Family',
+      fontWeight: FontWeight.w600,
+      fontSize: 30,
+    );
+    await tester.runAsync(() => HomericLetterMetrics.ensure([style]));
+    expect(HomericLetterMetrics.ratioOf(style), 0.41);
+  });
+
+  testWidgets('fonts loading later have measured faces measured again',
+      (tester) async {
+    const style = TextStyle(fontFamily: 'Later', fontSize: 30);
+    await tester.runAsync(() => HomericLetterMetrics.ensure([style]));
+    expect(HomericLetterMetrics.ratioOf(style),
+        isNot(HomericLetterMetrics.fallback));
+    var fired = 0;
+    void count() => fired++;
+    HomericLetterMetrics.changes.addListener(count);
+    addTearDown(() => HomericLetterMetrics.changes.removeListener(count));
+
+    await tester.binding
+        .handleSystemMessage(<String, dynamic>{'type': 'fontsChange'});
+    await tester.pump();
+
+    expect(fired, 1);
+    // Forgotten: asked again, it answers the guess while it re-measures.
+    expect(HomericLetterMetrics.ratioOf(style), HomericLetterMetrics.fallback);
+    await tester.runAsync(() => HomericLetterMetrics.ensure([style]));
+    expect(HomericLetterMetrics.ratioOf(style),
+        isNot(HomericLetterMetrics.fallback));
+  });
 }

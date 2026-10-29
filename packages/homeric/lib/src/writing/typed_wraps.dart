@@ -202,8 +202,7 @@ final class HomericTypedWrapsSession {
         command.kind != HomericCommandKind.preDelete) {
       return null;
     }
-    if (controller.composing != null ||
-        command.replacementComposing != null) {
+    if (controller.composing != null || command.replacementComposing != null) {
       return null;
     }
     final selection = command.selection;
@@ -482,8 +481,8 @@ final class HomericTypedWrapsSession {
     if (result.length >= text.length) return false;
     final before =
         start > 0 && result == text.replaceRange(start - 1, start, '');
-    final after =
-        start < text.length && result == text.replaceRange(start, start + 1, '');
+    final after = start < text.length &&
+        result == text.replaceRange(start, start + 1, '');
     return before || after;
   }
 

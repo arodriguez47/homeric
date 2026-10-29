@@ -208,8 +208,8 @@ void main() {
 
       // Typing the target narrows the query and keeps the alias.
       controller.replaceSelection('Ro');
-      final typed = HomericLinkQuery.at('b', textOf(controller), 6,
-          wrappedAt: 2)!;
+      final typed =
+          HomericLinkQuery.at('b', textOf(controller), 6, wrappedAt: 2)!;
       expect(typed.target, 'Ro');
       expect(typed.alias, 'word');
       expect(typed.sourceEnd, 13);
@@ -230,15 +230,17 @@ void main() {
       controller.replaceSelection('{');
       expect(heard, isEmpty);
       await tester.pump();
-      expect(heard.last, const HomericTypedWrap(
-        blockId: 'b',
-        typed: '{',
-        depth: 2,
-        start: 2,
-        end: 10,
-        innerStart: 4,
-        innerEnd: 8,
-      ));
+      expect(
+          heard.last,
+          const HomericTypedWrap(
+            blockId: 'b',
+            typed: '{',
+            depth: 2,
+            start: 2,
+            end: 10,
+            innerStart: 4,
+            innerEnd: 8,
+          ));
     });
   });
 

@@ -428,7 +428,10 @@ final class HomericTypedWrapsSession {
         innerEnd: innerEnd,
       );
       SchedulerBinding.instance
-        ..addPostFrameCallback((_) => callback(report))
+        ..addPostFrameCallback((_) {
+          // Only a wrap the controller applied, and nothing typed since.
+          if (identical(controller.document, after)) callback(report);
+        })
         ..ensureVisualUpdate();
     }
     return HomericPreparedCommand(

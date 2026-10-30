@@ -244,6 +244,17 @@ void main() {
     });
   });
 
+  testWidgets('onWrapped stays quiet for a wrap that was not applied',
+      (tester) async {
+    final heard = <HomericTypedWrap>[];
+    final controller = controllerFor('a word here', 2, 6);
+    final session =
+        HomericTypedWraps(onWrapped: heard.add).sessionFor(controller);
+    expect(session.prepareMenuWrap(controller.selection, '='), isNotNull);
+    await tester.pump();
+    expect(heard, isEmpty);
+  });
+
   group('Backspace straight after', () {
     test('puts the words back, selected', () {
       final controller = controllerFor('a word here', 2, 6);

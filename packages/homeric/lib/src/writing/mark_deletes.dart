@@ -39,8 +39,10 @@ final class HomericMarkPair {
     this.openStart,
     this.openEnd,
     this.closeStart,
-    this.closeEnd,
-  );
+    this.closeEnd, {
+    this.noteStart,
+    this.noteEnd,
+  });
 
   /// Where the opening delimiter starts; the mark's start.
   final int openStart;
@@ -54,16 +56,35 @@ final class HomericMarkPair {
   /// Where the closing delimiter ends; the mark's end.
   final int closeEnd;
 
+  /// An annotation's note, `[noteStart, noteEnd)` inside the closing
+  /// `|note}}`: text written in it, not delimiter. Null for other marks.
+  final int? noteStart;
+
+  /// See [noteStart].
+  final int? noteEnd;
+
+  /// Whether [offset] is a delimiter character of this pair.
+  bool isDelimiter(int offset) {
+    if (offset >= openStart && offset < openEnd) return true;
+    if (offset < closeStart || offset >= closeEnd) return false;
+    final from = noteStart;
+    final to = noteEnd;
+    return from == null || to == null || offset < from || offset >= to;
+  }
+
   @override
   bool operator ==(Object other) =>
       other is HomericMarkPair &&
       other.openStart == openStart &&
       other.openEnd == openEnd &&
       other.closeStart == closeStart &&
-      other.closeEnd == closeEnd;
+      other.closeEnd == closeEnd &&
+      other.noteStart == noteStart &&
+      other.noteEnd == noteEnd;
 
   @override
-  int get hashCode => Object.hash(openStart, openEnd, closeStart, closeEnd);
+  int get hashCode =>
+      Object.hash(openStart, openEnd, closeStart, closeEnd, noteStart, noteEnd);
 
   @override
   String toString() =>
@@ -104,7 +125,16 @@ List<HomericMarkPair> homericMarkPairs(HomericSyntax syntax, Block block) {
   if (syntax.annotations) {
     for (final m in scan.annotations) {
       final passageEnd = m.start + 2 + m.group(1)!.length;
-      pairs.add(HomericMarkPair(m.start, m.start + 2, passageEnd, m.end));
+      pairs.add(
+        HomericMarkPair(
+          m.start,
+          m.start + 2,
+          passageEnd,
+          m.end,
+          noteStart: m.group(2) == null ? null : passageEnd + 1,
+          noteEnd: m.group(2) == null ? null : m.end - 2,
+        ),
+      );
     }
   }
   return pairs;
@@ -132,6 +162,11 @@ List<HomericMarkPair> homericMarkPairs(HomericSyntax syntax, Block block) {
   if (from >= to || to > text.length) return null;
   final forward = from == caret;
   if (!forward && to != caret) return null;
+  // One character beside the caret; a word or line delete goes as asked.
+  if ((forward ? _graphemeAfter(text, caret) : _graphemeBefore(text, caret)) !=
+      (from, to)) {
+    return null;
+  }
   final pairs = homericMarkPairs(syntax, block);
   if (pairs.isEmpty) return null;
   final hides = [
@@ -148,12 +183,10 @@ List<HomericMarkPair> homericMarkPairs(HomericSyntax syntax, Block block) {
   // The delimiter (and its pair) a character at [offset] belongs to.
   (HomericMarkPair, bool)? delimiterAt(int offset) {
     for (final p in pairs) {
-      if (offset >= p.openStart && offset < p.openEnd) {
-        return (p, folded(p.openStart, p.openEnd));
-      }
-      if (offset >= p.closeStart && offset < p.closeEnd) {
-        return (p, folded(p.closeStart, p.closeEnd));
-      }
+      if (!p.isDelimiter(offset)) continue;
+      return offset < p.openEnd
+          ? (p, folded(p.openStart, p.openEnd))
+          : (p, folded(p.closeStart, p.closeEnd));
     }
     return null;
   }

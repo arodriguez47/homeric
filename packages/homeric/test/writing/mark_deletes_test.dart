@@ -110,6 +110,38 @@ void main() {
     });
   });
 
+  group('inside a shown annotation', () {
+    test('Backspace in its note edits the note', () {
+      final controller = controllerFor('See {{tool|note}}', 15);
+      controller.deleteBackward();
+      expect(textOf(controller), 'See {{tool|not}}');
+      expect(caretOf(controller), 14);
+    });
+
+    test('Backspace on its | takes the annotation off', () {
+      final controller = controllerFor('See {{tool|note}}', 11);
+      controller.deleteBackward();
+      expect(textOf(controller), 'See tool');
+    });
+  });
+
+  test('a word delete beside a folded mark goes as asked', () {
+    final document = Document([
+      Block(id: 'b', type: 'paragraph', runs: [InlineRun('a ==hello==')]),
+    ]);
+    final block = document.blocks.single;
+    expect(
+      homericMarkDelete(
+        syntax,
+        block,
+        caret: 11,
+        deleted: (2, 11),
+        revealCaret: 11,
+      ),
+      isNull,
+    );
+  });
+
   group('Delete before a mark', () {
     test('a shown opening goes with its closing', () {
       // The caret at the opening `==` shows it.
@@ -138,7 +170,7 @@ void main() {
           HomericMarkPair(0, 2, 3, 5),
           HomericMarkPair(6, 8, 9, 11),
           HomericMarkPair(12, 14, 15, 17),
-          HomericMarkPair(18, 20, 21, 25),
+          HomericMarkPair(18, 20, 21, 25, noteStart: 22, noteEnd: 23),
         ]));
   });
 }

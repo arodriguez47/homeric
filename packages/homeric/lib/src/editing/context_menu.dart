@@ -110,11 +110,14 @@ class HomericContextMenu extends StatelessWidget {
           child: FocusTraversalGroup(
             policy: ReadingOrderTraversalPolicy(),
             child: DefaultTextStyle(
-              style: TextStyle(
+              // The app's own interface face, at a menu's size.
+              style:
+                  (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
+                      .copyWith(
                 fontSize: 13,
                 height: 1.2,
                 color: palette.ink,
-                fontFamilyFallback: const <String>['.AppleSystemUIFont'],
+                decoration: TextDecoration.none,
               ),
               child: Container(
                 key: const ValueKey<String>('homeric-context-menu'),
@@ -485,10 +488,14 @@ class _FormatTip extends StatelessWidget {
                   color: ink.withValues(alpha: 0.85),
                   fontSize: 11.5,
                   fontFamily: 'Menlo',
-                  fontFamilyFallback: const <String>[
+                  fontFamilyFallback: <String>[
                     'SF Mono',
                     'Consolas',
                     'monospace',
+                    // Without a monospace face, the tooltip's own.
+                    if (Theme.of(context).textTheme.bodyMedium?.fontFamily
+                        case final family?)
+                      family,
                   ],
                 ),
               ),

@@ -695,7 +695,8 @@ class HomericEditableDocument extends StatefulWidget {
         cacheExtent = 250,
         estimatedBlockHeight = 48,
         layoutRevision = null,
-        typewriterFocus = false;
+        typewriterFocus = false,
+        typewriterAnchor = 0.5;
 
   const HomericEditableDocument.builder({
     super.key,
@@ -711,6 +712,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.estimatedBlockHeight = 48,
     this.layoutRevision,
     this.typewriterFocus = false,
+    this.typewriterAnchor = 0.5,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
     this.onMoveBlock,
     this.onMoveRejected,
@@ -721,6 +723,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.selectionMenuItemsBuilder,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
+        assert(typewriterAnchor >= 0 && typewriterAnchor <= 1),
         assert(blockGrabberWidth >= 0),
         child = null;
 
@@ -740,6 +743,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.estimatedBlockHeight = 36,
     this.layoutRevision,
     this.typewriterFocus = false,
+    this.typewriterAnchor = 0.5,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
     this.onMoveBlock,
     this.onMoveRejected,
@@ -752,6 +756,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.blockGrabberWidth = 0,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
+        assert(typewriterAnchor >= 0 && typewriterAnchor <= 1),
         assert(blockGrabberWidth >= 0),
         child = null;
 
@@ -769,13 +774,20 @@ class HomericEditableDocument extends StatefulWidget {
   final double estimatedBlockHeight;
   final Object? layoutRevision;
 
-  /// When true, keeps the collapsed caret line in the middle third of the
+  /// When true, holds the collapsed caret line at [typewriterAnchor] of the
   /// document viewport by scrolling the page (iA Writer-style typewriter
   /// focus). Opt-in: hosts must set this on [HomericEditableDocument.builder].
   ///
-  /// Near document edges, scroll extent may prevent centering; combining with
-  /// [padding] / [scrollPadding] gives room to keep the caret mid-viewport.
+  /// Near document edges, scroll extent may prevent holding the line there;
+  /// a [padding] / [scrollPadding] of `viewport * typewriterAnchor` above and
+  /// `viewport * (1 - typewriterAnchor)` below gives room from the first
+  /// line to the last.
   final bool typewriterFocus;
+
+  /// Where [typewriterFocus] holds the caret line, as a fraction of the
+  /// viewport height from its top: 0.5 (the default) is the middle, 1/3 the
+  /// top third.
+  final double typewriterAnchor;
 
   /// Ordered consumer shortcut registrations shared by every paragraph.
   ///
@@ -1116,6 +1128,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
             scrollControllerChanged ||
             scrollPaddingChanged ||
             oldWidget.padding != widget.padding ||
+            oldWidget.typewriterAnchor != widget.typewriterAnchor ||
             oldWidget.layoutRevision != widget.layoutRevision)) {
       _scheduleTypewriterFocus(force: true);
     }
@@ -2220,8 +2233,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
   }
 
-  /// Scrolls so the collapsed caret line stays in the middle third of the
-  /// viewport when [HomericEditableDocument.typewriterFocus] is enabled.
+  /// Scrolls so the collapsed caret line stays at the typewriter anchor of
+  /// the viewport when [HomericEditableDocument.typewriterFocus] is enabled.
   ///
   /// Otherwise, while platform input is attached, scrolls the minimum distance
   /// that keeps the caret line inside the viewport. Without it a Return near
@@ -2310,11 +2323,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         render.globalToLocal(caret.globalRect.topLeft) & caret.globalRect.size;
     final double delta;
     if (widget.typewriterFocus) {
-      // Keep the caret line at viewport center (always inside the middle
-      // third when scroll extent allows). Near document edges, clamping may
-      // leave the caret outside the band until [padding]/[scrollPadding]
-      // creates room.
-      delta = caretRect.center.dy - viewportHeight / 2;
+      // Hold the caret line at the anchor. Near document edges, clamping
+      // may leave it elsewhere until [padding]/[scrollPadding] creates room.
+      delta = caretRect.center.dy - viewportHeight * widget.typewriterAnchor;
     } else {
       // Reveal with one caret line of breathing room, never more than a
       // quarter of the viewport.

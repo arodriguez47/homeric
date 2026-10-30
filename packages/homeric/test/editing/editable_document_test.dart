@@ -4836,6 +4836,96 @@ void main() {
     await expectCaretInMiddleThird();
   });
 
+  testWidgets(
+      'typewriter anchor holds the caret line there from the first line on',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    const height = 300.0;
+    var anchor = 1 / 3;
+
+    late StateSetter rebuild;
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (context, setState) {
+        rebuild = setState;
+        // Loose, so the document is the given height, not the window's.
+        return Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 500,
+            height: height,
+            child: HomericEditableDocument.builder(
+              key: key,
+              controller: controller,
+              inputSession: session,
+              typewriterFocus: true,
+              typewriterAnchor: anchor,
+              // The room the anchor needs above and below.
+              padding: EdgeInsets.only(
+                top: height * anchor,
+                bottom: height * (1 - anchor),
+              ),
+              estimatedBlockHeight: 44,
+              blockBuilder: (context, block, focusNode) =>
+                  HomericEditableParagraph(
+                controller: controller,
+                inputSession: session,
+                blockId: block.id,
+                focusNode: focusNode,
+                resolveStyle: (_) => _style,
+              ),
+            ),
+          ),
+        );
+      },
+    )));
+    await tester.pump();
+
+    Future<void> expectCaretAt(double fraction) async {
+      double? lastY;
+      for (var frame = 0; frame < 12; frame++) {
+        await tester.pump();
+        final caret = key.currentState!.activeCaretGeometry;
+        if (caret == null) continue;
+        final box = tester.renderObject(find.byType(HomericEditableDocument))
+            as RenderBox;
+        lastY = caret.globalRect.center.dy - box.localToGlobal(Offset.zero).dy;
+        if ((lastY - height * fraction).abs() < 0.5) return;
+      }
+      fail('caret Y=$lastY must reach ${height * fraction}');
+    }
+
+    final focused = key.currentState!.settleFocusOnBlock('block-0');
+    await tester.pumpAndSettle();
+    expect(await focused, HomericFocusSettlementResult.focused);
+    controller.setSelection(
+      HomericSelection.collapsed(controller.document.positionAt(0, 2)),
+    );
+    // The first line already sits at the anchor.
+    await expectCaretAt(anchor);
+
+    controller.setSelection(HomericSelection.collapsed(
+      controller.document.positionAt(
+        controller.document.indexOfBlockId('block-20')!,
+        3,
+      ),
+    ));
+    await expectCaretAt(anchor);
+
+    // Moving the anchor moves the line without a new selection.
+    rebuild(() => anchor = 2 / 3);
+    await expectCaretAt(anchor);
+  });
+
   testWidgets('default scrolling keeps the editing caret inside the viewport',
       (tester) async {
     final document = _document(

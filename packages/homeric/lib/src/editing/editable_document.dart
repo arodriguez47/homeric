@@ -2445,7 +2445,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   }
 
   void _typewriterPointerDown(PointerDownEvent _) {
-    if (widget.typewriterFocus && widget.typewriterHoldsLine) {
+    // Also before typewriter focus is on: a host may turn it on once the
+    // click starts the writing.
+    if (widget.typewriterHoldsLine) {
       _pointerPlacesCaret = true;
     }
   }

@@ -6,6 +6,7 @@
 ///
 /// - Typing rules, installed on a controller by a [HomericWritingKit]:
 ///   [HomericSmartPunctuation], [HomericWrapShortcuts] (⌘B ⌘I ⌘E ⌘⇧S),
+///   [HomericTypedWraps] (a typed `{`, `[`, `=`… wraps the selection),
 ///   [HomericFootnotePunctuation], keyboard-only list nesting
 ///   [HomericListNesting] and the soft word cap [HomericBrevity].
 /// - Typed syntax, folded away in live preview by [HomericSyntax]:
@@ -35,6 +36,7 @@ export 'src/writing/sentences.dart';
 export 'src/writing/smart_punctuation.dart';
 export 'src/writing/syntax_decorations.dart';
 export 'src/writing/tags.dart';
+export 'src/writing/typed_wraps.dart';
 export 'src/writing/typography.dart';
 export 'src/writing/wiki_links.dart';
 export 'src/writing/wrap_shortcuts.dart';

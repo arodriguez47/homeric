@@ -8,6 +8,7 @@ import '../editing/editor_controller.dart';
 import 'list_nesting.dart';
 import 'quote_continuation.dart';
 import 'smart_punctuation.dart';
+import 'typed_wraps.dart';
 import 'wrap_shortcuts.dart';
 import 'writing_feature.dart';
 
@@ -63,6 +64,7 @@ final class HomericWritingKit {
       <HomericWritingFeature>[
     HomericSmartPunctuation(),
     HomericWrapShortcuts(),
+    HomericTypedWraps(),
     HomericListNesting(),
     HomericQuoteContinuation(),
   ];

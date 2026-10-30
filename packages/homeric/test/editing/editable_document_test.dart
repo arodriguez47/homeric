@@ -4836,6 +4836,195 @@ void main() {
     await expectCaretInMiddleThird();
   });
 
+  testWidgets('turning typewriter holding on keeps the line where it is',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    const height = 300.0;
+    var on = false;
+
+    late StateSetter rebuild;
+    await tester.pumpWidget(_withOverlay(StatefulBuilder(
+      builder: (context, setState) {
+        rebuild = setState;
+        return Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 500,
+            height: height,
+            child: HomericEditableDocument.builder(
+              key: key,
+              controller: controller,
+              inputSession: session,
+              typewriterFocus: on,
+              typewriterHoldsLine: true,
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              estimatedBlockHeight: 44,
+              blockBuilder: (context, block, focusNode) =>
+                  HomericEditableParagraph(
+                controller: controller,
+                inputSession: session,
+                blockId: block.id,
+                focusNode: focusNode,
+                resolveStyle: (_) => _style,
+              ),
+            ),
+          ),
+        );
+      },
+    )));
+    await tester.pump();
+
+    double caretY() {
+      final caret = key.currentState!.activeCaretGeometry!;
+      final box = tester.renderObject(find.byType(HomericEditableDocument))
+          as RenderBox;
+      return caret.globalRect.center.dy - box.localToGlobal(Offset.zero).dy;
+    }
+
+    Future<void> settle() async {
+      for (var frame = 0; frame < 8; frame++) {
+        await tester.pump();
+      }
+    }
+
+    final focused = key.currentState!.settleFocusOnBlock('block-1');
+    await tester.pumpAndSettle();
+    expect(await focused, HomericFocusSettlementResult.focused);
+    await settle();
+    final before = caretY();
+    expect(before, lessThan(height / 2 - 20));
+
+    rebuild(() => on = true);
+    await settle();
+    expect(caretY(), closeTo(before, 0.5));
+    controller.insertParagraphBreak();
+    await settle();
+    expect(caretY(), closeTo(before, 0.5));
+  });
+
+  testWidgets('typewriter holding keeps the line where the writer left it',
+      (tester) async {
+    final document = _document(
+      List<String>.generate(40, (index) => 'line-$index'),
+    );
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    const height = 300.0;
+    final reported = <double>[];
+
+    await tester.pumpWidget(_withOverlay(Align(
+      alignment: Alignment.topLeft,
+      child: SizedBox(
+        width: 500,
+        height: height,
+        child: HomericEditableDocument.builder(
+          key: key,
+          controller: controller,
+          inputSession: session,
+          scrollController: scroll,
+          typewriterFocus: true,
+          typewriterHoldsLine: true,
+          onTypewriterAnchorChanged: reported.add,
+          // Room to hold the line anywhere, from the first line on.
+          padding: const EdgeInsets.symmetric(vertical: height * 0.9),
+          estimatedBlockHeight: 44,
+          blockBuilder: (context, block, focusNode) => HomericEditableParagraph(
+            controller: controller,
+            inputSession: session,
+            blockId: block.id,
+            focusNode: focusNode,
+            resolveStyle: (_) => _style,
+          ),
+        ),
+      ),
+    )));
+    await tester.pump();
+
+    double caretY() {
+      final caret = key.currentState!.activeCaretGeometry!;
+      final box = tester.renderObject(find.byType(HomericEditableDocument))
+          as RenderBox;
+      return caret.globalRect.center.dy - box.localToGlobal(Offset.zero).dy;
+    }
+
+    Future<void> settle() async {
+      for (var frame = 0; frame < 8; frame++) {
+        await tester.pump();
+      }
+    }
+
+    final focused = key.currentState!.settleFocusOnBlock('block-10');
+    await tester.pumpAndSettle();
+    expect(await focused, HomericFocusSettlementResult.focused);
+    controller.setSelection(HomericSelection.collapsed(
+      controller.document.positionAt(
+        controller.document.indexOfBlockId('block-10')!,
+        2,
+      ),
+    ));
+    await settle();
+    // Before the writer moves it, the line starts in the middle.
+    expect(caretY(), closeTo(height / 2, 0.5));
+
+    // A click on another line keeps it where it is on screen.
+    final target = find.byWidgetPredicate(
+      (widget) =>
+          widget is HomericEditableParagraph && widget.blockId == 'block-8',
+    );
+    final clickY = tester.getTopLeft(target).dy + 7;
+    await tester.tapAt(Offset(tester.getTopLeft(target).dx + 15, clickY));
+    await settle();
+    expect(
+      controller.selection!.head,
+      greaterThanOrEqualTo(controller.document.positionAt(
+        controller.document.indexOfBlockId('block-8')!,
+        0,
+      )),
+    );
+    final heldAfterClick = caretY();
+    expect(heldAfterClick, lessThan(height / 2 - 10));
+    expect(reported.last, closeTo(heldAfterClick / height, 0.01));
+
+    // Return and typing scroll the page under that height.
+    controller.insertParagraphBreak();
+    await settle();
+    expect(caretY(), closeTo(heldAfterClick, 0.5));
+    controller.replaceSelection('new words');
+    await settle();
+    expect(caretY(), closeTo(heldAfterClick, 0.5));
+
+    // A scroll by the writer moves the held height with the line.
+    await tester.drag(
+      find.byType(HomericEditableDocument),
+      const Offset(0, 60),
+    );
+    await tester.pumpAndSettle();
+    final heldAfterScroll = caretY();
+    expect(heldAfterScroll, greaterThan(heldAfterClick + 30));
+    controller.insertParagraphBreak();
+    await settle();
+    expect(caretY(), closeTo(heldAfterScroll, 0.5));
+    expect(reported.last, closeTo(heldAfterScroll / height, 0.01));
+  });
+
   testWidgets(
       'typewriter anchor holds the caret line there from the first line on',
       (tester) async {

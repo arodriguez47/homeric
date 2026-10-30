@@ -25,6 +25,7 @@ import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/paragraph_source.dart';
 import '../view/view_map.dart';
+import 'context_menu.dart';
 import 'editable_document.dart';
 import 'editor_clipboard.dart';
 import 'editor_controller.dart';
@@ -2600,26 +2601,30 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                   }
                   return KeyEventResult.ignored;
                 },
-                child: AdaptiveTextSelectionToolbar(
-                  anchors: TextSelectionToolbarAnchors(
-                    primaryAnchor: anchor,
-                    secondaryAnchor: below,
-                  ),
-                  children: <Widget>[
-                    for (var index = 0; index < adaptiveButtons.length; index++)
-                      Actions(
-                        actions: <Type, Action<Intent>>{
-                          ActivateIntent: CallbackAction<ActivateIntent>(
-                            onInvoke: (_) {
-                              buttonItems[index].onPressed?.call();
-                              return null;
-                            },
-                          ),
-                        },
-                        child: adaptiveButtons[index],
+                child: homericUsesDesktopMenu()
+                    ? _desktopContextMenu(menuContext, witness, anchor)
+                    : AdaptiveTextSelectionToolbar(
+                        anchors: TextSelectionToolbarAnchors(
+                          primaryAnchor: anchor,
+                          secondaryAnchor: below,
+                        ),
+                        children: <Widget>[
+                          for (var index = 0;
+                              index < adaptiveButtons.length;
+                              index++)
+                            Actions(
+                              actions: <Type, Action<Intent>>{
+                                ActivateIntent: CallbackAction<ActivateIntent>(
+                                  onInvoke: (_) {
+                                    buttonItems[index].onPressed?.call();
+                                    return null;
+                                  },
+                                ),
+                              },
+                              child: adaptiveButtons[index],
+                            ),
+                        ],
                       ),
-                  ],
-                ),
               ),
             ),
           ),
@@ -2689,6 +2694,101 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         media.padding.bottom -
         _kDrawnMenuRoom;
     return Offset(below.dx, below.dy.clamp(0, floor < 0 ? 0 : floor));
+  }
+
+  /// The right-click menu on desktop: the host's format bar over the
+  /// spelling suggestions, the edit items with their keys, Undo and Redo,
+  /// then the host's items.
+  Widget _desktopContextMenu(
+    BuildContext context,
+    _MenuWitness witness,
+    Offset anchor,
+  ) {
+    final localizations = WidgetsLocalizations.of(context);
+    final cupertino = Localizations.of<CupertinoLocalizations>(
+      context,
+      CupertinoLocalizations,
+    );
+    final selection = _localSelection();
+    HomericMenuRow row(ContextMenuButtonItem item, {bool emphasized = false}) {
+      final (label, shortcut) = switch (item.type) {
+        ContextMenuButtonType.cut => (
+            cupertino?.cutButtonLabel ?? localizations.cutButtonLabel,
+            homericMenuShortcut('X'),
+          ),
+        ContextMenuButtonType.copy => (
+            cupertino?.copyButtonLabel ?? localizations.copyButtonLabel,
+            homericMenuShortcut('C'),
+          ),
+        ContextMenuButtonType.paste => (
+            cupertino?.pasteButtonLabel ?? localizations.pasteButtonLabel,
+            homericMenuShortcut('V'),
+          ),
+        ContextMenuButtonType.selectAll => (
+            cupertino?.selectAllButtonLabel ??
+                localizations.selectAllButtonLabel,
+            homericMenuShortcut('A'),
+          ),
+        _ => (
+            item.label ?? '',
+            switch (item.label) {
+              'Undo' => homericMenuShortcut('Z'),
+              'Redo' => homericMenuShortcut('Z', shift: true),
+              _ => null,
+            },
+          ),
+      };
+      return HomericMenuRow(
+        label: label,
+        shortcut: shortcut,
+        onPressed: item.onPressed,
+        emphasized: emphasized,
+      );
+    }
+
+    return HomericContextMenu(
+      anchor: anchor,
+      actions: _formatBarActions(witness, selection),
+      sections: <List<HomericMenuRow>>[
+        [
+          for (final item in _spellingMenuItems(witness))
+            row(item, emphasized: true),
+        ],
+        [for (final item in _editingMenuItems(witness)) row(item)],
+        [for (final item in _historyMenuItems(witness)) row(item)],
+        [
+          for (final item in _hostContextMenuItems(witness, selection))
+            row(item),
+        ],
+      ],
+    );
+  }
+
+  /// The host's format bar, each press dropped when the selection moved
+  /// since the menu opened.
+  List<HomericFormatAction> _formatBarActions(
+    _MenuWitness witness,
+    BlockTextSelection? blockSelection,
+  ) {
+    final builder = _documentHost?.selectionFormatBarBuilder;
+    final selection = _controller.selection;
+    if (builder == null ||
+        selection == null ||
+        blockSelection == null ||
+        _controller.isReadOnly) {
+      return const <HomericFormatAction>[];
+    }
+    return <HomericFormatAction>[
+      for (final action in builder(selection, widget.blockId, blockSelection))
+        if (action.onPressed case final onPressed?)
+          action.copyWith(onPressed: () {
+            final isCurrent = _isMenuWitnessCurrent(witness);
+            _dismissContextMenu();
+            if (isCurrent) onPressed();
+          })
+        else
+          action,
+    ];
   }
 
   List<ContextMenuButtonItem> _contextMenuItems(_MenuWitness witness) {

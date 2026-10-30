@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/cupertino.dart' show CupertinoButton;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart'
     show
@@ -15,6 +14,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric/src/editing/context_menu.dart'
+    show HomericMenuRowButton;
 
 const _style = TextStyle(fontSize: 14);
 
@@ -507,16 +508,16 @@ void main() {
     expect(underFinger.isCollapsed, isTrue,
         reason: 'a focused iOS long press carries the caret, as in Notes');
     expect(underFinger, isNot(initial));
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing,
+    expect(_selectionMenu, findsNothing,
         reason: 'the menu waits for the finger to lift');
     await longPress.up();
     await tester.pump();
     expect(controller.selection, underFinger);
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget,
+    expect(_selectionMenu, findsOneWidget,
         reason: 'lifting opens the edit menu');
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    expect(_selectionMenu, findsNothing);
     controller.setSelection(initial);
     await tester.pump();
 
@@ -2716,10 +2717,11 @@ void main() {
     await tester.pump();
     expect(_localSelection(controller),
         const BlockTextSelection(anchor: 0, head: 3));
-    final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+    final toolbar = _selectionMenu;
     final menuButtons = tester
-        .widgetList<CupertinoButton>(
-          find.descendant(of: toolbar, matching: find.byType(CupertinoButton)),
+        .widgetList<HomericMenuRowButton>(
+          find.descendant(
+              of: toolbar, matching: find.byType(HomericMenuRowButton)),
         )
         .toList(growable: false);
     expect(
@@ -2753,7 +2755,7 @@ void main() {
     await tester.pump();
     expect(clipboard.writes, isEmpty);
     expect(controller.document.blocks.single.text, 'one two');
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    expect(_selectionMenu, findsNothing);
 
     final geometry = ParagraphGeometry(tester
         .renderObject<RenderHomericParagraph>(find.byType(HomericParagraph)));
@@ -2822,7 +2824,7 @@ void main() {
 
     expect(clipboard.writes, <String>['one']);
     expect(controller.document.blocks.single.text, 'one two');
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    expect(_selectionMenu, findsNothing);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -2862,7 +2864,7 @@ void main() {
     focusNode.requestFocus();
     await tester.pump();
     final origin = tester.getTopLeft(find.byType(HomericEditableParagraph));
-    final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+    final toolbar = _selectionMenu;
 
     Future<void> clickMenuItem(String label) async {
       await tester.tapAt(
@@ -3157,10 +3159,10 @@ void main() {
       buttons: kSecondaryMouseButton,
     );
     await tester.pump();
-    final toolbar = find.byType(AdaptiveTextSelectionToolbar);
-    final suggestion = tester.widget<CupertinoButton>(
+    final toolbar = _selectionMenu;
+    final suggestion = tester.widget<HomericMenuRowButton>(
       find
-          .descendant(of: toolbar, matching: find.byType(CupertinoButton))
+          .descendant(of: toolbar, matching: find.byType(HomericMenuRowButton))
           .first,
     );
     expect(find.descendant(of: toolbar, matching: find.text('strong')),
@@ -3245,12 +3247,13 @@ void main() {
           .center;
       await tester.tapAt(origin + word, buttons: kSecondaryMouseButton);
       await tester.pump();
-      final toolbar = find.byType(AdaptiveTextSelectionToolbar);
+      final toolbar = _selectionMenu;
       expect(find.descendant(of: toolbar, matching: find.text('Remember')),
           findsOneWidget);
       tester
-          .widget<CupertinoButton>(find
-              .descendant(of: toolbar, matching: find.byType(CupertinoButton))
+          .widget<HomericMenuRowButton>(find
+              .descendant(
+                  of: toolbar, matching: find.byType(HomericMenuRowButton))
               .first)
           .onPressed!();
       await tester.pump();
@@ -3328,10 +3331,10 @@ void main() {
     await _sendShowToolbar(binding, 1);
     await tester.pump();
     expect(toolbarRequests, 1);
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    expect(_selectionMenu, findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    expect(_selectionMenu, findsNothing);
 
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
@@ -3355,11 +3358,11 @@ void main() {
     await tester.pump();
     expect(toolbarRequests, 1,
         reason: 'the superseded text-input client is inert');
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+    expect(_selectionMenu, findsNothing);
     await _sendShowToolbar(binding, 2);
     await tester.pump();
     expect(toolbarRequests, 2);
-    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    expect(_selectionMenu, findsOneWidget);
     ContextMenuController.removeAny();
   });
 
@@ -3655,3 +3658,11 @@ final class _FakeSpellProvider implements HomericSpellCheckProvider {
     _pending[index].complete(suggestions);
   }
 }
+
+/// The drawn selection menu: the touch toolbar, or the desktop menu with
+/// its format bar.
+final Finder _selectionMenu = find.byWidgetPredicate(
+  (widget) =>
+      widget is AdaptiveTextSelectionToolbar ||
+      widget.key == const ValueKey<String>('homeric-context-menu'),
+);

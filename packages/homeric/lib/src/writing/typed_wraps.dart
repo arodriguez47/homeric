@@ -310,6 +310,28 @@ final class HomericTypedWrapsSession {
     );
   }
 
+  /// Whether [selection]'s words already sit inside [typed]'s whole pair
+  /// (`==words==` for `=`), so [prepareMenuWrap] would take it off.
+  bool isWrapped(HomericSelection? selection, String typed) {
+    final pair = feature.pairs[typed];
+    if (selection == null || selection.isCollapsed || pair == null) {
+      return false;
+    }
+    final document = controller.document;
+    final anchor = document.resolve(selection.anchor);
+    final head = document.resolve(selection.head);
+    if (anchor is! InlinePosition ||
+        head is! InlinePosition ||
+        anchor.blockIndex != head.blockIndex) {
+      return false;
+    }
+    final start = anchor.offset < head.offset ? anchor.offset : head.offset;
+    final end = anchor.offset < head.offset ? head.offset : anchor.offset;
+    final resolved = _pairFor(typed, pair, anchor.block.type == 'code');
+    return _depthAround(anchor.block.text, start, end, resolved) >=
+        resolved.depth;
+  }
+
   /// [pair], with quotes straight in code or when curly quotes are off.
   HomericWrapPair _pairFor(String typed, HomericWrapPair pair, bool code) {
     if ((typed == '"' || typed == "'") &&

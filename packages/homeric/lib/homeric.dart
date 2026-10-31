@@ -35,6 +35,7 @@ export 'src/editing/editor_clipboard.dart'
         HomericPasteRejected,
         SystemHomericClipboard;
 export 'src/editing/editable_paragraph.dart';
+export 'src/editing/keyboard_format_bar.dart';
 export 'src/editing/markdown_inline.dart';
 export 'src/editing/markdown_image_slot.dart';
 export 'src/editing/markdown_list_indent.dart';

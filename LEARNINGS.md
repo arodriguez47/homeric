@@ -1445,3 +1445,23 @@ height. Lay out a mark with `copyWith(inherit: false)` of the line's style so
 its leading matches the paragraph. Prove changes across the real range
 (text scale 0.55–3.1). Evidence: `test/render/letter_metrics_test.dart`,
 `test/writing/list_mark_test.dart` (homeric#83).
+
+## engineer — 2026-10-31 — A keyboard accessory row is part of the keyboard
+
+**What:** Flutter has no `inputAccessoryView`; a row drawn over the touch
+keyboard (`HomericKeyboardFormatBar`) is a widget above the Navigator,
+positioned at `viewInsets.bottom`. Drawn alone it covers the last 44pt of
+every page, and the caret can hide under it. The row instead adds its height
+to `MediaQuery.viewInsets.bottom` for everything beneath it, as UIKit counts
+an accessory in the keyboard's frame, so scaffolds and editors make room
+with no per-page change. It shows only while a paragraph of a document holds
+the primary focus (`HomericEditableDocument.ofPrimaryFocus`, which answers no
+for a composer inside the document) and the keyboard is up. Its keys never
+take focus, and the row is a `TextFieldTapRegion`, so a press keeps the
+selection's handles and the keyboard.
+
+**Rule going forward:** anything pinned to the keyboard joins the keyboard's
+inset rather than overlaying the page; pages keep reading
+`viewInsets.bottom > 0` as "keyboard up". A press that acts on the word at a
+caret selects the word first and puts the caret back afterwards, or the next
+key replaces the word. Evidence: `test/writing/keyboard_format_bar_test.dart`.

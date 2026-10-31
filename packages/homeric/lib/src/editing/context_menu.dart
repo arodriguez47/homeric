@@ -50,6 +50,23 @@ bool homericUsesDesktopMenu() => switch (defaultTargetPlatform) {
       _ => false,
     };
 
+/// Whether a phone or tablet shows the desktop menu: a tablet with no
+/// on-screen keyboard up, so its writer types on a hardware keyboard and
+/// there is no format bar over the keys. The iPad then looks like the Mac.
+///
+/// Tablets start at 700 points across their short side: the smallest iPad
+/// is 744, the largest phone about 440.
+bool homericTabletUsesDesktopMenu() {
+  if (defaultTargetPlatform != TargetPlatform.iOS &&
+      defaultTargetPlatform != TargetPlatform.android) {
+    return false;
+  }
+  final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+  if (view == null || view.devicePixelRatio <= 0) return false;
+  final size = view.physicalSize / view.devicePixelRatio;
+  return size.shortestSide >= 700 && view.viewInsets.bottom <= 0;
+}
+
 const double _kButton = 30;
 const double _kMenuPadding = 5;
 const double _kRowHeight = 26;

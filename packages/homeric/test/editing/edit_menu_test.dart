@@ -36,6 +36,8 @@ void main() {
     required int caret,
     bool systemMenu = false,
     List<ContextMenuButtonItem> Function()? hostItems,
+    List<HomericFormatAction> Function()? formatBar,
+    bool readOnly = false,
   }) async {
     final document = Document(<Block>[
       Block(id: 'b', type: 'paragraph', runs: <InlineRun>[InlineRun(text)]),
@@ -43,6 +45,7 @@ void main() {
     final controller = HomericEditorController(
       document: document,
       selection: HomericSelection.collapsed(document.positionAt(0, caret)),
+      readOnly: readOnly,
     );
     final session = HomericTextInputSession(controller: controller);
     final focusNode = FocusNode();
@@ -56,11 +59,14 @@ void main() {
       focusNode: focusNode,
       resolveStyle: (_) => _style,
     );
-    if (hostItems != null) {
+    if (hostItems != null || formatBar != null) {
       paragraph = HomericEditableDocument(
         controller: controller,
         inputSession: session,
-        selectionMenuItemsBuilder: (_, __, ___) => hostItems(),
+        selectionMenuItemsBuilder:
+            hostItems == null ? null : (_, __, ___) => hostItems(),
+        selectionFormatBarBuilder:
+            formatBar == null ? null : (_, __, ___) => formatBar(),
         child: paragraph,
       );
     }
@@ -81,7 +87,7 @@ void main() {
     ));
     focusNode.requestFocus();
     await tester.pump();
-    expect(session.isAttached, isTrue);
+    if (!readOnly) expect(session.isAttached, isTrue);
     return (controller: controller, session: session);
   }
 
@@ -293,6 +299,136 @@ void main() {
       contains('ContextMenu.hideSystemContextMenu'),
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  group('a tablet typing on a hardware keyboard', () {
+    void useTablet(WidgetTester tester, {double keyboard = 0}) {
+      tester.view.physicalSize = const Size(2388, 1668);
+      tester.view.devicePixelRatio = 2;
+      tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
+      addTearDown(tester.view.reset);
+    }
+
+    Future<void> longPress(WidgetTester tester, Offset at) async {
+      final press = await tester.startGesture(
+        at,
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+      await press.up();
+      await tester.pump();
+    }
+
+    List<HomericFormatAction> formatBar() => <HomericFormatAction>[
+          HomericFormatAction(
+            icon: const IconData(0x42),
+            label: 'Bold',
+            onPressed: () {},
+          ),
+          HomericFormatAction(
+            icon: const IconData(0x49),
+            label: 'Italic',
+            onPressed: () {},
+          ),
+        ];
+
+    testWidgets('gets the Mac menu: format bar, edit rows with keys',
+        (tester) async {
+      useTablet(tester);
+      const text = 'alpha beta';
+      var pocketed = 0;
+      await pumpParagraph(
+        tester,
+        text: text,
+        caret: 2,
+        systemMenu: true,
+        formatBar: formatBar,
+        hostItems: () => <ContextMenuButtonItem>[
+          ContextMenuButtonItem(
+              label: 'To pocket', onPressed: () => pocketed++),
+        ],
+      );
+      expect(homericTabletUsesDesktopMenu(), isTrue);
+
+      await longPress(tester, caretPoint(tester, text, 8));
+
+      expect(
+        platformCalls.map((call) => call.method),
+        isNot(contains('ContextMenu.showSystemContextMenu')),
+        reason: 'the iPad draws the Mac menu, not UIKit\'s pill',
+      );
+      expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+      final menu = find.byKey(const ValueKey<String>('homeric-context-menu'));
+      expect(menu, findsOneWidget);
+      expect(
+        find.descendant(
+          of: menu,
+          matching: find.byKey(const ValueKey<String>('homeric-format-Bold')),
+        ),
+        findsOneWidget,
+        reason: 'the format bar rides across the top',
+      );
+      for (final key in ['⌘X', '⌘C', '⌘V', '⌘A', '⌘Z', '⇧⌘Z']) {
+        expect(
+            find.descendant(of: menu, matching: find.text(key)), findsOneWidget,
+            reason: '$key sits beside its row, as on the Mac');
+      }
+      expect(find.descendant(of: menu, matching: find.text('To pocket')),
+          findsOneWidget);
+
+      final word = tester.getRect(find.byType(HomericParagraph));
+      expect(tester.getTopLeft(menu).dy, greaterThan(word.top),
+          reason: 'a touch-opened menu hangs under the words');
+
+      await tester.tap(find.text('To pocket'));
+      await tester.pump();
+      expect(pocketed, 1);
+      expect(menu, findsNothing, reason: 'a row closes the menu');
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+    testWidgets('keeps the touch menu while the on-screen keyboard is up',
+        (tester) async {
+      useTablet(tester, keyboard: 700);
+      const text = 'alpha beta';
+      await pumpParagraph(tester, text: text, caret: 2, systemMenu: true);
+      expect(homericTabletUsesDesktopMenu(), isFalse);
+
+      await longPress(tester, caretPoint(tester, text, 8));
+
+      expect(find.byKey(const ValueKey<String>('homeric-context-menu')),
+          findsNothing);
+      expect(
+        platformCalls.map((call) => call.method),
+        contains('ContextMenu.showSystemContextMenu'),
+      );
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+    testWidgets('a phone keeps the touch menu', (tester) async {
+      tester.view.physicalSize = const Size(1179, 2556);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      const text = 'alpha beta';
+      await pumpParagraph(tester, text: text, caret: 2);
+      expect(homericTabletUsesDesktopMenu(), isFalse);
+
+      await longPress(tester, caretPoint(tester, text, 8));
+
+      expect(find.byKey(const ValueKey<String>('homeric-context-menu')),
+          findsNothing);
+      expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+    testWidgets('read-only words keep the touch menu', (tester) async {
+      useTablet(tester);
+      const text = 'alpha beta';
+      await pumpParagraph(tester, text: text, caret: 2, readOnly: true);
+
+      await longPress(tester, caretPoint(tester, text, 8));
+
+      expect(find.byKey(const ValueKey<String>('homeric-context-menu')),
+          findsNothing,
+          reason: 'nothing to format when the words cannot change');
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+  });
 
   testWidgets('the platform spell checker reports through its channel',
       (tester) async {

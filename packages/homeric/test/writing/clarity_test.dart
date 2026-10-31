@@ -46,6 +46,13 @@ void main() {
       expect(clarity.longSentencesInText('a', text), hasLength(1));
     });
 
+    test('a footnote reference is not a word', () {
+      expect(
+        clarity.longSentencesInText('a', '${words(20)}[^source].'),
+        isEmpty,
+      );
+    });
+
     test('decorations carry the spec for each length', () {
       final b = block('b', '${words(22)}. ${words(35)}.');
       final decorations =
@@ -86,6 +93,14 @@ void main() {
           'restructuring the comprehensive initiative.';
       const broken = 'Notwithstanding considerable apprehension the team kept\n'
           'restructuring the comprehensive initiative.';
+      expect(HomericClarity.grade(broken), HomericClarity.grade(one));
+    });
+
+    test('a soft break before a quoted lower-case word continues', () {
+      const one = 'Notwithstanding considerable apprehension the team kept '
+          '“restructuring” the comprehensive initiative.';
+      const broken = 'Notwithstanding considerable apprehension the team kept\n'
+          '“restructuring” the comprehensive initiative.';
       expect(HomericClarity.grade(broken), HomericClarity.grade(one));
     });
 

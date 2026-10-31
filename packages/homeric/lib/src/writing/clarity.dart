@@ -155,15 +155,16 @@ final class HomericClarity {
 
 /// [text] with the notes a reader doesn't read inline blanked to spaces,
 /// so offsets stay the same: inline footnotes, the note half of an
-/// annotation, `%%` lines and footnote definitions. [HomericMarkScan]
+/// annotation, `%%` lines, footnote definitions and references. [HomericMarkScan]
 /// settles which marks count, so nothing in a code span or wiki link is
-/// taken for a note.
+/// taken for a note. A footnote reference reads as its marker, not its id.
 String _readable(String text) {
   final scan = HomericMarkScan(text);
   final spans = <(int, int)>[
     ...scan.foldedSpans,
     for (final c in scan.commentLines) (c.start, c.end),
     for (final d in scan.definitions) (d.start, d.end),
+    for (final r in scan.references) (r.start, r.end),
   ];
   if (spans.isEmpty) return text;
   final out = text.split('');
@@ -181,7 +182,8 @@ String _readable(String text) {
 Iterable<String> _paragraphs(String text) sync* {
   final buffer = StringBuffer();
   for (final line in text.split('\n')) {
-    final next = line.trimLeft();
+    // The first letter, past any opening quote or bracket.
+    final next = line.replaceFirst(RegExp('^[\\s"“‘\'(\\[«¿¡]+'), '');
     final continues = buffer.isNotEmpty &&
         next.isNotEmpty &&
         next[0] != next[0].toUpperCase() &&

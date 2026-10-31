@@ -940,6 +940,20 @@ class HomericEditableDocument extends StatefulWidget {
       .dependOnInheritedWidgetOfExactType<_HomericEditableDocumentScope>()
       ?.state;
 
+  /// The document whose paragraph holds the app's primary focus, or null
+  /// when the focus is anywhere else (a note composer inside the document
+  /// counts as elsewhere).
+  static HomericEditableDocumentState? ofPrimaryFocus() {
+    final node = FocusManager.instance.primaryFocus;
+    final context = node?.context;
+    if (node == null || context == null || !context.mounted) return null;
+    final state = context
+        .getInheritedWidgetOfExactType<_HomericEditableDocumentScope>()
+        ?.state;
+    if (state == null || !state.mounted) return null;
+    return state._mountedFocusNodes.containsValue(node) ? state : null;
+  }
+
   @override
   State<HomericEditableDocument> createState() =>
       HomericEditableDocumentState();

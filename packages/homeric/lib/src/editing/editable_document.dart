@@ -771,7 +771,10 @@ class HomericEditableDocument extends StatefulWidget {
         cacheExtent = 250,
         estimatedBlockHeight = 48,
         layoutRevision = null,
-        typewriterFocus = false;
+        typewriterFocus = false,
+        typewriterAnchor = 0.5,
+        typewriterHoldsLine = false,
+        onTypewriterAnchorChanged = null;
 
   const HomericEditableDocument.builder({
     super.key,
@@ -787,6 +790,9 @@ class HomericEditableDocument extends StatefulWidget {
     this.estimatedBlockHeight = 48,
     this.layoutRevision,
     this.typewriterFocus = false,
+    this.typewriterAnchor = 0.5,
+    this.typewriterHoldsLine = false,
+    this.onTypewriterAnchorChanged,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
     this.onMoveBlock,
     this.onMoveRejected,
@@ -798,6 +804,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.selectionFormatBarBuilder,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
+        assert(typewriterAnchor >= 0 && typewriterAnchor <= 1),
         assert(blockGrabberWidth >= 0),
         child = null;
 
@@ -817,6 +824,9 @@ class HomericEditableDocument extends StatefulWidget {
     this.estimatedBlockHeight = 36,
     this.layoutRevision,
     this.typewriterFocus = false,
+    this.typewriterAnchor = 0.5,
+    this.typewriterHoldsLine = false,
+    this.onTypewriterAnchorChanged,
     this.commandBindings = const <HomericDocumentCommandBinding>[],
     this.onMoveBlock,
     this.onMoveRejected,
@@ -830,6 +840,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.blockGrabberWidth = 0,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
+        assert(typewriterAnchor >= 0 && typewriterAnchor <= 1),
         assert(blockGrabberWidth >= 0),
         child = null;
 
@@ -847,13 +858,31 @@ class HomericEditableDocument extends StatefulWidget {
   final double estimatedBlockHeight;
   final Object? layoutRevision;
 
-  /// When true, keeps the collapsed caret line in the middle third of the
+  /// When true, holds the collapsed caret line at [typewriterAnchor] of the
   /// document viewport by scrolling the page (iA Writer-style typewriter
   /// focus). Opt-in: hosts must set this on [HomericEditableDocument.builder].
   ///
-  /// Near document edges, scroll extent may prevent centering; combining with
-  /// [padding] / [scrollPadding] gives room to keep the caret mid-viewport.
+  /// Near document edges, scroll extent may prevent holding the line there;
+  /// a [padding] / [scrollPadding] of `viewport * typewriterAnchor` above and
+  /// `viewport * (1 - typewriterAnchor)` below gives room from the first
+  /// line to the last.
   final bool typewriterFocus;
+
+  /// Where [typewriterFocus] holds the caret line, as a fraction of the
+  /// viewport height from its top: 0.5 (the default) is the middle, 1/3 the
+  /// top third. With [typewriterHoldsLine], only where it starts.
+  final double typewriterAnchor;
+
+  /// When true, [typewriterFocus] holds the caret line wherever the writer
+  /// leaves it rather than at a fixed [typewriterAnchor]: turning typewriter
+  /// focus on keeps the line where it is, and a click or tap that moves the
+  /// caret, or a scroll by the writer, moves the held height there. Typing,
+  /// Return and the arrow keys then scroll the page under that height.
+  final bool typewriterHoldsLine;
+
+  /// Reports the height [typewriterHoldsLine] moved the line to, as a
+  /// fraction like [typewriterAnchor], so a host can start there next time.
+  final ValueChanged<double>? onTypewriterAnchorChanged;
 
   /// Ordered consumer shortcut registrations shared by every paragraph.
   ///
@@ -966,6 +995,17 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   int _consumerScrollGeneration = 0;
   int _focusLossCheckGeneration = 0;
   int _typewriterFocusGeneration = 0;
+
+  /// Where [HomericEditableDocument.typewriterHoldsLine] holds the line,
+  /// once the writer has put it somewhere.
+  double? _heldTypewriterAnchor;
+
+  /// A pointer is down (or just came up) over the document: a caret it
+  /// places stays where it lands and becomes the held height.
+  bool _pointerPlacesCaret = false;
+
+  /// The writer is scrolling the page (a drag or a wheel).
+  bool _writerScrolled = false;
   VoidCallback? _removeTypewriterScrollIdleListener;
   HomericSelection? _typewriterSelection;
   int _typewriterContentRevision = -1;
@@ -1199,11 +1239,19 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       _cancelTypewriterScrollIdleWait();
     }
     if (widget.typewriterFocus &&
+        widget.typewriterHoldsLine &&
+        (!oldWidget.typewriterFocus || !oldWidget.typewriterHoldsLine)) {
+      // The last frame's layout still stands: hold the line where it is.
+      _holdCaretLine();
+    }
+    if (widget.typewriterFocus &&
         (!oldWidget.typewriterFocus ||
             !identical(oldWidget.controller, widget.controller) ||
             scrollControllerChanged ||
             scrollPaddingChanged ||
             oldWidget.padding != widget.padding ||
+            oldWidget.typewriterAnchor != widget.typewriterAnchor ||
+            oldWidget.typewriterHoldsLine != widget.typewriterHoldsLine ||
             oldWidget.layoutRevision != widget.layoutRevision)) {
       _scheduleTypewriterFocus(force: true);
     }
@@ -2308,8 +2356,8 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
   }
 
-  /// Scrolls so the collapsed caret line stays in the middle third of the
-  /// viewport when [HomericEditableDocument.typewriterFocus] is enabled.
+  /// Scrolls so the collapsed caret line stays at the typewriter anchor of
+  /// the viewport when [HomericEditableDocument.typewriterFocus] is enabled.
   ///
   /// Otherwise, while platform input is attached, scrolls the minimum distance
   /// that keeps the caret line inside the viewport. Without it a Return near
@@ -2321,12 +2369,27 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     final contentRevision = widget.controller.contentRevision;
     final changed = selection != _typewriterSelection ||
         contentRevision != _typewriterContentRevision;
+    final previousRevision = _typewriterContentRevision;
     // Recorded even when nothing is revealed, so a later layout-only call
     // cannot mistake an old selection for a new one.
     _typewriterSelection = selection;
     _typewriterContentRevision = contentRevision;
     if (widget.typewriterFocus) {
       if (!force && !changed) return;
+      if (widget.typewriterHoldsLine &&
+          _pointerPlacesCaret &&
+          changed &&
+          contentRevision == previousRevision) {
+        // A click or tap put the caret there: the line stays where it
+        // landed, and that is the new held height.
+        _typewriterFocusGeneration++;
+        _cancelTypewriterScrollIdleWait();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _holdCaretLine(report: true);
+        });
+        WidgetsBinding.instance.ensureVisualUpdate();
+        return;
+      }
     } else if (!changed || !widget.inputSession.isAttached) {
       // Outside typewriter mode only an edit or a selection change while
       // editing reveals the caret: forced layout updates (padding, height
@@ -2398,11 +2461,9 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         render.globalToLocal(caret.globalRect.topLeft) & caret.globalRect.size;
     final double delta;
     if (widget.typewriterFocus) {
-      // Keep the caret line at viewport center (always inside the middle
-      // third when scroll extent allows). Near document edges, clamping may
-      // leave the caret outside the band until [padding]/[scrollPadding]
-      // creates room.
-      delta = caretRect.center.dy - viewportHeight / 2;
+      // Hold the caret line at the anchor. Near document edges, clamping
+      // may leave it elsewhere until [padding]/[scrollPadding] creates room.
+      delta = caretRect.center.dy - viewportHeight * _typewriterAnchor;
     } else {
       // Reveal with one caret line of breathing room, never more than a
       // quarter of the viewport.
@@ -2420,6 +2481,72 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         .clamp(position.minScrollExtent, position.maxScrollExtent);
     if ((target - _scrollController.offset).abs() < 0.5) return;
     _scrollController.jumpTo(target);
+  }
+
+  double get _typewriterAnchor => widget.typewriterHoldsLine
+      ? _heldTypewriterAnchor ?? widget.typewriterAnchor
+      : widget.typewriterAnchor;
+
+  /// Takes the caret line's height in the viewport as the one
+  /// [HomericEditableDocument.typewriterHoldsLine] holds. A line out of
+  /// view, or pressed against an edge, leaves the held height as it was.
+  void _holdCaretLine({bool report = false}) {
+    if (!widget.typewriterHoldsLine) return;
+    final selection = widget.controller.selection;
+    if (selection == null || !selection.isCollapsed) return;
+    final caret = activeCaretGeometry;
+    final render = context.findRenderObject();
+    if (caret == null ||
+        !caret.globalRect.isFinite ||
+        render is! RenderBox ||
+        !render.attached ||
+        !render.hasSize ||
+        render.size.height <= 0) {
+      return;
+    }
+    final centre = render.globalToLocal(caret.globalRect.center).dy;
+    final fraction = centre / render.size.height;
+    if (fraction < 0.05 || fraction > 0.95) return;
+    _heldTypewriterAnchor = fraction;
+    if (report) widget.onTypewriterAnchorChanged?.call(fraction);
+  }
+
+  bool _typewriterScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is UserScrollNotification &&
+        notification.direction != ScrollDirection.idle) {
+      // Only a drag or a wheel says which way it goes; the editor's own
+      // jumps never do.
+      _writerScrolled = true;
+    } else if (notification is ScrollEndNotification && _writerScrolled) {
+      _writerScrolled = false;
+      // The writer scrolled: the line stays where they left it, measured
+      // once the scrolled frame is laid out.
+      if (widget.typewriterFocus) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _holdCaretLine(report: true);
+        });
+        WidgetsBinding.instance.ensureVisualUpdate();
+      }
+    }
+    return false;
+  }
+
+  void _typewriterPointerDown(PointerDownEvent _) {
+    // Also before typewriter focus is on: a host may turn it on once the
+    // click starts the writing.
+    if (widget.typewriterHoldsLine) {
+      _pointerPlacesCaret = true;
+    }
+  }
+
+  void _typewriterPointerUp(PointerEvent _) {
+    if (!_pointerPlacesCaret) return;
+    // The tap's selection lands as the gesture arena settles, after this.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pointerPlacesCaret = false;
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   /// Scrolls the active block into view when its caret geometry is missing or
@@ -2993,7 +3120,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
       if (!widget.controller.isReadOnly && widget.controller.canRedo)
         _documentRedoSemanticsAction: widget.controller.redo,
     };
-    return Semantics(
+    final viewport = Semantics(
       container: true,
       explicitChildNodes: true,
       label: 'Document editor, ${document.blockCount} blocks',
@@ -3092,6 +3219,18 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
             ),
           ),
         ],
+      ),
+    );
+    // Always in the tree, so switching typewriter focus keeps the scroll
+    // view (and its position) mounted.
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _typewriterPointerDown,
+      onPointerUp: _typewriterPointerUp,
+      onPointerCancel: _typewriterPointerUp,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _typewriterScrollNotification,
+        child: viewport,
       ),
     );
   }

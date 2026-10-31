@@ -14,6 +14,7 @@ import '../editing/context_menu.dart' show homericMenuShortcut;
 import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
 import '../model/selection.dart';
+import 'block_indent.dart';
 import 'typed_wraps.dart';
 import 'wrap_shortcuts.dart';
 
@@ -25,6 +26,11 @@ abstract final class HomericFormatBar {
   /// Link and Note need [wraps] (they do what typing `[[` and `{{` over the
   /// words does, so the host's own link menu or note composer follows);
   /// Footnote needs [onFootnote]. Switch any of the rest off with its flag.
+  ///
+  /// With [indents], Outdent and Indent end the bar, a group of their own:
+  /// they move the whole line ([HomericBlockIndent]), paragraph or list
+  /// item, so they work with only a caret. [indentTypes] are the block
+  /// types that indent as paragraphs.
   static List<HomericFormatAction> standard(
     HomericEditorController controller,
     HomericSelection selection, {
@@ -36,6 +42,9 @@ abstract final class HomericFormatBar {
     bool note = true,
     VoidCallback? onFootnote,
     String? footnoteShortcut,
+    bool indents = false,
+    Set<String> indentTypes = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? indentFilter,
   }) {
     final words = !selection.isCollapsed;
     HomericFormatAction? typed(
@@ -66,7 +75,78 @@ abstract final class HomericFormatBar {
           shortcut: footnoteShortcut,
           onPressed: words ? onFootnote : null,
         ),
+      if (indents) ...[
+        HomericFormatBar.outdent(
+          controller,
+          selection,
+          types: indentTypes,
+          accepts: indentFilter,
+        ).copyWith(startsGroup: true),
+        HomericFormatBar.indent(
+          controller,
+          selection,
+          types: indentTypes,
+          accepts: indentFilter,
+        ),
+      ],
     ]._groupedAfter(const <String>{'Link', 'Note', 'Footnote'});
+  }
+
+  /// Tab: the line one step in, under the line above.
+  static HomericFormatAction indent(
+    HomericEditorController controller,
+    HomericSelection selection, {
+    Set<String> types = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? accepts,
+  }) =>
+      _indent(controller, selection,
+          outdent: false, types: types, accepts: accepts);
+
+  /// Shift-Tab: the line one step back toward the margin.
+  static HomericFormatAction outdent(
+    HomericEditorController controller,
+    HomericSelection selection, {
+    Set<String> types = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? accepts,
+  }) =>
+      _indent(controller, selection,
+          outdent: true, types: types, accepts: accepts);
+
+  static HomericFormatAction _indent(
+    HomericEditorController controller,
+    HomericSelection selection, {
+    required bool outdent,
+    required Set<String> types,
+    HomericIndentFilter? accepts,
+  }) {
+    final possible = HomericBlockIndent.canIndent(
+      controller.document,
+      selection,
+      outdent: outdent,
+      types: types,
+      accepts: accepts,
+    );
+    return HomericFormatAction(
+      icon: outdent
+          ? Icons.format_indent_decrease_rounded
+          : Icons.format_indent_increase_rounded,
+      label: outdent ? 'Outdent' : 'Indent',
+      description: outdent
+          ? 'Moves the line a step back toward the margin. Backspace at '
+              'the start of its words does the same.'
+          : 'Moves the line a step in, under the line above; a list item '
+              'nests. A space at the start of its words does the same.',
+      shortcut: outdent ? '⇧Tab' : 'Tab',
+      actsOnBlock: true,
+      onPressed: !possible
+          ? null
+          : () => HomericBlockIndent.indentSelection(
+                controller,
+                outdent: outdent,
+                types: types,
+                accepts: accepts,
+              ),
+    );
   }
 
   /// ⌘B: `**words**`.

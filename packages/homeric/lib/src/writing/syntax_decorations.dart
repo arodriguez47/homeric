@@ -23,6 +23,7 @@ import '../render/homeric_paragraph.dart' show HomericGluedSlot;
 import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../view/view_text.dart' show ReplacementContent;
+import 'block_indent.dart' show HomericBlockIndent, HomericIndentFilter;
 import 'checklists.dart';
 import 'divider.dart';
 import 'list_glyphs.dart';
@@ -124,6 +125,7 @@ final class HomericSyntax {
     this.listGlyphs = true,
     this.hangingLists = false,
     this.hangingTodos = false,
+    this.hangingIndents = false,
   });
 
   /// Every form.
@@ -198,6 +200,13 @@ final class HomericSyntax {
   /// ([HomericChecklistSpec]) and wrapped lines run back under it.
   final bool hangingTodos;
 
+  /// Indented paragraphs ([HomericBlockIndent]): a paragraph's leading
+  /// indent (two spaces or a tab a level) is folded out of the line and
+  /// [listHangFor] gives it a [HomericListHang.indent], which
+  /// [HomericListLine] lays out with an empty gutter, so every wrapped line
+  /// keeps to the indent. Off, leading spaces show as typed.
+  final bool hangingIndents;
+
   /// The decorations for [block].
   ///
   /// A `[[link]]`, `{{annotation}}`, `++aside++` or `~~strike~~` holding
@@ -207,12 +216,15 @@ final class HomericSyntax {
   /// instead.
   ///
   /// With [dropCap], a `^^` initial is sunk into the first two lines
-  /// instead of raised above the first.
+  /// instead of raised above the first. [indentFilter] and [indentTypes]
+  /// as for [listHangFor].
   Iterable<Decoration> decorationsFor(
     Block block, {
     int? caret,
     bool noteMarkers = true,
     HomericDropCapLayout? dropCap,
+    HomericIndentFilter? indentFilter,
+    Set<String> indentTypes = HomericBlockIndent.defaultTypes,
   }) {
     // `---` alone: a divider in place of its source, which shows with the
     // caret on the line.
@@ -226,7 +238,14 @@ final class HomericSyntax {
       ];
     }
     final scan = HomericMarkScan(block.text);
-    final hang = hangingLists ? listHangFor(block, caret: caret) : null;
+    final hang = hangingLists || hangingIndents
+        ? listHangFor(
+            block,
+            caret: caret,
+            indentFilter: indentFilter,
+            indentTypes: indentTypes,
+          )
+        : null;
     final layer = _layerDecorations(
       this,
       block,
@@ -275,17 +294,32 @@ final class HomericSyntax {
   }
 
   /// The hanging-indent layout for [block] when [hangingLists] is on and
-  /// [block] is a list line whose marker does not hold [caret]; null
+  /// [block] is a list line whose marker does not hold [caret], or when
+  /// [hangingIndents] is on and [block] is an indented paragraph; null
   /// otherwise. The host passes it to [HomericListLine].
-  HomericListHang? listHangFor(Block block, {int? caret}) =>
-      markdown && hangingLists
-          ? HomericListHang.of(
-              block,
-              caret: caret,
-              glyphs: listGlyphs,
-              todos: hangingTodos && checklists,
-            )
-          : null;
+  ///
+  /// [indentFilter] leaves out paragraphs the host doesn't indent (code in
+  /// a fence), as [HomericBlockIndent.accepts] does; [indentTypes] are the
+  /// block types indented as paragraphs, as [HomericBlockIndent.types].
+  HomericListHang? listHangFor(
+    Block block, {
+    int? caret,
+    HomericIndentFilter? indentFilter,
+    Set<String> indentTypes = HomericBlockIndent.defaultTypes,
+  }) {
+    if (!markdown || !(hangingLists || hangingIndents)) return null;
+    final hang = HomericListHang.of(
+      block,
+      caret: caret,
+      glyphs: listGlyphs,
+      todos: hangingTodos && checklists,
+      indents: hangingIndents,
+      indentTypes: indentTypes,
+      indentFilter: indentFilter,
+    );
+    if (hang != null && !hang.indent && !hangingLists) return null;
+    return hang;
+  }
 
   /// Homeric refuses a paragraph whose hidden ranges overlap, so where two
   /// marks claim the same characters (`[[a **b]] c**`) the outer, earlier
@@ -324,7 +358,8 @@ final class HomericSyntax {
       other.images == images &&
       other.listGlyphs == listGlyphs &&
       other.hangingLists == hangingLists &&
-      other.hangingTodos == hangingTodos;
+      other.hangingTodos == hangingTodos &&
+      other.hangingIndents == hangingIndents;
 
   @override
   int get hashCode => Object.hash(
@@ -342,6 +377,7 @@ final class HomericSyntax {
         listGlyphs,
         hangingLists,
         hangingTodos,
+        hangingIndents,
       );
 }
 

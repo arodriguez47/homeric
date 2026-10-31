@@ -506,6 +506,7 @@ final class HomericFormatAction {
     this.shortcut,
     this.isActive = false,
     this.startsGroup = false,
+    this.actsOnBlock = false,
     this.onPressed,
   });
 
@@ -531,6 +532,11 @@ final class HomericFormatAction {
   /// Whether a thin rule separates this button from the one before.
   final bool startsGroup;
 
+  /// Whether it acts on the whole block (an indent), not on the words: the
+  /// keyboard bar keeps such buttons in sight at its end, and presses them
+  /// as they are, without first selecting the word at the caret.
+  final bool actsOnBlock;
+
   /// Runs once the menu has closed; null shows the button disabled.
   final VoidCallback? onPressed;
 
@@ -543,6 +549,7 @@ final class HomericFormatAction {
     String? shortcut,
     bool? isActive,
     bool? startsGroup,
+    bool? actsOnBlock,
     VoidCallback? onPressed,
   }) =>
       HomericFormatAction(
@@ -553,6 +560,7 @@ final class HomericFormatAction {
         shortcut: shortcut ?? this.shortcut,
         isActive: isActive ?? this.isActive,
         startsGroup: startsGroup ?? this.startsGroup,
+        actsOnBlock: actsOnBlock ?? this.actsOnBlock,
         onPressed: onPressed ?? this.onPressed,
       );
 }

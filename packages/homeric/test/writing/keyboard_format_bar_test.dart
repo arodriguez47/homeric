@@ -110,6 +110,36 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets(
+      'Outdent and Indent stay in sight beside the hide key and move the '
+      'line, not the word', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one two', indents: true);
+    final document = harness.controller.document;
+    harness.controller
+        .setSelection(HomericSelection.collapsed(document.positionAt(0, 5)));
+    await tester.pump();
+
+    expect(_labels(tester).sublist(8), ['Outdent', 'Indent']);
+    final hide = tester.getTopLeft(
+        find.byKey(const ValueKey<String>('homeric-keyboard-hide')));
+    final indent = tester.getTopRight(_button('Indent'));
+    // Pinned: right against the hide key, whatever the words' row scrolls.
+    expect(hide.dx - indent.dx, lessThan(2));
+    expect(_enabled(tester, 'Outdent'), isFalse);
+
+    await tester.tap(_button('Indent'));
+    await tester.pump();
+    expect(harness.controller.document.blocks.single.text, '  one two');
+    final caret = harness.controller.selection!;
+    expect(caret.isCollapsed, isTrue);
+    expect(caret.head, harness.controller.document.positionAt(0, 7));
+    expect(_enabled(tester, 'Outdent'), isTrue);
+    expect(_enabled(tester, 'Indent'), isFalse);
+    expect(harness.focus().hasFocus, isTrue);
+    await _unmount(tester);
+  });
+
   testWidgets('with a caret in a space the wraps are disabled', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final harness = await _pump(tester, 'one  two');
@@ -241,6 +271,7 @@ Future<
   WidgetTester tester,
   String text, {
   bool keyboard = true,
+  bool indents = false,
 }) async {
   tester.view.physicalSize = const Size(1170, 2532);
   tester.view.devicePixelRatio = 3;
@@ -282,6 +313,7 @@ Future<
                   controller,
                   selection,
                   wraps: wraps,
+                  indents: indents,
                 ),
                 blockBuilder: (context, block, focusNode) {
                   focus = focusNode;

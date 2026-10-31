@@ -1332,6 +1332,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           const _TraverseIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true):
           const _TraverseIntent(true),
+      // Control-Tab always leaves the text, as in native text views, so a
+      // document whose Tab indents is never a keyboard trap.
+      const SingleActivator(LogicalKeyboardKey.tab, control: true):
+          const _TraverseIntent(false),
+      const SingleActivator(LogicalKeyboardKey.tab, control: true, shift: true):
+          const _TraverseIntent(true),
       const SingleActivator(
         LogicalKeyboardKey.arrowUp,
         meta: true,
@@ -1348,15 +1354,28 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final commandBindings =
         <ShortcutActivator, List<HomericDocumentCommandBinding>>{};
     for (final binding in documentCommandBindings) {
+      // Bindings for one chord share a group in registration order, even
+      // when hosts pass distinct activator instances.
+      final key = commandBindings.keys.firstWhere(
+        (key) => _sameChord(key, binding.shortcut),
+        orElse: () => binding.shortcut,
+      );
       commandBindings
-          .putIfAbsent(
-            binding.shortcut,
-            () => <HomericDocumentCommandBinding>[],
-          )
+          .putIfAbsent(key, () => <HomericDocumentCommandBinding>[])
           .add(binding);
     }
     for (final entry in commandBindings.entries) {
-      final fallback = shortcuts[entry.key];
+      // The paragraph's own binding for the same chord (Tab's traversal)
+      // runs when the document's commands pass, whether or not the host's
+      // activator is the same instance.
+      final same = shortcuts.keys
+          .where((key) => _sameChord(key, entry.key))
+          .toList(growable: false);
+      final fallback =
+          shortcuts[entry.key] ?? (same.isEmpty ? null : shortcuts[same.first]);
+      for (final key in same) {
+        if (!identical(key, entry.key)) shortcuts.remove(key);
+      }
       shortcuts[entry.key] = _DocumentCommandIntent(
         List<HomericDocumentCommandBinding>.unmodifiable(entry.value),
         registrationOwner: documentCommandBindings,
@@ -4643,4 +4662,17 @@ final class _RenderEditableSemantics extends RenderProxyBox {
     final selection = _selection;
     if (selection != null) config.textSelection = selection;
   }
+}
+
+/// Whether [a] and [b] are the same single key chord.
+bool _sameChord(ShortcutActivator a, ShortcutActivator b) {
+  if (identical(a, b)) return true;
+  if (a is! SingleActivator || b is! SingleActivator) return false;
+  return a.trigger == b.trigger &&
+      a.shift == b.shift &&
+      a.control == b.control &&
+      a.alt == b.alt &&
+      a.meta == b.meta &&
+      a.numLock == b.numLock &&
+      a.includeRepeats == b.includeRepeats;
 }

@@ -164,7 +164,13 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
       for (final action in builder(target, blockId, blockSelection))
         if (action.onPressed case final onPressed?)
           action.copyWith(
-            onPressed: () => _press(controller, selection, word, onPressed),
+            // A line's indent is the line's, whatever word the caret is in.
+            onPressed: () => _press(
+              controller,
+              selection,
+              action.actsOnBlock ? null : word,
+              onPressed,
+            ),
           )
         else
           action,
@@ -269,13 +275,28 @@ class _KeyboardBar extends StatelessWidget {
           border: Border(top: BorderSide(color: palette.edge, width: 0.5)),
         ),
         child: LayoutBuilder(builder: (context, constraints) {
-          final room = constraints.maxWidth - _hideKey - 8;
-          final rules = actions.skip(1).where((a) => a.startsGroup).length;
-          final width = ((room - rules * 9) / actions.length)
-              .clamp(_minButton, _maxButton);
+          // Buttons for the whole line (indents) stay in sight at the end,
+          // beside the hide key; the words' buttons scroll.
+          final words = [
+            for (final a in actions)
+              if (!a.actsOnBlock) a
+          ];
+          final lines = [
+            for (final a in actions)
+              if (a.actsOnBlock) a
+          ];
+          final room = constraints.maxWidth -
+              _hideKey -
+              8 -
+              (lines.isEmpty ? 0 : lines.length * _minButton + 0.5);
+          final rules = words.skip(1).where((a) => a.startsGroup).length;
+          final width = words.isEmpty
+              ? _minButton
+              : ((room - rules * 9) / words.length)
+                  .clamp(_minButton, _maxButton);
           final buttons = <Widget>[];
-          for (var index = 0; index < actions.length; index++) {
-            final action = actions[index];
+          for (var index = 0; index < words.length; index++) {
+            final action = words[index];
             if (index > 0 && action.startsGroup) {
               buttons.add(Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -301,6 +322,19 @@ class _KeyboardBar extends StatelessWidget {
                   child: Row(children: buttons),
                 ),
               ),
+              if (lines.isNotEmpty) ...[
+                SizedBox(
+                  width: 0.5,
+                  height: 20,
+                  child: ColoredBox(color: palette.edge),
+                ),
+                for (final action in lines)
+                  _BarButton(
+                    action: action,
+                    width: _minButton,
+                    palette: palette,
+                  ),
+              ],
               SizedBox(
                 width: 0.5,
                 height: HomericKeyboardFormatBar.height,

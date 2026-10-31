@@ -25,6 +25,7 @@ export 'src/writing/checklists.dart';
 export 'src/writing/divider.dart';
 export 'src/writing/focus_dim.dart';
 export 'src/writing/footnote_punctuation.dart';
+export 'src/writing/format_bar.dart';
 export 'src/writing/inline_annotation_shortcut.dart';
 export 'src/writing/list_glyphs.dart';
 export 'src/writing/list_hang.dart';

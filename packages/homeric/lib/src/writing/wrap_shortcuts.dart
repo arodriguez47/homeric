@@ -170,6 +170,28 @@ final class HomericWrapShortcuts extends HomericWritingFeature {
     );
   }
 
+  /// Whether [selection] of [document] is wrapped in exactly [marker], so
+  /// [prepareWrap] would take it off.
+  static bool isWrapped(
+    Document document,
+    HomericSelection? selection,
+    String marker,
+  ) {
+    if (selection == null || selection.isCollapsed || marker.isEmpty) {
+      return false;
+    }
+    final anchor = document.resolve(selection.anchor);
+    final head = document.resolve(selection.head);
+    if (anchor is! InlinePosition ||
+        head is! InlinePosition ||
+        anchor.blockIndex != head.blockIndex) {
+      return false;
+    }
+    final start = anchor.offset < head.offset ? anchor.offset : head.offset;
+    final end = anchor.offset > head.offset ? anchor.offset : head.offset;
+    return _wrappedIn(anchor.block.text, start, end, marker);
+  }
+
   /// Whether `[start, end)` of [text] sits between two [marker]s that are
   /// not part of a longer run of the same character (`**` around a ⌘I
   /// selection is bold, not italic).

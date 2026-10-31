@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart' show CupertinoButton;
 import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
@@ -7,6 +6,8 @@ import 'package:flutter/material.dart'
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric/src/editing/context_menu.dart'
+    show HomericMenuRowButton;
 
 void main() {
   group('committed change events', () {
@@ -729,13 +730,13 @@ void main() {
         await tester.tap(find.text('Annotate'));
         await tester.pump();
         expect(presses, 1);
-        expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+        expect(_selectionMenu, findsNothing);
 
         await _showMenuOnFirstWord(tester);
         final stalePress = tester
-            .widgetList<CupertinoButton>(find.descendant(
-              of: find.byType(AdaptiveTextSelectionToolbar),
-              matching: find.byType(CupertinoButton),
+            .widgetList<HomericMenuRowButton>(find.descendant(
+              of: _selectionMenu,
+              matching: find.byType(HomericMenuRowButton),
             ))
             .last
             .onPressed!;
@@ -745,7 +746,7 @@ void main() {
         await tester.pump();
         expect(presses, 1,
             reason: 'a press for a selection that changed is dropped');
-        expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+        expect(_selectionMenu, findsNothing);
         await tester.pumpWidget(const SizedBox.shrink());
       } finally {
         debugDefaultTargetPlatformOverride = null;
@@ -845,15 +846,21 @@ Future<void> _showMenuOnFirstWord(WidgetTester tester) async {
     buttons: kSecondaryMouseButton,
   );
   await tester.pump();
-  expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+  expect(_selectionMenu, findsOneWidget);
 }
 
 List<String?> _menuLabels(WidgetTester tester) => tester
     .widgetList<Text>(find.descendant(
-      of: find.byType(AdaptiveTextSelectionToolbar),
+      of: _selectionMenu,
       matching: find.byType(Text),
     ))
     .map((text) => text.data)
+    // The desktop menu spells each row's key beside it.
+    .where((label) =>
+        label == null ||
+        !(label.startsWith('⌘') ||
+            label.startsWith('⇧') ||
+            label.startsWith('Ctrl+')))
     .toList(growable: false);
 
 Document _document(List<String> texts) => Document([
@@ -864,3 +871,11 @@ Document _document(List<String> texts) => Document([
           runs: texts[index].isEmpty ? const [] : [InlineRun(texts[index])],
         ),
     ]);
+
+/// The drawn selection menu: the touch toolbar, or the desktop menu with
+/// its format bar.
+final Finder _selectionMenu = find.byWidgetPredicate(
+  (widget) =>
+      widget is AdaptiveTextSelectionToolbar ||
+      widget.key == const ValueKey<String>('homeric-context-menu'),
+);

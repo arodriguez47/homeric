@@ -493,6 +493,81 @@ typedef HomericSelectionMenuItemsBuilder = List<ContextMenuButtonItem> Function(
   BlockTextSelection blockSelection,
 );
 
+/// One button on the format bar across the top of the desktop selection
+/// menu: an icon, with a tooltip naming it and saying what it does.
+@immutable
+final class HomericFormatAction {
+  /// Creates a button labelled [label] that draws [icon].
+  const HomericFormatAction({
+    required this.icon,
+    required this.label,
+    this.description,
+    this.syntax,
+    this.shortcut,
+    this.isActive = false,
+    this.startsGroup = false,
+    this.onPressed,
+  });
+
+  /// The button's glyph.
+  final IconData icon;
+
+  /// Its name, first line of the tooltip and the button's semantics label.
+  final String label;
+
+  /// One sentence on what it does to the words, under the name.
+  final String? description;
+
+  /// What typing does the same, such as `==words==`, shown in the tooltip.
+  final String? syntax;
+
+  /// The key that does the same, such as `⌘B`, beside the name.
+  final String? shortcut;
+
+  /// Whether the selection already carries it; the button shows pressed and
+  /// pressing it takes it off.
+  final bool isActive;
+
+  /// Whether a thin rule separates this button from the one before.
+  final bool startsGroup;
+
+  /// Runs once the menu has closed; null shows the button disabled.
+  final VoidCallback? onPressed;
+
+  /// The same button with the given fields replaced.
+  HomericFormatAction copyWith({
+    IconData? icon,
+    String? label,
+    String? description,
+    String? syntax,
+    String? shortcut,
+    bool? isActive,
+    bool? startsGroup,
+    VoidCallback? onPressed,
+  }) =>
+      HomericFormatAction(
+        icon: icon ?? this.icon,
+        label: label ?? this.label,
+        description: description ?? this.description,
+        syntax: syntax ?? this.syntax,
+        shortcut: shortcut ?? this.shortcut,
+        isActive: isActive ?? this.isActive,
+        startsGroup: startsGroup ?? this.startsGroup,
+        onPressed: onPressed ?? this.onPressed,
+      );
+}
+
+/// Builds the format bar for the desktop selection menu.
+///
+/// Called with the same arguments as [HomericSelectionMenuItemsBuilder].
+/// Homeric dismisses the menu before invoking a button's `onPressed`, and
+/// drops the press when the selection changed after the menu was shown.
+typedef HomericSelectionFormatBarBuilder = List<HomericFormatAction> Function(
+  HomericSelection selection,
+  String blockId,
+  BlockTextSelection blockSelection,
+);
+
 /// Revocable geometry for the rows a [HomericEditableDocument] has laid out.
 ///
 /// Obtain one from [HomericEditableDocumentState.documentGeometry] and
@@ -685,6 +760,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
     this.selectionMenuItemsBuilder,
+    this.selectionFormatBarBuilder,
   })  : blockBuilder = null,
         blockGrabberStyle = const HomericBlockGrabberStyle(),
         blockGrabberWidth = kHomericBlockGrabberWidth,
@@ -719,6 +795,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
     this.selectionMenuItemsBuilder,
+    this.selectionFormatBarBuilder,
   })  : assert(cacheExtent >= 0),
         assert(estimatedBlockHeight > 0),
         assert(blockGrabberWidth >= 0),
@@ -748,6 +825,7 @@ class HomericEditableDocument extends StatefulWidget {
     this.touchSelectionConfiguration =
         const HomericTouchSelectionConfiguration.adaptive(),
     this.selectionMenuItemsBuilder,
+    this.selectionFormatBarBuilder,
     this.padding = kHomericCompactDocumentPadding,
     this.blockGrabberWidth = 0,
   })  : assert(cacheExtent >= 0),
@@ -821,6 +899,12 @@ class HomericEditableDocument extends StatefulWidget {
   ///
   /// When null, the menu is unchanged.
   final HomericSelectionMenuItemsBuilder? selectionMenuItemsBuilder;
+
+  /// Optional formatting buttons across the top of every paragraph's
+  /// right-click menu on desktop, each with a tooltip saying what it does.
+  ///
+  /// When null, or when it returns nothing, the menu has no bar.
+  final HomericSelectionFormatBarBuilder? selectionFormatBarBuilder;
 
   /// Returns the nearest document editing coordinator, if present.
   static HomericEditableDocumentState? maybeOf(BuildContext context) => context
@@ -907,6 +991,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   /// Current host items appended to every paragraph's selection menu.
   HomericSelectionMenuItemsBuilder? get selectionMenuItemsBuilder =>
       widget.selectionMenuItemsBuilder;
+
+  /// Current format bar across the top of every paragraph's desktop menu.
+  HomericSelectionFormatBarBuilder? get selectionFormatBarBuilder =>
+      widget.selectionFormatBarBuilder;
 
   /// Current revocable geometry for the rows this document has laid out.
   ///

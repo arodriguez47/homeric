@@ -24,6 +24,7 @@ library;
 
 export 'src/writing/block_indent.dart';
 export 'src/writing/brevity.dart';
+export 'src/writing/clarity.dart';
 export 'src/writing/checklists.dart';
 export 'src/writing/divider.dart';
 export 'src/writing/focus_dim.dart';

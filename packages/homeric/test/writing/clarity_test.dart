@@ -40,6 +40,12 @@ void main() {
       expect(clarity.longSentencesInText('a', text), isEmpty);
     });
 
+    test('a footnote written in a code span is read, not left out', () {
+      final note = words(15);
+      final text = '${words(10)} `^[$note]`.';
+      expect(clarity.longSentencesInText('a', text), hasLength(1));
+    });
+
     test('decorations carry the spec for each length', () {
       final b = block('b', '${words(22)}. ${words(35)}.');
       final decorations =
@@ -73,6 +79,14 @@ void main() {
       final high = HomericClarity.grade(dense)!;
       expect(low, lessThan(5));
       expect(high, greaterThan(15));
+    });
+
+    test('a soft break inside a sentence does not lower the grade', () {
+      const one = 'Notwithstanding considerable apprehension the team kept '
+          'restructuring the comprehensive initiative.';
+      const broken = 'Notwithstanding considerable apprehension the team kept\n'
+          'restructuring the comprehensive initiative.';
+      expect(HomericClarity.grade(broken), HomericClarity.grade(one));
     });
 
     test('works for Spanish', () {

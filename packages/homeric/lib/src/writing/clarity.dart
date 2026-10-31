@@ -141,9 +141,9 @@ final class HomericClarity {
     }
     if (words < 10) return null;
     var sentences = 0;
-    for (final line in read.split('\n')) {
-      for (final r in homericSentences(line)) {
-        final s = line.substring(r.start, r.end);
+    for (final paragraph in _paragraphs(read)) {
+      for (final r in homericSentences(paragraph)) {
+        final s = paragraph.substring(r.start, r.end);
         if (HomericBrevity.wordPattern.hasMatch(s)) sentences++;
       }
     }
@@ -153,21 +153,45 @@ final class HomericClarity {
   }
 }
 
-final _commentLine = RegExp(r'^%%.*$', multiLine: true);
-
 /// [text] with the notes a reader doesn't read inline blanked to spaces,
-/// so offsets stay the same.
+/// so offsets stay the same: inline footnotes, the note half of an
+/// annotation, `%%` lines and footnote definitions. [HomericMarkScan]
+/// settles which marks count, so nothing in a code span or wiki link is
+/// taken for a note.
 String _readable(String text) {
-  String blank(Match m) => ' ' * m[0]!.length;
-  var out = text.replaceAllMapped(HomericNoteMarks.inlineFootnote, blank);
-  out = out.replaceAllMapped(_commentLine, blank);
-  // `{{passage|note}}` reads as its passage.
-  out = out.replaceAllMapped(HomericNoteMarks.annotation, (m) {
-    final passage = m[1]!;
-    final open = m[0]!.indexOf(passage);
-    return ' ' * open +
-        passage +
-        ' ' * (m[0]!.length - open - passage.length);
-  });
-  return out;
+  final scan = HomericMarkScan(text);
+  final spans = <(int, int)>[
+    ...scan.foldedSpans,
+    for (final c in scan.commentLines) (c.start, c.end),
+    for (final d in scan.definitions) (d.start, d.end),
+  ];
+  if (spans.isEmpty) return text;
+  final out = text.split('');
+  for (final (start, end) in spans) {
+    for (var i = start; i < end && i < out.length; i++) {
+      if (out[i] != '\n') out[i] = ' ';
+    }
+  }
+  return out.join();
+}
+
+/// [text]'s paragraphs for counting sentences. A line break inside a
+/// sentence (a soft break, the next line going on in lower case) joins
+/// the lines; any other break ends one, so a heading counts on its own.
+Iterable<String> _paragraphs(String text) sync* {
+  final buffer = StringBuffer();
+  for (final line in text.split('\n')) {
+    final next = line.trimLeft();
+    final continues = buffer.isNotEmpty &&
+        next.isNotEmpty &&
+        next[0] != next[0].toUpperCase() &&
+        !RegExp(r'[.!?…。！？]["”’)\]]*\s*$').hasMatch(buffer.toString());
+    if (!continues && buffer.isNotEmpty) {
+      yield buffer.toString();
+      buffer.clear();
+    }
+    if (buffer.isNotEmpty) buffer.write(' ');
+    buffer.write(line);
+  }
+  if (buffer.isNotEmpty) yield buffer.toString();
 }

@@ -132,10 +132,9 @@ final class HomericBlockIndent extends HomericWritingFeature {
       : <HomericDocumentCommandBinding>[
           for (final outdent in const <bool>[false, true])
             HomericDocumentCommandBinding(
-              shortcut: SingleActivator(
-                LogicalKeyboardKey.tab,
-                shift: outdent,
-              ),
+              // Const, as the editor's own Tab: a host's other Tab
+              // bindings (a menu's) group with these by identity.
+              shortcut: outdent ? _shiftTab : _tab,
               onInvoke: (context) {
                 if (!context.isCurrent ||
                     context.composing != null ||
@@ -548,6 +547,10 @@ final class HomericBlockIndent extends HomericWritingFeature {
     r'^(?:#{1,6}(?: |$)|>|```|~~~|\^\^|%%|\[\^[^\]]*\]:|-{3,}\s*$)',
   );
 }
+
+const SingleActivator _tab = SingleActivator(LogicalKeyboardKey.tab);
+const SingleActivator _shiftTab =
+    SingleActivator(LogicalKeyboardKey.tab, shift: true);
 
 /// Why Tab did nothing on a line that can't move further.
 final class _NoFurther {

@@ -28,6 +28,7 @@ export 'src/writing/footnote_punctuation.dart';
 export 'src/writing/inline_annotation_shortcut.dart';
 export 'src/writing/list_glyphs.dart';
 export 'src/writing/list_hang.dart';
+export 'src/writing/mark_deletes.dart';
 export 'src/writing/list_nesting.dart';
 export 'src/writing/marker_stroke.dart';
 export 'src/writing/note_marks.dart';

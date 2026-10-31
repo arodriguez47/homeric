@@ -2559,7 +2559,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       epoch: _hostEpoch,
       stateRevision: _controller.stateRevision,
     );
-    if (_usesSystemContextMenu(context)) {
+    final desktop = _usesDesktopMenu;
+    if (!desktop && _usesSystemContextMenu(context)) {
       _showSystemContextMenu(
         context,
         witness,
@@ -2570,8 +2571,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       return;
     }
     if (Overlay.maybeOf(context, rootOverlay: true) == null) return;
-    final anchor = render.localToGlobal(point);
     final below = useSecondaryAnchor ? null : _selectionMenuBelow(render);
+    // A tablet's desktop menu opened by touch hangs under the selection and
+    // its handles, as a right click's hangs from the pointer.
+    final anchor =
+        desktop && below != null ? below : render.localToGlobal(point);
     _dismissContextMenu();
     late final ContextMenuController menu;
     menu = ContextMenuController(onRemove: () {
@@ -2620,7 +2624,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
                   }
                   return KeyEventResult.ignored;
                 },
-                child: homericUsesDesktopMenu()
+                child: desktop
                     ? _desktopContextMenu(menuContext, witness, anchor)
                     : AdaptiveTextSelectionToolbar(
                         anchors: TextSelectionToolbarAnchors(
@@ -2933,6 +2937,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     }
     return null;
   }
+
+  /// The desktop menu: on a desktop, or on a tablet typing on a hardware
+  /// keyboard (no on-screen keyboard while this paragraph takes input).
+  bool get _usesDesktopMenu =>
+      homericUsesDesktopMenu() ||
+      (homericTabletUsesDesktopMenu() &&
+          !_controller.isReadOnly &&
+          widget.inputSession.isAttached &&
+          widget.inputSession.activeBlockId == widget.blockId);
 
   /// Whether UIKit's own edit menu can stand in for the Flutter-drawn one.
   ///

@@ -23,7 +23,7 @@ import '../render/homeric_paragraph.dart' show HomericGluedSlot;
 import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../view/view_text.dart' show ReplacementContent;
-import 'block_indent.dart' show HomericBlockIndent;
+import 'block_indent.dart' show HomericBlockIndent, HomericIndentFilter;
 import 'checklists.dart';
 import 'divider.dart';
 import 'list_glyphs.dart';
@@ -216,12 +216,14 @@ final class HomericSyntax {
   /// instead.
   ///
   /// With [dropCap], a `^^` initial is sunk into the first two lines
-  /// instead of raised above the first.
+  /// instead of raised above the first. [indentFilter] as for
+  /// [listHangFor].
   Iterable<Decoration> decorationsFor(
     Block block, {
     int? caret,
     bool noteMarkers = true,
     HomericDropCapLayout? dropCap,
+    HomericIndentFilter? indentFilter,
   }) {
     // `---` alone: a divider in place of its source, which shows with the
     // caret on the line.
@@ -236,7 +238,7 @@ final class HomericSyntax {
     }
     final scan = HomericMarkScan(block.text);
     final hang = hangingLists || hangingIndents
-        ? listHangFor(block, caret: caret)
+        ? listHangFor(block, caret: caret, indentFilter: indentFilter)
         : null;
     final layer = _layerDecorations(
       this,
@@ -289,7 +291,14 @@ final class HomericSyntax {
   /// [block] is a list line whose marker does not hold [caret], or when
   /// [hangingIndents] is on and [block] is an indented paragraph; null
   /// otherwise. The host passes it to [HomericListLine].
-  HomericListHang? listHangFor(Block block, {int? caret}) {
+  ///
+  /// [indentFilter] leaves out paragraphs the host doesn't indent (code in
+  /// a fence), as [HomericBlockIndent.accepts] does.
+  HomericListHang? listHangFor(
+    Block block, {
+    int? caret,
+    HomericIndentFilter? indentFilter,
+  }) {
     if (!markdown || !(hangingLists || hangingIndents)) return null;
     final hang = HomericListHang.of(
       block,
@@ -297,6 +306,7 @@ final class HomericSyntax {
       glyphs: listGlyphs,
       todos: hangingTodos && checklists,
       indents: hangingIndents,
+      indentFilter: indentFilter,
     );
     if (hang != null && !hang.indent && !hangingLists) return null;
     return hang;

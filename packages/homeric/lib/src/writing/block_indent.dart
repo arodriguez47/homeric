@@ -47,6 +47,9 @@ import '../transform/transaction.dart';
 import 'list_hang.dart';
 import 'writing_feature.dart';
 
+/// Whether [block] may indent; a host's filter over its paragraphs.
+typedef HomericIndentFilter = bool Function(Block block);
+
 /// An indented paragraph's folded indent.
 @immutable
 final class HomericParagraphIndent {
@@ -81,6 +84,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
     this.types = defaultTypes,
     this.tab = true,
     this.typing = true,
+    this.accepts,
   });
 
   /// Plain paragraphs.
@@ -94,6 +98,11 @@ final class HomericBlockIndent extends HomericWritingFeature {
 
   /// Whether Tab and Shift-Tab indent.
   final bool tab;
+
+  /// Which blocks of [types] indent at all; null takes every one. A host
+  /// leaves out lines whose leading spaces are their own (code in a
+  /// fence).
+  final HomericIndentFilter? accepts;
 
   /// Whether a space at a paragraph's start indents it, Backspace there
   /// outdents it, and Enter carries the indent to the next paragraph.
@@ -114,10 +123,10 @@ final class HomericBlockIndent extends HomericWritingFeature {
           controller.composing != null) {
         return HomericCommandInterception.ignored;
       }
-      if (_typed(command, types)) return HomericCommandInterception.handled;
-      return continueIndent(command, types: types);
+      if (_typed(command, types, accepts)) return HomericCommandInterception.handled;
+      return continueIndent(command, types: types, accepts: accepts);
     });
-    final keeper = _CaretKeeper(controller, types);
+    final keeper = _CaretKeeper(controller, types, accepts);
     controller.addListener(keeper.onChanged);
     keeper.onChanged();
     return () {
@@ -149,14 +158,14 @@ final class HomericBlockIndent extends HomericWritingFeature {
                   context.document,
                   selection,
                   outdent: outdent,
-                  types: types,
+                  types: types, accepts: accepts,
                 );
                 if (prepared != null) {
                   return HomericDocumentCommandResult.prepared(prepared);
                 }
                 // A line that can't move further keeps Tab: it does not
                 // leave the text for the next control.
-                return reachable(context.document, selection, types: types)
+                return reachable(context.document, selection, types: types, accepts: accepts)
                     ? HomericDocumentCommandResult.rejected(
                         const _NoFurther(),
                         announcement: outdent
@@ -174,8 +183,10 @@ final class HomericBlockIndent extends HomericWritingFeature {
   static HomericParagraphIndent? paragraphIndentOf(
     Block block, {
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
     if (!types.contains(block.type)) return null;
+    if (accepts != null && !accepts(block)) return null;
     final text = block.text;
     if (HomericMarkdownListPrefix.match(text) != null) return null;
     final prefixEnd = _leading(text);
@@ -190,8 +201,13 @@ final class HomericBlockIndent extends HomericWritingFeature {
   /// How many steps in [block]'s words start: a list line's depth plus
   /// one (its marker takes a step), an indented paragraph's level, and 0
   /// for anything else.
-  static int columnOf(Block block, {Set<String> types = defaultTypes}) {
+  static int columnOf(
+    Block block, {
+    Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
+  }) {
     if (!types.contains(block.type)) return 0;
+    if (accepts != null && !accepts(block)) return 0;
     final list = HomericMarkdownListPrefix.match(block.text);
     if (list != null) {
       return HomericListHang.depthOf(
@@ -199,7 +215,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
           ) +
           1;
     }
-    return paragraphIndentOf(block, types: types)?.level ?? 0;
+    return paragraphIndentOf(block, types: types, accepts: accepts)?.level ?? 0;
   }
 
   /// Whether [selection] touches a block that indents at all, list line
@@ -208,11 +224,12 @@ final class HomericBlockIndent extends HomericWritingFeature {
     Document document,
     HomericSelection selection, {
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
     final range = _blockRange(document, selection);
     if (range == null) return false;
     for (var index = range.$1; index <= range.$2; index++) {
-      if (_kindOf(document.blocks[index], types) != null) return true;
+      if (_kindOf(document.blocks[index], types, accepts) != null) return true;
     }
     return false;
   }
@@ -223,8 +240,9 @@ final class HomericBlockIndent extends HomericWritingFeature {
     HomericSelection selection, {
     bool outdent = false,
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) =>
-      _edits(document, selection, outdent: outdent, types: types).isNotEmpty;
+      _edits(document, selection, outdent: outdent, types: types, accepts: accepts).isNotEmpty;
 
   /// The command that indents (or with [outdent], outdents) every block
   /// [selection] touches by one step, as one undo step; the selection
@@ -238,8 +256,9 @@ final class HomericBlockIndent extends HomericWritingFeature {
     HomericSelection selection, {
     bool outdent = false,
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
-    final edits = _edits(document, selection, outdent: outdent, types: types);
+    final edits = _edits(document, selection, outdent: outdent, types: types, accepts: accepts);
     if (edits.isEmpty) return null;
     try {
       final transaction = Transaction(document);
@@ -269,6 +288,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
     HomericEditorController controller, {
     bool outdent = false,
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
     final selection = controller.selection;
     if (selection == null ||
@@ -280,7 +300,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
       controller.document,
       selection,
       outdent: outdent,
-      types: types,
+      types: types, accepts: accepts,
     );
     return prepared != null && controller.applyPreparedCommand(prepared);
   }
@@ -293,6 +313,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
     String blockId, {
     bool outdent = false,
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
     if (controller.isReadOnly || controller.composing != null) return false;
     final document = controller.document;
@@ -306,7 +327,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
       document,
       HomericSelection.collapsed(at),
       outdent: outdent,
-      types: types,
+      types: types, accepts: accepts,
     );
     if (edits.isEmpty) return false;
     try {
@@ -350,6 +371,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
     HomericSelection selection, {
     required bool outdent,
     required Set<String> types,
+    HomericIndentFilter? accepts,
   }) {
     final range = _blockRange(document, selection);
     if (range == null) return const <(int, int, String)>[];
@@ -358,11 +380,11 @@ final class HomericBlockIndent extends HomericWritingFeature {
     // have moved.
     var above = range.$1 == 0
         ? 0
-        : columnOf(document.blocks[range.$1 - 1], types: types);
+        : columnOf(document.blocks[range.$1 - 1], types: types, accepts: accepts);
     for (var index = range.$1; index <= range.$2; index++) {
       final block = document.blocks[index];
-      final kind = _kindOf(block, types);
-      final column = columnOf(block, types: types);
+      final kind = _kindOf(block, types, accepts);
+      final column = columnOf(block, types: types, accepts: accepts);
       if (kind == null) {
         above = column;
         continue;
@@ -394,14 +416,23 @@ final class HomericBlockIndent extends HomericWritingFeature {
 
   /// Whether [block] indents as a list line (`true`) or a paragraph
   /// (`false`); null when it doesn't.
-  static bool? _kindOf(Block block, Set<String> types) {
+  static bool? _kindOf(
+    Block block,
+    Set<String> types,
+    HomericIndentFilter? accepts,
+  ) {
     if (!types.contains(block.type)) return null;
+    if (accepts != null && !accepts(block)) return null;
     if (HomericMarkdownListPrefix.match(block.text) != null) return true;
-    return paragraphIndentOf(block, types: types) == null ? null : false;
+    return paragraphIndentOf(block, types: types, accepts: accepts) == null ? null : false;
   }
 
   /// Handles the typing rules for [command]; true when it did.
-  static bool _typed(HomericEditorCommand command, Set<String> types) {
+  static bool _typed(
+    HomericEditorCommand command,
+    Set<String> types,
+    HomericIndentFilter? accepts,
+  ) {
     final selection = command.selection;
     if (selection == null || !selection.isCollapsed) return false;
     final controller = command.controller;
@@ -412,7 +443,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
       return false;
     }
     final block = caret.block;
-    final indent = paragraphIndentOf(block, types: types);
+    final indent = paragraphIndentOf(block, types: types, accepts: accepts);
     if (indent == null || caret.offset != indent.prefixEnd) return false;
     final text = block.text;
     final empty = text.length == indent.prefixEnd;
@@ -431,7 +462,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
           return false;
         }
         return _apply(controller, document, selection, outdent: false,
-            types: types);
+            types: types, accepts: accepts);
       case HomericCommandKind.preDelete:
         // Backspace: one character before the caret.
         if (indent.level == 0 ||
@@ -443,13 +474,13 @@ final class HomericBlockIndent extends HomericWritingFeature {
           return false;
         }
         return _apply(controller, document, selection, outdent: true,
-            types: types);
+            types: types, accepts: accepts);
       case HomericCommandKind.preBreak:
         if (command.text != '\n' || indent.level == 0) return false;
         // Enter on an empty indented paragraph steps out a level.
         if (empty) {
           return _apply(controller, document, selection, outdent: true,
-              types: types);
+              types: types, accepts: accepts);
         }
         return false;
       case HomericCommandKind.block:
@@ -463,9 +494,10 @@ final class HomericBlockIndent extends HomericWritingFeature {
     HomericSelection selection, {
     required bool outdent,
     required Set<String> types,
+    HomericIndentFilter? accepts,
   }) {
     final prepared =
-        prepare(document, selection, outdent: outdent, types: types);
+        prepare(document, selection, outdent: outdent, types: types, accepts: accepts);
     return prepared != null && controller.applyPreparedCommand(prepared);
   }
 
@@ -475,6 +507,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
   static HomericCommandInterception continueIndent(
     HomericEditorCommand command, {
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
     final selection = command.selection;
     if (command.kind != HomericCommandKind.preBreak ||
@@ -486,7 +519,7 @@ final class HomericBlockIndent extends HomericWritingFeature {
     final controller = command.controller;
     final caret = controller.document.resolve(selection.head);
     if (caret is! InlinePosition) return HomericCommandInterception.ignored;
-    final indent = paragraphIndentOf(caret.block, types: types);
+    final indent = paragraphIndentOf(caret.block, types: types, accepts: accepts);
     if (indent == null ||
         indent.level == 0 ||
         caret.offset < indent.prefixEnd ||
@@ -512,9 +545,10 @@ final class HomericBlockIndent extends HomericWritingFeature {
     int offset, {
     int? from,
     Set<String> types = defaultTypes,
+    HomericIndentFilter? accepts,
   }) {
     final indent =
-        paragraphIndentOf(document.blocks[blockIndex], types: types);
+        paragraphIndentOf(document.blocks[blockIndex], types: types, accepts: accepts);
     if (indent == null || indent.level == 0 || offset >= indent.prefixEnd) {
       return null;
     }
@@ -560,10 +594,11 @@ final class _NoFurther {
 /// Moves a collapsed caret that lands inside a folded paragraph indent to
 /// where it can be seen.
 final class _CaretKeeper {
-  _CaretKeeper(this.controller, this.types);
+  _CaretKeeper(this.controller, this.types, this.accepts);
 
   final HomericEditorController controller;
   final Set<String> types;
+  final HomericIndentFilter? accepts;
 
   (String, int)? _last;
 
@@ -585,7 +620,7 @@ final class _CaretKeeper {
       caret.blockIndex,
       caret.offset,
       from: last != null && last.$1 == caret.block.id ? last.$2 : null,
-      types: types,
+      types: types, accepts: accepts,
     );
     if (kept == null) return;
     scheduleMicrotask(() {

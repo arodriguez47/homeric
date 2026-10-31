@@ -343,6 +343,37 @@ void main() {
       expect(linesOf(controller), ['one', ' two']);
     });
 
+    test('a host filter leaves its own lines (code in a fence) alone', () {
+      bool prose(Block block) => block.id != 'l1';
+      final document =
+          Document([_block('```', id: 'l0'), _block('  x = 1', id: 'l1')]);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(1, 2)),
+      );
+      final stop =
+          HomericBlockIndent(accepts: prose).installOn(controller);
+      addTearDown(() {
+        stop();
+        controller.dispose();
+      });
+      controller.deleteBackward();
+      expect(linesOf(controller), ['```', ' x = 1']);
+      expect(
+        HomericBlockIndent.indentSelection(controller, accepts: prose),
+        isFalse,
+      );
+      const syntax = HomericSyntax(hangingIndents: true);
+      final code = _block('  x = 1', id: 'l1');
+      expect(syntax.listHangFor(code, indentFilter: prose), isNull);
+      expect(
+        syntax
+            .decorationsFor(code, indentFilter: prose)
+            .where((d) => d.spec is HomericListHangSpec),
+        isEmpty,
+      );
+    });
+
     test('is not in the standard kit: a host opts in', () {
       expect(HomericWritingKit.standard().has('blockIndent'), isFalse);
       expect(

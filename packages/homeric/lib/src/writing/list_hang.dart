@@ -94,6 +94,7 @@ final class HomericListHang {
     bool todos = false,
     bool indents = false,
     Set<String> indentTypes = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? indentFilter,
   }) {
     final text = block.text;
     final firstLine = text.split('\n').first;
@@ -123,7 +124,11 @@ final class HomericListHang {
     if (match == null) {
       if (!indents) return null;
       final indent =
-          HomericBlockIndent.paragraphIndentOf(block, types: indentTypes);
+          HomericBlockIndent.paragraphIndentOf(
+        block,
+        types: indentTypes,
+        accepts: indentFilter,
+      );
       if (indent == null || indent.level == 0) return null;
       if (caret != null && caret < indent.prefixEnd) return null;
       return HomericListHang.indent(

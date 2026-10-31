@@ -44,6 +44,7 @@ abstract final class HomericFormatBar {
     String? footnoteShortcut,
     bool indents = false,
     Set<String> indentTypes = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? indentFilter,
   }) {
     final words = !selection.isCollapsed;
     HomericFormatAction? typed(
@@ -75,9 +76,18 @@ abstract final class HomericFormatBar {
           onPressed: words ? onFootnote : null,
         ),
       if (indents) ...[
-        HomericFormatBar.outdent(controller, selection, types: indentTypes)
-            .copyWith(startsGroup: true),
-        HomericFormatBar.indent(controller, selection, types: indentTypes),
+        HomericFormatBar.outdent(
+          controller,
+          selection,
+          types: indentTypes,
+          accepts: indentFilter,
+        ).copyWith(startsGroup: true),
+        HomericFormatBar.indent(
+          controller,
+          selection,
+          types: indentTypes,
+          accepts: indentFilter,
+        ),
       ],
     ]._groupedAfter(const <String>{'Link', 'Note', 'Footnote'});
   }
@@ -87,28 +97,34 @@ abstract final class HomericFormatBar {
     HomericEditorController controller,
     HomericSelection selection, {
     Set<String> types = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? accepts,
   }) =>
-      _indent(controller, selection, outdent: false, types: types);
+      _indent(controller, selection,
+          outdent: false, types: types, accepts: accepts);
 
   /// Shift-Tab: the line one step back toward the margin.
   static HomericFormatAction outdent(
     HomericEditorController controller,
     HomericSelection selection, {
     Set<String> types = HomericBlockIndent.defaultTypes,
+    HomericIndentFilter? accepts,
   }) =>
-      _indent(controller, selection, outdent: true, types: types);
+      _indent(controller, selection,
+          outdent: true, types: types, accepts: accepts);
 
   static HomericFormatAction _indent(
     HomericEditorController controller,
     HomericSelection selection, {
     required bool outdent,
     required Set<String> types,
+    HomericIndentFilter? accepts,
   }) {
     final possible = HomericBlockIndent.canIndent(
       controller.document,
       selection,
       outdent: outdent,
       types: types,
+      accepts: accepts,
     );
     return HomericFormatAction(
       icon: outdent
@@ -128,6 +144,7 @@ abstract final class HomericFormatBar {
                 controller,
                 outdent: outdent,
                 types: types,
+                accepts: accepts,
               ),
     );
   }

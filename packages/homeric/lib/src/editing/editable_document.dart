@@ -500,6 +500,7 @@ final class HomericFormatAction {
   /// Creates a button labelled [label] that draws [icon].
   const HomericFormatAction({
     required this.icon,
+    this.glyph,
     required this.label,
     this.description,
     this.syntax,
@@ -512,6 +513,11 @@ final class HomericFormatAction {
 
   /// The button's glyph.
   final IconData icon;
+
+  /// A drawn glyph shown instead of [icon], for a mark no icon font has
+  /// (such as the writing module's `HomericFootnoteGlyph`). The bar sizes and inks it through
+  /// the surrounding [IconTheme], as it does [icon].
+  final Widget? glyph;
 
   /// Its name, first line of the tooltip and the button's semantics label.
   final String label;
@@ -543,6 +549,7 @@ final class HomericFormatAction {
   /// The same button with the given fields replaced.
   HomericFormatAction copyWith({
     IconData? icon,
+    Widget? glyph,
     String? label,
     String? description,
     String? syntax,
@@ -554,6 +561,7 @@ final class HomericFormatAction {
   }) =>
       HomericFormatAction(
         icon: icon ?? this.icon,
+        glyph: glyph ?? this.glyph,
         label: label ?? this.label,
         description: description ?? this.description,
         syntax: syntax ?? this.syntax,

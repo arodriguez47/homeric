@@ -67,7 +67,8 @@ abstract final class HomericFormatBar {
       ].whereType<HomericFormatAction>(),
       if (onFootnote != null)
         HomericFormatAction(
-          icon: Icons.format_list_numbered_rounded,
+          icon: Icons.superscript_rounded,
+          glyph: const HomericFootnoteGlyph(),
           label: 'Footnote',
           description: 'Adds a numbered note after the words, kept at the '
               'foot of the page.',
@@ -366,4 +367,79 @@ extension on List<HomericFormatAction> {
           action,
     ];
   }
+}
+
+/// The Footnote button's mark: a letter with a raised 1 after it, `a¹`, the
+/// way a footnote's number sits after the words it belongs to.
+///
+/// Drawn rather than taken from an icon font: the nearest icons read as
+/// something else (a numbered list, or a superscript `x²` for math). Sized
+/// and inked by the surrounding [IconTheme], like an [Icon], on the same
+/// 24-unit grid and stroke weight as the rounded icons beside it.
+class HomericFootnoteGlyph extends StatelessWidget {
+  /// Creates the mark, [size] square in [color] (else the [IconTheme]'s).
+  const HomericFootnoteGlyph({super.key, this.size, this.color});
+
+  /// Its width and height; the [IconTheme]'s size when null.
+  final double? size;
+
+  /// Its ink; the [IconTheme]'s colour when null.
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    final side = size ?? theme.size ?? 24;
+    final ink = color ?? theme.color ?? const Color(0xFF000000);
+    return Semantics(
+      excludeSemantics: true,
+      // Centred, as an Icon draws its glyph, when the button hands it tight
+      // constraints larger than the mark.
+      child: Center(
+        widthFactor: 1,
+        heightFactor: 1,
+        child: SizedBox.square(
+          dimension: side,
+          child: CustomPaint(
+            painter: _FootnoteGlyphPainter(
+              ink.withValues(alpha: ink.a * (theme.opacity ?? 1)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FootnoteGlyphPainter extends CustomPainter {
+  _FootnoteGlyphPainter(this.ink);
+
+  final Color ink;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final pen = Paint()
+      ..color = ink
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.1
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    // One path per letter, so where the bowl meets the stem a half-ink
+    // stroke does not darken twice.
+    final a = Path()
+      ..addOval(Rect.fromCircle(center: const Offset(9, 14.6), radius: 4.7))
+      ..moveTo(13.7, 9.9)
+      ..lineTo(13.7, 19.3);
+    final one = Path()
+      ..moveTo(16.9, 6.4)
+      ..lineTo(19.1, 4.4)
+      ..lineTo(19.1, 11.6);
+    canvas
+      ..drawPath(a, pen)
+      ..drawPath(one, pen..strokeWidth = 1.8);
+  }
+
+  @override
+  bool shouldRepaint(_FootnoteGlyphPainter old) => old.ink != ink;
 }

@@ -18,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import '../decoration/decoration.dart';
 import '../model/block.dart';
 import 'brevity.dart';
+import 'checklists.dart';
 import 'note_marks.dart';
 import 'sentences.dart';
 
@@ -184,7 +185,11 @@ Iterable<String> _paragraphs(String text) sync* {
   for (final line in text.split('\n')) {
     // The first letter, past any opening quote or bracket.
     final next = line.replaceFirst(RegExp('^[\\s"“‘\'(\\[«¿¡]+'), '');
-    final continues = buffer.isNotEmpty &&
+    // A task or list item starts its own sentence.
+    final item = HomericChecklists.line.hasMatch(line) ||
+        RegExp(r'^\s*([-*•]|\d+[.)])\s').hasMatch(line);
+    final continues = !item &&
+        buffer.isNotEmpty &&
         next.isNotEmpty &&
         next[0] != next[0].toUpperCase() &&
         !RegExp(r'[.!?…。！？]["”’)\]]*\s*$').hasMatch(buffer.toString());

@@ -104,6 +104,19 @@ void main() {
       expect(HomericClarity.grade(broken), HomericClarity.grade(one));
     });
 
+    test('task and list lines each count as their own sentence', () {
+      const tasks = '[x] buy considerable groceries tomorrow\n'
+          '[x] call the comprehensive insurance office';
+      const apart = '[x] buy considerable groceries tomorrow.\n'
+          '[x] call the comprehensive insurance office.';
+      expect(HomericClarity.grade(tasks), HomericClarity.grade(apart));
+      const bullets = '- buy considerable groceries tomorrow\n'
+          '- call the comprehensive insurance office';
+      const bulletsApart = '- buy considerable groceries tomorrow.\n'
+          '- call the comprehensive insurance office.';
+      expect(HomericClarity.grade(bullets), HomericClarity.grade(bulletsApart));
+    });
+
     test('works for Spanish', () {
       const text = 'Lo probé el viernes. Funcionó bien. '
           'Nos quedamos con el cambio y seguimos.';

@@ -20,6 +20,7 @@ import '../decoration/decoration.dart';
 import '../editing/markdown_list_indent.dart';
 import '../model/block.dart';
 import '../render/letter_metrics.dart';
+import 'block_indent.dart';
 import 'checklists.dart';
 import 'list_glyphs.dart';
 import 'syntax_decorations.dart' show HomericChecklistSpec;
@@ -43,7 +44,18 @@ final class HomericListHang {
     required this.prefixEnd,
     required this.kind,
     this.checklist,
-  });
+  }) : indent = false;
+
+  /// An indented paragraph in [blockId], [depth] levels in: no marker, its
+  /// folded indent ending at [prefixEnd], its words [depth] steps in.
+  const HomericListHang.indent({
+    required this.blockId,
+    required this.depth,
+    required this.prefixEnd,
+  })  : mark = '',
+        kind = HomericMarkdownListKind.bullet,
+        checklist = null,
+        indent = true;
 
   /// The block the line is.
   final String blockId;
@@ -64,15 +76,24 @@ final class HomericListHang {
   /// Null for a bullet or a number.
   final HomericChecklistSpec? checklist;
 
+  /// Whether this is an indented paragraph rather than a list line: it
+  /// has no marker, and its words sit [depth] steps in, where a list
+  /// line's sit `depth + 1` ([HomericBlockIndent]).
+  final bool indent;
+
   /// The hang for [block], or null when it is not a list line, or holds
   /// [caret] (a caret offset in the block) inside its marker. A to-do hangs
   /// only with [todos]; otherwise its box stays in the line. [glyphs] off
-  /// shows • and numbers as typed.
+  /// shows • and numbers as typed. With [indents], a paragraph of one of
+  /// [indentTypes] indented at least one level hangs too
+  /// ([HomericListHang.indent]).
   static HomericListHang? of(
     Block block, {
     int? caret,
     bool glyphs = true,
     bool todos = false,
+    bool indents = false,
+    Set<String> indentTypes = HomericBlockIndent.defaultTypes,
   }) {
     final text = block.text;
     final firstLine = text.split('\n').first;
@@ -99,7 +120,18 @@ final class HomericListHang {
       );
     }
     final match = HomericMarkdownListPrefix.match(text);
-    if (match == null) return null;
+    if (match == null) {
+      if (!indents) return null;
+      final indent =
+          HomericBlockIndent.paragraphIndentOf(block, types: indentTypes);
+      if (indent == null || indent.level == 0) return null;
+      if (caret != null && caret < indent.prefixEnd) return null;
+      return HomericListHang.indent(
+        blockId: block.id,
+        depth: indent.level,
+        prefixEnd: indent.prefixEnd,
+      );
+    }
     if (caret != null && caret < match.prefixEnd) return null;
     final depth = depthOf(text.substring(0, match.indentLength));
     final String mark;
@@ -143,11 +175,12 @@ final class HomericListHang {
       other.mark == mark &&
       other.prefixEnd == prefixEnd &&
       other.kind == kind &&
-      other.checklist == checklist;
+      other.checklist == checklist &&
+      other.indent == indent;
 
   @override
   int get hashCode =>
-      Object.hash(blockId, depth, mark, prefixEnd, kind, checklist);
+      Object.hash(blockId, depth, mark, prefixEnd, kind, checklist, indent);
 }
 
 /// Lays out a list line: its marker in a gutter, its words (the [child]
@@ -158,6 +191,9 @@ final class HomericListHang {
 /// nested item's marker sits under its parent's words. The marker is a
 /// [HomericListMark]: a number shares the first line's baseline, and a
 /// bullet or a to-do's box centres on the middle of its letters.
+///
+/// An indented paragraph ([HomericListHang.indent]) lays out the same way,
+/// with an empty gutter as wide as its indent.
 ///
 /// With [onIndent], a horizontal swipe on the line nests it (right) or
 /// takes it out a level (left): the touch path for Tab and Shift-Tab. The
@@ -173,6 +209,7 @@ class HomericListLine extends StatefulWidget {
     required this.child,
     this.step,
     this.onIndent,
+    this.swipesAtMargin = false,
     this.todoMark,
     this.todoSize,
     this.textScaler,
@@ -193,6 +230,11 @@ class HomericListLine extends StatefulWidget {
   /// Called with `false` for a swipe right (nest) and `true` for a swipe
   /// left (out a level). Null turns swiping off.
   final ValueChanged<bool>? onIndent;
+
+  /// Whether a line that isn't hung (a paragraph at the margin) swipes
+  /// right to indent too. A host turns it on for the line being written
+  /// in, so a swipe elsewhere keeps its own meaning.
+  final bool swipesAtMargin;
 
   /// Builds a to-do line's box ([HomericListHang.checklist]), which
   /// [HomericListMark.box] centres on the line's letters. Without it a
@@ -222,9 +264,11 @@ class HomericListLine extends StatefulWidget {
   }) =>
       textScaler.scale(style.fontSize ?? 14) * 1.5;
 
-  /// How far [hang]'s words sit from the line's left edge.
+  /// How far [hang]'s words sit from the line's left edge: a list line's
+  /// one step past its depth, for its marker; an indented paragraph's at
+  /// its depth.
   static double gutterFor(HomericListHang hang, double step) =>
-      (hang.depth + 1) * step;
+      (hang.depth + (hang.indent ? 0 : 1)) * step;
 
   /// How far a swipe travels before it counts.
   static const double swipeDistance = 36;
@@ -246,7 +290,7 @@ class _HomericListLineState extends State<HomericListLine> {
   @override
   void didUpdateWidget(HomericListLine oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.hang == null) _drag = 0;
+    if (widget.hang == null && !widget.swipesAtMargin) _drag = 0;
   }
 
   Widget _mark(BuildContext context, HomericListHang hang) {
@@ -297,7 +341,10 @@ class _HomericListLineState extends State<HomericListLine> {
     final gutter = hang == null ? 0.0 : HomericListLine.gutterFor(hang, step);
     final todo = hang?.checklist != null;
     final bullet = hang?.kind == HomericMarkdownListKind.bullet && !todo;
-    final onIndent = hang == null ? null : widget.onIndent;
+    final onIndent =
+        hang == null && !widget.swipesAtMargin ? null : widget.onIndent;
+    // At the margin there is nowhere left to go.
+    final reach = hang == null ? 0.0 : -step;
     final line = Transform.translate(
       offset: Offset(_drag, 0),
       child: Row(
@@ -306,7 +353,7 @@ class _HomericListLineState extends State<HomericListLine> {
         children: [
           SizedBox(
             width: gutter,
-            child: hang == null
+            child: hang == null || hang.indent
                 ? null
                 : Padding(
                     padding: EdgeInsetsDirectional.only(
@@ -355,7 +402,7 @@ class _HomericListLineState extends State<HomericListLine> {
                 ..onUpdate = (details) {
                   // Follows the finger, up to one level either way.
                   setState(() {
-                    _drag = (_drag + details.delta.dx).clamp(-step, step);
+                    _drag = (_drag + details.delta.dx).clamp(reach, step);
                   });
                 }
                 ..onEnd = (details) {

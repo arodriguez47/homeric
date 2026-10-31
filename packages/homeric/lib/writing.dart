@@ -8,7 +8,9 @@
 ///   [HomericSmartPunctuation], [HomericWrapShortcuts] (⌘B ⌘I ⌘E ⌘⇧S),
 ///   [HomericTypedWraps] (a typed `{`, `[`, `=`… wraps the selection),
 ///   [HomericFootnotePunctuation], keyboard-only list nesting
-///   [HomericListNesting] and the soft word cap [HomericBrevity].
+///   [HomericListNesting], indenting paragraphs and list lines alike
+///   [HomericBlockIndent] (Tab, Shift-Tab) and the soft word cap
+///   [HomericBrevity].
 /// - Typed syntax, folded away in live preview by [HomericSyntax]:
 ///   markdown, `[[links]]` ([HomericWikiLinks], [HomericLinkQuery]),
 ///   `#tags` ([HomericTags]), to-dos ([HomericChecklists]), `---`
@@ -20,6 +22,7 @@
 ///   [HomericWritingWidth] and focus dimming ([HomericFocusDimController]).
 library;
 
+export 'src/writing/block_indent.dart';
 export 'src/writing/brevity.dart';
 export 'src/writing/checklists.dart';
 export 'src/writing/divider.dart';

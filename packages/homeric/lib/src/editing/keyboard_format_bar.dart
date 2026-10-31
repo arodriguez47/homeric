@@ -277,8 +277,14 @@ class _KeyboardBar extends StatelessWidget {
         child: LayoutBuilder(builder: (context, constraints) {
           // Buttons for the whole line (indents) stay in sight at the end,
           // beside the hide key; the words' buttons scroll.
-          final words = [for (final a in actions) if (!a.actsOnBlock) a];
-          final lines = [for (final a in actions) if (a.actsOnBlock) a];
+          final words = [
+            for (final a in actions)
+              if (!a.actsOnBlock) a
+          ];
+          final lines = [
+            for (final a in actions)
+              if (a.actsOnBlock) a
+          ];
           final room = constraints.maxWidth -
               _hideKey -
               8 -

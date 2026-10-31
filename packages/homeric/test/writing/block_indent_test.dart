@@ -157,6 +157,21 @@ void main() {
         isNotNull,
       );
     });
+
+    test('the syntax folds the host\'s indent types too', () {
+      const on = HomericSyntax(hangingIndents: true);
+      final note = _block('  words', type: 'note');
+      expect(on.listHangFor(note), isNull);
+      expect(
+        on.listHangFor(note, indentTypes: const {'paragraph', 'note'})!.indent,
+        isTrue,
+      );
+      expect(
+        on.decorationsFor(note, indentTypes: const {'paragraph', 'note'}).where(
+            (d) => d.spec is HomericListHangSpec),
+        hasLength(1),
+      );
+    });
   });
 
   group('indent and outdent', () {

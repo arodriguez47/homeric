@@ -216,14 +216,15 @@ final class HomericSyntax {
   /// instead.
   ///
   /// With [dropCap], a `^^` initial is sunk into the first two lines
-  /// instead of raised above the first. [indentFilter] as for
-  /// [listHangFor].
+  /// instead of raised above the first. [indentFilter] and [indentTypes]
+  /// as for [listHangFor].
   Iterable<Decoration> decorationsFor(
     Block block, {
     int? caret,
     bool noteMarkers = true,
     HomericDropCapLayout? dropCap,
     HomericIndentFilter? indentFilter,
+    Set<String> indentTypes = HomericBlockIndent.defaultTypes,
   }) {
     // `---` alone: a divider in place of its source, which shows with the
     // caret on the line.
@@ -238,7 +239,12 @@ final class HomericSyntax {
     }
     final scan = HomericMarkScan(block.text);
     final hang = hangingLists || hangingIndents
-        ? listHangFor(block, caret: caret, indentFilter: indentFilter)
+        ? listHangFor(
+            block,
+            caret: caret,
+            indentFilter: indentFilter,
+            indentTypes: indentTypes,
+          )
         : null;
     final layer = _layerDecorations(
       this,
@@ -293,11 +299,13 @@ final class HomericSyntax {
   /// otherwise. The host passes it to [HomericListLine].
   ///
   /// [indentFilter] leaves out paragraphs the host doesn't indent (code in
-  /// a fence), as [HomericBlockIndent.accepts] does.
+  /// a fence), as [HomericBlockIndent.accepts] does; [indentTypes] are the
+  /// block types indented as paragraphs, as [HomericBlockIndent.types].
   HomericListHang? listHangFor(
     Block block, {
     int? caret,
     HomericIndentFilter? indentFilter,
+    Set<String> indentTypes = HomericBlockIndent.defaultTypes,
   }) {
     if (!markdown || !(hangingLists || hangingIndents)) return null;
     final hang = HomericListHang.of(
@@ -306,6 +314,7 @@ final class HomericSyntax {
       glyphs: listGlyphs,
       todos: hangingTodos && checklists,
       indents: hangingIndents,
+      indentTypes: indentTypes,
       indentFilter: indentFilter,
     );
     if (hang != null && !hang.indent && !hangingLists) return null;

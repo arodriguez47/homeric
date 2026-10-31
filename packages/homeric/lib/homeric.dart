@@ -3,7 +3,7 @@
 /// Built from fundamentals in pure Dart around three primitives:
 /// `StepMap` position mapping, `DecorationSet` range overlays, and
 /// (from Phase 2) virtualized rendering. See docs/ROADMAP.md.
-library homeric;
+library;
 
 export 'src/decoration/decoration.dart';
 export 'src/decoration/decoration_set.dart';

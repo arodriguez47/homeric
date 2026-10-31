@@ -140,6 +140,24 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('VoiceOver can press a button', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final handle = tester.ensureSemantics();
+    final harness = await _pump(tester, 'one two');
+    final document = harness.controller.document;
+    harness.controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 3),
+    ));
+    await tester.pump();
+
+    tester.semantics.tap(find.semantics.byLabel('Bold'));
+    await tester.pump();
+    expect(harness.controller.document.blocks.single.text, '**one** two');
+    handle.dispose();
+    await _unmount(tester);
+  });
+
   testWidgets('the hide key puts the keyboard away', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final harness = await _pump(tester, 'one two');

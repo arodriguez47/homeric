@@ -399,6 +399,9 @@ class _BarKeyState extends State<_BarKey> {
       enabled: enabled,
       selected: widget.selected,
       label: widget.label,
+      // The detector's own tap is excluded with the icon below, so the
+      // node itself is what VoiceOver and TalkBack activate.
+      onTap: widget.onPressed,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,

@@ -1348,11 +1348,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final commandBindings =
         <ShortcutActivator, List<HomericDocumentCommandBinding>>{};
     for (final binding in documentCommandBindings) {
+      // Bindings for one chord share a group in registration order, even
+      // when hosts pass distinct activator instances.
+      final key = commandBindings.keys.firstWhere(
+        (key) => _sameChord(key, binding.shortcut),
+        orElse: () => binding.shortcut,
+      );
       commandBindings
-          .putIfAbsent(
-            binding.shortcut,
-            () => <HomericDocumentCommandBinding>[],
-          )
+          .putIfAbsent(key, () => <HomericDocumentCommandBinding>[])
           .add(binding);
     }
     for (final entry in commandBindings.entries) {

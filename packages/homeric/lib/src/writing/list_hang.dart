@@ -123,8 +123,7 @@ final class HomericListHang {
     final match = HomericMarkdownListPrefix.match(text);
     if (match == null) {
       if (!indents) return null;
-      final indent =
-          HomericBlockIndent.paragraphIndentOf(
+      final indent = HomericBlockIndent.paragraphIndentOf(
         block,
         types: indentTypes,
         accepts: indentFilter,

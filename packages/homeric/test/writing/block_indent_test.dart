@@ -71,7 +71,8 @@ void main() {
       );
     });
 
-    test('headings, quotes, fences, drop caps, lists and other types are '
+    test(
+        'headings, quotes, fences, drop caps, lists and other types are '
         'not paragraphs', () {
       for (final text in [
         '# Title',
@@ -115,7 +116,8 @@ void main() {
       expect(HomericBlockIndent.columnOf(_block('# heading')), 0);
     });
 
-    test('an indented paragraph hangs with no marker, its words at its '
+    test(
+        'an indented paragraph hangs with no marker, its words at its '
         'depth', () {
       final hang = HomericListHang.of(_block('    words'), indents: true)!;
       expect(hang.indent, isTrue);
@@ -183,7 +185,8 @@ void main() {
       expect(linesOf(controller), ['  only']);
     });
 
-    test('under a list item a paragraph lines up with its words, then '
+    test(
+        'under a list item a paragraph lines up with its words, then '
         'with a nested item\'s', () {
       final controller = controllerFor(['- item', 'more about it']);
       expect(HomericBlockIndent.indentSelection(controller), isTrue);
@@ -193,7 +196,8 @@ void main() {
       expect(HomericBlockIndent.indentSelection(controller), isFalse);
     });
 
-    test('a list line nests as it does with Tab, under a list or an '
+    test(
+        'a list line nests as it does with Tab, under a list or an '
         'indented paragraph', () {
       final list = controllerFor(['- one', '- two']);
       expect(HomericBlockIndent.indentSelection(list), isTrue);
@@ -243,7 +247,8 @@ void main() {
       ));
       expect(HomericBlockIndent.indentSelection(controller), isFalse);
       expect(
-        HomericBlockIndent.reachable(controller.document, controller.selection!),
+        HomericBlockIndent.reachable(
+            controller.document, controller.selection!),
         isFalse,
       );
     });
@@ -292,7 +297,8 @@ void main() {
       expect(linesOf(controller), ['- onetwo']);
     });
 
-    test('Enter keeps the indent; Enter on an empty indented line steps '
+    test(
+        'Enter keeps the indent; Enter on an empty indented line steps '
         'out', () {
       final controller = controllerFor(['- one', '    two']);
       controller.insertParagraphBreak();
@@ -328,19 +334,42 @@ void main() {
     });
 
     test('switched off, typing and Tab are as they were', () {
-      final document = Document([_block('one', id: 'l0'), _block('two', id: 'l1')]);
+      final document =
+          Document([_block('one', id: 'l0'), _block('two', id: 'l1')]);
       final controller = HomericEditorController(
         document: document,
         selection: HomericSelection.collapsed(document.positionAt(1, 0)),
       );
-      final stop = HomericBlockIndent(isActive: () => false)
-          .installOn(controller);
+      final stop =
+          HomericBlockIndent(isActive: () => false).installOn(controller);
       addTearDown(() {
         stop();
         controller.dispose();
       });
       controller.replaceSelection(' ');
       expect(linesOf(controller), ['one', ' two']);
+    });
+
+    test('switched off, the caret may sit inside an indent', () async {
+      final document = Document([
+        _block('above', id: 'l0'),
+        _block('  words', id: 'l1'),
+      ]);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(1, 7)),
+      );
+      final stop =
+          HomericBlockIndent(isActive: () => false).installOn(controller);
+      addTearDown(() {
+        stop();
+        controller.dispose();
+      });
+      controller.setSelection(
+        HomericSelection.collapsed(document.positionAt(1, 1)),
+      );
+      await settle();
+      expect(caretOf(controller), ('l1', 1));
     });
 
     test('a host filter leaves its own lines (code in a fence) alone', () {
@@ -351,8 +380,7 @@ void main() {
         document: document,
         selection: HomericSelection.collapsed(document.positionAt(1, 2)),
       );
-      final stop =
-          HomericBlockIndent(accepts: prose).installOn(controller);
+      final stop = HomericBlockIndent(accepts: prose).installOn(controller);
       addTearDown(() {
         stop();
         controller.dispose();
@@ -374,8 +402,8 @@ void main() {
       );
     });
 
-    test('is not in the standard kit: a host opts in', () {
-      expect(HomericWritingKit.standard().has('blockIndent'), isFalse);
+    test('joins the standard kit; tab: false drops the shortcuts', () {
+      expect(HomericWritingKit.standard().has('blockIndent'), isTrue);
       expect(
         const HomericBlockIndent(tab: false).commandBindings,
         isEmpty,
@@ -464,8 +492,7 @@ void main() {
       expect(x('p-l1') - x('line-l1'), 0);
     });
 
-    testWidgets('a paragraph and a list item under it line up',
-        (tester) async {
+    testWidgets('a paragraph and a list item under it line up', (tester) async {
       await pumpEditor(tester, ['- item', '  more', '  - nested', '    under']);
       double x(String id) => tester.getTopLeft(find.byKey(ValueKey(id))).dx;
       final margin = x('line-l0');
@@ -497,8 +524,7 @@ void main() {
   });
 
   group('format bar', () {
-    test('Outdent and Indent end the bar as a group, acting on the line',
-        () {
+    test('Outdent and Indent end the bar as a group, acting on the line', () {
       final controller = controllerFor(['one', 'two'], caret: 1);
       final actions = HomericFormatBar.standard(
         controller,

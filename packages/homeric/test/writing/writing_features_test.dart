@@ -113,8 +113,8 @@ void main() {
         );
       }
       expect(
-        HomericWritingKit.standard(without: const {'wrapShortcuts'})
-            .commandBindings,
+        HomericWritingKit.standard(
+            without: const {'wrapShortcuts', 'blockIndent'}).commandBindings,
         isEmpty,
       );
     });

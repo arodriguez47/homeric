@@ -72,16 +72,20 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
 
   void _focusChanged() {
     final document = HomericEditableDocument.ofPrimaryFocus();
-    final controller = document?.widget.controller;
-    if (!identical(controller, _controller)) {
-      _controller?.removeListener(_changed);
-      controller?.addListener(_changed);
-      _controller = controller;
-    }
+    _listenTo(document?.widget.controller);
     if (!identical(document, _document)) {
       _document = document;
       _changed();
     }
+  }
+
+  /// Follows [controller]'s selection, the focused document's current one:
+  /// a host may hand the same document a new controller.
+  void _listenTo(HomericEditorController? controller) {
+    if (identical(controller, _controller)) return;
+    _controller?.removeListener(_changed);
+    controller?.addListener(_changed);
+    _controller = controller;
   }
 
   void _changed() {
@@ -124,6 +128,9 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
   /// caret, each first selecting what it acts on.
   List<HomericFormatAction> _actions() {
     final document = _document;
+    if (document != null && document.mounted) {
+      _listenTo(document.widget.controller);
+    }
     final controller = _controller;
     if (document == null ||
         controller == null ||
@@ -175,7 +182,9 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
       onPressed();
       return;
     }
-    controller.setSelection(word);
+    // Mid-composition the selection can't move; the word isn't the
+    // button's to change yet.
+    if (!controller.setSelection(word) && controller.selection != word) return;
     onPressed();
     // Marks put round the word leave the word selected, and the next key
     // would replace it: back to the caret, at the same place in the word.

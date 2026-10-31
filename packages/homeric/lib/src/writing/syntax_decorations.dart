@@ -716,7 +716,7 @@ class HomericDividerSpec {
 /// The gap where a sunk initial sits is [spelledAs] that letter, so
 /// spelling reads the first word whole.
 @immutable
-class HomericGapSpec implements HomericSpelledSlot {
+class HomericGapSpec implements HomericSpelledSlot, BlankSlot {
   const HomericGapSpec(this.width, {this.spelledAs});
   final double width;
 
@@ -768,6 +768,21 @@ class HomericImageSpec {
   int get hashCode => Object.hash(blockId, start, end, src, caption, alone);
 }
 
+/// Where the word holding [offset] starts in [text], so a drop cap's
+/// line-two slots never split a word: a slot is a break opportunity, and
+/// a measure that once found line two mid-word would otherwise keep the
+/// break there (`V` / `oted`). Folded marks (`==`, `**`) count as the
+/// word's letters. A word that starts before [floor] (one longer than the
+/// line, broken by the engine itself) keeps [offset].
+int? _wordStart(String text, int? offset, int floor) {
+  if (offset == null || offset <= 0 || offset > text.length) return offset;
+  var start = offset;
+  while (start > floor && text[start - 1].trim().isNotEmpty) {
+    start--;
+  }
+  return start > floor ? start : offset;
+}
+
 /// The writing layer ([homericStripMarks] lists the forms). Each form
 /// folds its syntax away in live preview; the caret reveals it.
 Iterable<Decoration> _layerDecorations(
@@ -809,7 +824,7 @@ Iterable<Decoration> _layerDecorations(
             dropCap.indent,
             spelledAs: block.text.substring(m.end, m.letterEnd),
           ));
-      final lineTwo = dropCap.lineTwo;
+      final lineTwo = _wordStart(block.text, dropCap.lineTwo, m.letterEnd);
       // The layout is measured after each frame, so right after an edit
       // it can name an offset the shortened text no longer has.
       if (lineTwo != null &&

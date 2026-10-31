@@ -153,6 +153,13 @@ final class DocOffsetOutOfRangeError implements Exception {
       'the document range [0, $docLength]';
 }
 
+/// A widget slot spec that only holds room open, with nothing drawn in
+/// it: [ParagraphGeometry.inkRectsForRange] treats one at either end of a
+/// line as it treats a space there, so a highlight or underline running
+/// through it never paints the empty room (a drop cap's indent on the
+/// line under the letter, or the filler ending the line above).
+abstract interface class BlankSlot {}
+
 /// Thrown when a slot is addressed by an index or spec identity that does
 /// not exist among the paragraph's current slots.
 final class UnknownSlotError extends Error {
@@ -673,6 +680,8 @@ class ParagraphGeometry {
   /// whitespace at its two ends, so a passage that wraps after a space
   /// stops at its last word instead of running on to the widest line's
   /// edge, and a line that holds nothing but that space gets no rect.
+  /// A [BlankSlot] gets no rect wherever it sits, so a highlight through
+  /// a drop cap's room never paints it.
   /// Fragments within a line stay separate, as in [rectsForRange].
   ///
   /// Throws [DocOffsetOutOfRangeError] if either end of [range] is outside
@@ -706,21 +715,43 @@ class ParagraphGeometry {
       final end = low;
       var inkStart = start;
       var inkEnd = end;
-      while (inkStart < inkEnd && _isBlank(text.codeUnitAt(inkStart))) {
+      while (inkStart < inkEnd && _isBlankAt(text, inkStart)) {
         inkStart++;
       }
-      while (inkEnd > inkStart && _isBlank(text.codeUnitAt(inkEnd - 1))) {
+      while (inkEnd > inkStart && _isBlankAt(text, inkEnd - 1)) {
         inkEnd--;
       }
-      if (inkEnd > inkStart) {
-        boxes.addAll(_paragraph.getBoxesForRange(inkStart, inkEnd,
-            boxHeightStyle: heightStyle,
-            boxWidthStyle: ui.BoxWidthStyle.tight));
+      // A blank slot inside the line splits the ink around it.
+      var from = inkStart;
+      for (var i = inkStart; i <= inkEnd; i++) {
+        if (i < inkEnd && !_isBlankSlotAt(text, i)) continue;
+        if (i > from) {
+          boxes.addAll(_paragraph.getBoxesForRange(from, i,
+              boxHeightStyle: heightStyle,
+              boxWidthStyle: ui.BoxWidthStyle.tight));
+        }
+        from = i + 1;
       }
       start = end;
     }
     return _stamp(boxes);
   }
+
+  /// Whether view offset [i] of [text] is blank at a line's edge: a space
+  /// or tab, or a [BlankSlot] such as the room a drop cap holds open
+  /// beside its first two lines.
+  bool _isBlankAt(String text, int i) {
+    final unit = text.codeUnitAt(i);
+    return _isBlank(unit) || _isBlankSlotAt(text, i);
+  }
+
+  bool _isBlankSlotAt(String text, int i) =>
+      text.codeUnitAt(i) == 0xFFFC && _blankSlotOffsets.contains(i);
+
+  late final Set<int> _blankSlotOffsets = {
+    for (final slot in _render.source.slots)
+      if (slot.spec is BlankSlot) slot.viewOffset,
+  };
 
   /// Whether [unit] is a space or tab: ink a decoration never covers at
   /// the edge of a line.

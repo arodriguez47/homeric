@@ -140,6 +140,34 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('a press closes a drawn selection menu', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final harness = await _pump(tester, 'one two');
+    final document = harness.controller.document;
+    harness.controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 3),
+    ));
+    await tester.pump();
+    final menu = ContextMenuController();
+    menu.show(
+      context: tester.element(find.byType(Scaffold)),
+      contextMenuBuilder: (_) => const SizedBox(
+        key: ValueKey<String>('menu'),
+        width: 10,
+        height: 10,
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey<String>('menu')), findsOneWidget);
+
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    expect(harness.controller.document.blocks.single.text, '**one** two');
+    expect(find.byKey(const ValueKey<String>('menu')), findsNothing);
+    await _unmount(tester);
+  });
+
   testWidgets('VoiceOver can press a button', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final handle = tester.ensureSemantics();

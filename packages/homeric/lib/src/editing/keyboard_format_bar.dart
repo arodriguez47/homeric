@@ -178,6 +178,10 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
     VoidCallback onPressed,
   ) {
     if (controller.selection != selection) return;
+    // A drawn selection menu left open would take its focus scope back
+    // from whatever the button opens (a note's field). UIKit closes its
+    // own menu on the tap.
+    ContextMenuController.removeAny();
     if (word == null) {
       onPressed();
       return;

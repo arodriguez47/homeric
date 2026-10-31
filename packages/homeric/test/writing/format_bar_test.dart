@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart'
     show PointerDeviceKind, kSecondaryMouseButton;
 import 'package:flutter/material.dart'
     show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold, Tooltip;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
@@ -87,6 +88,34 @@ void main() {
     await tester.pump();
 
     expect(harness.controller.document.blocks.single.text, '[[one]] two');
+    await _unmount(tester);
+  });
+
+  testWidgets('opening the menu leaves Backspace able to undo a typed wrap',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final harness = await _pump(tester, 'one two');
+    final controller = harness.controller;
+    final document = controller.document;
+    controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 0),
+      head: document.positionAt(0, 3),
+    ));
+    controller.replaceSelection('=');
+    controller.replaceSelection('=');
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '==one== two');
+
+    final words = tester.getTopLeft(_paragraph) + const Offset(30, 7);
+    await tester.tapAt(words, buttons: kSecondaryMouseButton);
+    await tester.pump();
+    expect(_bar, findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(_bar, findsNothing);
+
+    controller.deleteBackward();
+    expect(controller.document.blocks.single.text, 'one two');
     await _unmount(tester);
   });
 
@@ -189,6 +218,7 @@ Future<({HomericEditorController controller})> _pump(
   final wraps = const HomericTypedWraps(linkAlias: false).sessionFor(
     controller,
   );
+  addTearDown(controller.addCommandInterceptor(wraps.intercept));
   addTearDown(session.dispose);
   addTearDown(controller.dispose);
   FocusNode? focus;

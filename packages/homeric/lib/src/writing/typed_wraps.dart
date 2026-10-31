@@ -310,6 +310,29 @@ final class HomericTypedWrapsSession {
     );
   }
 
+  /// Whether [prepareMenuWrap] could wrap [selection] in [typed], asked
+  /// without preparing anything, so a menu can show its button enabled
+  /// and Backspace still reverts the last typed wrap.
+  bool canMenuWrap(HomericSelection? selection, String typed) {
+    if (selection == null ||
+        selection.isCollapsed ||
+        !feature.pairs.containsKey(typed)) {
+      return false;
+    }
+    final document = controller.document;
+    final anchor = document.resolve(selection.anchor);
+    final head = document.resolve(selection.head);
+    if (anchor is! InlinePosition ||
+        head is! InlinePosition ||
+        anchor.blockIndex != head.blockIndex) {
+      return false;
+    }
+    final start = anchor.offset < head.offset ? anchor.offset : head.offset;
+    final end = anchor.offset < head.offset ? head.offset : anchor.offset;
+    final words = anchor.block.text.substring(start, end);
+    return !words.contains('\n') && words.trim().isNotEmpty;
+  }
+
   /// Whether [selection]'s words already sit inside [typed]'s whole pair
   /// (`==words==` for `=`), so [prepareMenuWrap] would take it off.
   bool isWrapped(HomericSelection? selection, String typed) {

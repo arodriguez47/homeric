@@ -252,7 +252,7 @@ abstract final class HomericFormatBar {
     String? shortcut,
     bool startsGroup = false,
   }) {
-    final possible = wraps.prepareMenuWrap(selection, typed) != null;
+    final possible = wraps.canMenuWrap(selection, typed);
     return HomericFormatAction(
       icon: icon,
       label: label,

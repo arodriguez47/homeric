@@ -1332,6 +1332,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           const _TraverseIntent(false),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true):
           const _TraverseIntent(true),
+      // Control-Tab always leaves the text, as in native text views, so a
+      // document whose Tab indents is never a keyboard trap.
+      const SingleActivator(LogicalKeyboardKey.tab, control: true):
+          const _TraverseIntent(false),
+      const SingleActivator(LogicalKeyboardKey.tab, control: true, shift: true):
+          const _TraverseIntent(true),
       const SingleActivator(
         LogicalKeyboardKey.arrowUp,
         meta: true,

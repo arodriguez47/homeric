@@ -492,6 +492,20 @@ void main() {
       expect(x('p-l1') - x('line-l1'), 0);
     });
 
+    testWidgets('Control-Tab still leaves the line, so Tab is no trap',
+        (tester) async {
+      final controller = await pumpEditor(tester, ['one', 'two']);
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-l1')));
+      await tester.pump();
+      final before = FocusManager.instance.primaryFocus;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(linesOf(controller), ['one', 'two']);
+      expect(FocusManager.instance.primaryFocus, isNot(same(before)));
+    });
+
     testWidgets('a paragraph and a list item under it line up', (tester) async {
       await pumpEditor(tester, ['- item', '  more', '  - nested', '    under']);
       double x(String id) => tester.getTopLeft(find.byKey(ValueKey(id))).dx;

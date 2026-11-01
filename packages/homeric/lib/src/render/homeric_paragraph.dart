@@ -1048,6 +1048,37 @@ class RenderHomericParagraph extends RenderBox
   /// reads become asserts. Paint-only rebuilds do not increment it.
   int get layoutGeneration => _layoutGeneration;
 
+  /// What the last layout put where: the box size, the view text, each
+  /// line's metrics and each inline child's offset.
+  ///
+  /// Two layouts with equal shapes place every caret and every glyph box
+  /// identically, so a reader holding a position (a dragged selection
+  /// handle's other end, a long press's word) can keep it across a
+  /// relayout that changed nothing, which [layoutGeneration] alone cannot
+  /// tell. Computed on demand; null before the first layout.
+  @internal
+  HomericParagraphLayoutShape? get layoutShape {
+    final paragraph = _paragraph;
+    if (paragraph == null || !hasCurrentGeometry) return null;
+    return HomericParagraphLayoutShape._(
+      size: size,
+      viewText: _source.viewText,
+      lines: <double>[
+        for (final line in paragraph.computeLineMetrics()) ...<double>[
+          line.left,
+          line.width,
+          line.baseline,
+          line.ascent,
+          line.descent,
+        ],
+      ],
+      children: <Offset?>[
+        for (var child = firstChild; child != null; child = childAfter(child))
+          (child.parentData! as HomericSlotParentData)._offset,
+      ],
+    );
+  }
+
   /// Whether the last completed layout still describes this render object.
   ///
   /// This is the release-safe counterpart to debug-only render lifecycle
@@ -1864,4 +1895,38 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
           ifTrue: 'observed',
           ifFalse: 'unobserved'));
   }
+}
+
+/// A [RenderHomericParagraph.layoutShape]: equal when two layouts place
+/// everything identically.
+@internal
+@immutable
+final class HomericParagraphLayoutShape {
+  const HomericParagraphLayoutShape._({
+    required this.size,
+    required this.viewText,
+    required this.lines,
+    required this.children,
+  });
+
+  final Size size;
+  final String viewText;
+  final List<double> lines;
+  final List<Offset?> children;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HomericParagraphLayoutShape &&
+      other.size == size &&
+      other.viewText == viewText &&
+      listEquals(other.lines, lines) &&
+      listEquals(other.children, children);
+
+  @override
+  int get hashCode => Object.hash(
+        size,
+        viewText,
+        Object.hashAll(lines),
+        Object.hashAll(children),
+      );
 }

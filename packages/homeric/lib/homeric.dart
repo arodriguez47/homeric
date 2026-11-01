@@ -55,7 +55,10 @@ export 'src/editing/mirror_render_hook.dart';
 export 'src/editing/markdown_shortcut_policy.dart';
 export 'src/editing/content_measure.dart';
 export 'src/render/homeric_paragraph.dart'
-    hide HomericParagraphLayoutCache, HomericParagraphLayoutCacheScope;
+    hide
+        HomericParagraphLayoutCache,
+        HomericParagraphLayoutCacheScope,
+        HomericParagraphLayoutShape;
 export 'src/render/letter_metrics.dart';
 export 'src/render/paint_layers.dart';
 export 'src/render/paragraph_layout_instrumentation.dart';

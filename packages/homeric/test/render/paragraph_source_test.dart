@@ -192,6 +192,28 @@ void main() {
       ]);
       expectCoversViewText(source);
     });
+
+    test('a widget built afresh with an equal spec is the same slot', () {
+      // Hosts rebuild their decorations on every build; a drop cap's gap
+      // must not reshape its paragraph each time.
+      ParagraphSource<String> build(Object spec) => ParagraphSource.build(
+            block: para('a', 'abcd'),
+            decorations: [Decoration.widget('a', 0, spec: spec)],
+            resolveStyle: tagStyle,
+          );
+      expect(build('gap').segments, build('gap').segments);
+      expect(build('gap').slots.single.hashCode,
+          build('gap').slots.single.hashCode);
+      expect(build('gap').segments, isNot(build('other').segments));
+      expect(
+        ParagraphSource.build(
+          block: para('a', 'abcd'),
+          decorations: [Decoration.widget('a', 1, spec: 'gap')],
+          resolveStyle: tagStyle,
+        ).slots.single,
+        isNot(build('gap').slots.single),
+      );
+    });
   });
 
   group('edge cases', () {

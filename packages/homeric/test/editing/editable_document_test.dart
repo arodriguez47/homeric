@@ -1256,6 +1256,79 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('iOS handle drag outlives a relayout that moves nothing',
+      (tester) async {
+    // Sprintnotes lays a note out again whenever it rebuilds; a handle
+    // touched then lost its drag, so a word could never grow on iPhone.
+    final document = _document(const <String>['alpha beta gamma delta']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection(
+        anchor: document.positionAt(0, 6),
+        head: document.positionAt(0, 10),
+      ),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(_editableDocument(controller, session, key: key));
+    await tester.pump();
+    key.currentState!.showTouchSelectionChrome();
+    await tester.pump();
+    await tester.pump(SelectionOverlay.fadeDuration);
+    final paragraph = find.byType(HomericParagraph);
+    final render = tester.renderObject<RenderHomericParagraph>(paragraph);
+    final geometry = ParagraphGeometry(render);
+    final origin = tester.getTopLeft(paragraph);
+    Offset mid(int a, int b) =>
+        origin +
+        geometry
+            .rectsForRange(DocRange(DocOffset(a), DocOffset(b)))
+            .value
+            .first
+            .toRect()
+            .center;
+    expect(key.currentState!.debugTouchEndHandleVisible, isTrue);
+
+    final endTarget = tester.widget<CompositedTransformTarget>(find.byKey(
+      const ValueKey<(HomericSelectionEndpoint, String)>(
+        (HomericSelectionEndpoint.end, 'block-0'),
+      ),
+    ));
+    final endHandle = find.descendant(
+      of: find.byWidgetPredicate((widget) =>
+          widget is CompositedTransformFollower &&
+          identical(widget.link, endTarget.link)),
+      matching: find.byType(CustomPaint),
+    );
+    final handleAt = tester.getCenter(endHandle);
+    final delta = mid(17, 22);
+    final drag =
+        await tester.startGesture(handleAt, kind: PointerDeviceKind.touch);
+    await drag.moveBy(const Offset(4, 0));
+    await tester.pump();
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+
+    // The host rebuilds: the paragraph lays out again, the same.
+    final generation = render.layoutGeneration;
+    render.markNeedsLayout();
+    await tester.pump();
+    await tester.pump();
+    expect(render.layoutGeneration, greaterThan(generation));
+    expect(key.currentState!.pointerSelectionDragActive, isTrue);
+    expect(key.currentState!.debugTouchEndHandleVisible, isTrue);
+
+    await drag.moveTo(Offset(delta.dx, handleAt.dy));
+    await tester.pump();
+    await drag.up();
+    await tester.pump();
+    final fragment = key.currentState!.selectionFragmentForBlock('block-0')!;
+    expect(fragment.start, 6);
+    expect(fragment.end, greaterThan(17), reason: 'the drag grew the word');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('iOS handles stand on the selected line', (tester) async {
     final document = _document(const <String>['alpha', 'beta gamma']);
     final controller = HomericEditorController(

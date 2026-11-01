@@ -1496,10 +1496,15 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   /// Revokes a handle drag only when its stationary geometry changes.
   @internal
+
+  ///
+  /// [sameShape] says the host laid out again and placed everything where it
+  /// was, as a host rebuilding around a drag does: the handle keeps going.
   void selectionHostLayoutChanged(
     String blockId, {
     required Object owner,
     required int layoutGeneration,
+    bool sameShape = false,
   }) {
     if (!identical(_selectionDragOwner, _touchHandleDragOwner) ||
         blockId != _touchStationaryBlockId) {
@@ -1508,6 +1513,10 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (_touchStationaryHostOwner == null) return;
     if (identical(owner, _touchStationaryHostOwner) &&
         layoutGeneration == _touchStationaryLayoutGeneration) {
+      return;
+    }
+    if (identical(owner, _touchStationaryHostOwner) && sameShape) {
+      _touchStationaryLayoutGeneration = layoutGeneration;
       return;
     }
     cancelTransientTouchInput();

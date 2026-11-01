@@ -1065,6 +1065,7 @@ class RenderHomericParagraph extends RenderBox
     return HomericParagraphLayoutShape._(
       size: size,
       source: _source,
+      paintStyles: _livePaintStyles,
       lines: <double>[
         for (final line in paragraph.computeLineMetrics()) ...<double>[
           line.left,
@@ -1907,12 +1908,18 @@ final class HomericParagraphLayoutShape {
   const HomericParagraphLayoutShape._({
     required this.size,
     required this.source,
+    required this.paintStyles,
     required this.lines,
     required this.children,
   });
 
   final Size size;
   final ParagraphSource<TextStyle> source;
+
+  /// The paint styler's resolved styles the layout was built with. Two
+  /// shapes differ when a style changed metrics (letter spacing, weight)
+  /// even if the source, size and line boxes happen to match.
+  final List<TextStyle>? paintStyles;
   final List<double> lines;
   final List<Offset?> children;
 
@@ -1921,8 +1928,15 @@ final class HomericParagraphLayoutShape {
       other is HomericParagraphLayoutShape &&
       other.size == size &&
       RenderHomericParagraph._paragraphSourceEquals(other.source, source) &&
+      _samePaintLayout(other.paintStyles, paintStyles) &&
       listEquals(other.lines, lines) &&
       listEquals(other.children, children);
+
+  static bool _samePaintLayout(List<TextStyle>? a, List<TextStyle>? b) {
+    if (a == null || b == null) return a == null && b == null;
+    return RenderHomericParagraph._comparePaintStyles(a, b) !=
+        RenderComparison.layout;
+  }
 
   @override
   int get hashCode => Object.hash(

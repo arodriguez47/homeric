@@ -283,6 +283,27 @@ void main() {
       expect(render.layoutShape, isNot(before),
           reason: 'offset 1 sits at a different caret position');
     });
+
+    testWidgets('a styler value that changes metrics is another shape',
+        (tester) async {
+      // Journal hosts refill the styler's values under an equal source.
+      // The test font keeps every advance under a heavier weight, so the
+      // line boxes match: only the resolved styles can tell them apart.
+      var weight = FontWeight.w400;
+      TextStyle styler(TextSegment<TextStyle> segment) =>
+          segment.style.copyWith(fontWeight: weight);
+      await tester.pumpWidget(harness(
+          HomericParagraph(source: sourceOf('hello'), paintStyler: styler)));
+      final render = renderOf(tester);
+      final before = render.layoutShape;
+      weight = FontWeight.w700;
+      await tester.pumpWidget(harness(
+          HomericParagraph(source: sourceOf('hello'), paintStyler: styler)));
+      await tester.pump();
+      expect(render.layoutShape, isNotNull);
+      expect(render.layoutShape!.lines, before!.lines);
+      expect(render.layoutShape, isNot(before));
+    });
   });
 
   group('invalidation matrix', () {

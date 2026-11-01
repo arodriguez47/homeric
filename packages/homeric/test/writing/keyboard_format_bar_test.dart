@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
-import 'package:flutter/material.dart' show MaterialApp, Scaffold;
+import 'package:flutter/material.dart' show Icons, MaterialApp, Scaffold;
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
@@ -34,6 +34,26 @@ void main() {
         findsOneWidget);
     // The page sees the bar as part of the keyboard.
     expect(harness.insets(), _keyboard + HomericKeyboardFormatBar.height);
+    await _unmount(tester);
+  });
+
+  testWidgets(
+      'Footnote draws a raised 1 after a letter, not a numbered list, '
+      'inked like the icons beside it', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await _pump(tester, 'one two', onFootnote: () {});
+
+    expect(_labels(tester).last, 'Footnote');
+    final glyph = find.byType(HomericFootnoteGlyph);
+    expect(glyph, findsOneWidget);
+    expect(find.byIcon(Icons.format_list_numbered_rounded), findsNothing);
+    expect(
+        tester.getSize(find.byType(CustomPaint).last), const Size.square(19));
+    final note =
+        IconTheme.of(tester.element(find.byIcon(Icons.sticky_note_2_outlined)));
+    final foot = IconTheme.of(tester.element(glyph));
+    expect(foot.size, note.size);
+    expect(foot.color, note.color);
     await _unmount(tester);
   });
 
@@ -272,6 +292,7 @@ Future<
   String text, {
   bool keyboard = true,
   bool indents = false,
+  VoidCallback? onFootnote,
 }) async {
   tester.view.physicalSize = const Size(1170, 2532);
   tester.view.devicePixelRatio = 3;
@@ -314,6 +335,7 @@ Future<
                   selection,
                   wraps: wraps,
                   indents: indents,
+                  onFootnote: onFootnote,
                 ),
                 blockBuilder: (context, block, focusNode) {
                   focus = focusNode;

@@ -427,14 +427,16 @@ class _FormatButton extends StatelessWidget {
                     : const Color(0x00000000),
             borderRadius: BorderRadius.circular(7),
           ),
-          child: Icon(
-            action.icon,
-            size: 18,
-            color: !enabled
-                ? palette.quiet.withValues(alpha: 0.3)
-                : active
-                    ? palette.accent
-                    : palette.ink.withValues(alpha: lit ? 0.9 : 0.68),
+          child: IconTheme.merge(
+            data: IconThemeData(
+              size: 18,
+              color: !enabled
+                  ? palette.quiet.withValues(alpha: 0.3)
+                  : active
+                      ? palette.accent
+                      : palette.ink.withValues(alpha: lit ? 0.9 : 0.68),
+            ),
+            child: action.glyph ?? Icon(action.icon),
           ),
         ),
       ),

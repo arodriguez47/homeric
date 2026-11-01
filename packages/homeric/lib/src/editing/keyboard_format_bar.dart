@@ -393,14 +393,16 @@ class _BarButton extends StatelessWidget {
               : const Color(0x00000000),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Icon(
-          action.icon,
-          size: 19,
-          color: !enabled
-              ? palette.ink.withValues(alpha: 0.3)
-              : active
-                  ? palette.accent
-                  : palette.ink,
+        child: IconTheme.merge(
+          data: IconThemeData(
+            size: 19,
+            color: !enabled
+                ? palette.ink.withValues(alpha: 0.3)
+                : active
+                    ? palette.accent
+                    : palette.ink,
+          ),
+          child: action.glyph ?? Icon(action.icon),
         ),
       ),
     );

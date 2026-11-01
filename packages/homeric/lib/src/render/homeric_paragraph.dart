@@ -1048,8 +1048,10 @@ class RenderHomericParagraph extends RenderBox
   /// reads become asserts. Paint-only rebuilds do not increment it.
   int get layoutGeneration => _layoutGeneration;
 
-  /// What the last layout put where: the box size, the view text, each
-  /// line's metrics and each inline child's offset.
+  /// What the last layout put where: the box size, the source it shaped
+  /// (view text, view map and styled segments, so a fold that moves which
+  /// document offset sits where counts), each line's metrics and each
+  /// inline child's offset.
   ///
   /// Two layouts with equal shapes place every caret and every glyph box
   /// identically, so a reader holding a position (a dragged selection
@@ -1062,7 +1064,7 @@ class RenderHomericParagraph extends RenderBox
     if (paragraph == null || !hasCurrentGeometry) return null;
     return HomericParagraphLayoutShape._(
       size: size,
-      viewText: _source.viewText,
+      source: _source,
       lines: <double>[
         for (final line in paragraph.computeLineMetrics()) ...<double>[
           line.left,
@@ -1904,13 +1906,13 @@ class HomericParagraph extends MultiChildRenderObjectWidget {
 final class HomericParagraphLayoutShape {
   const HomericParagraphLayoutShape._({
     required this.size,
-    required this.viewText,
+    required this.source,
     required this.lines,
     required this.children,
   });
 
   final Size size;
-  final String viewText;
+  final ParagraphSource<TextStyle> source;
   final List<double> lines;
   final List<Offset?> children;
 
@@ -1918,14 +1920,14 @@ final class HomericParagraphLayoutShape {
   bool operator ==(Object other) =>
       other is HomericParagraphLayoutShape &&
       other.size == size &&
-      other.viewText == viewText &&
+      RenderHomericParagraph._paragraphSourceEquals(other.source, source) &&
       listEquals(other.lines, lines) &&
       listEquals(other.children, children);
 
   @override
   int get hashCode => Object.hash(
         size,
-        viewText,
+        source.viewText,
         Object.hashAll(lines),
         Object.hashAll(children),
       );

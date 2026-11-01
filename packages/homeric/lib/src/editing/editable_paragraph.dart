@@ -411,6 +411,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   bool _longPressMovesCaret = false;
   ({int position, HomericCaretAffinity affinity})? _pendingIosTap;
   RenderHomericParagraph? _renderParagraph;
+  HomericParagraphLayoutShape? _layoutShape;
   int? _renderGeneration;
   int? _geometryDocumentRevision;
   ParagraphGeometry? _paragraphGeometry;
@@ -3898,7 +3899,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       // layout, in which case ParagraphOverlay does not rebuild it again.
       _cancelFloatingCursor();
     }
+    // A relayout that put everything back where it was (a host rebuilding
+    // around the gesture) leaves a long press or a handle drag going.
+    final shape = render.layoutShape;
+    final sameShape = identical(_renderParagraph, render) &&
+        shape != null &&
+        shape == _layoutShape;
+    _layoutShape = shape;
     if (geometryChanged &&
+        !sameShape &&
         (_longPressActive || _localTouchMovingEndpoint != null)) {
       _cancelPlatformTransientInput();
     }
@@ -3914,6 +3923,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       widget.blockId,
       owner: this,
       layoutGeneration: generation,
+      sameShape: sameShape,
     );
   }
 

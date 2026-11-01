@@ -259,15 +259,40 @@ final class SlotSegment<S> implements ParagraphSegment<S> {
   @override
   int get viewEnd => viewOffset + 1;
 
+  /// Equal when both slots hold the same widget at the same place: hosts
+  /// build their decorations afresh on every build, so two equal sources
+  /// rarely share [decoration] instances, and comparing those by identity
+  /// would reshape a paragraph with a drop cap or a picture each frame its
+  /// host rebuilds.
   @override
-  bool operator ==(Object other) =>
-      other is SlotSegment<S> &&
-      other.viewOffset == viewOffset &&
-      other.slotIndex == slotIndex &&
-      other.decoration == decoration;
+  bool operator ==(Object other) {
+    if (other is! SlotSegment<S> ||
+        other.viewOffset != viewOffset ||
+        other.slotIndex != slotIndex) {
+      return false;
+    }
+    final a = other.decoration;
+    final b = decoration;
+    return identical(a, b) ||
+        (a.kind == b.kind &&
+            a.blockId == b.blockId &&
+            a.start == b.start &&
+            a.end == b.end &&
+            a.inclusiveStart == b.inclusiveStart &&
+            a.inclusiveEnd == b.inclusiveEnd &&
+            a.replacementLength == b.replacementLength &&
+            a.spec == b.spec);
+  }
 
   @override
-  int get hashCode => Object.hash(viewOffset, slotIndex, decoration);
+  int get hashCode => Object.hash(
+        viewOffset,
+        slotIndex,
+        decoration.kind,
+        decoration.blockId,
+        decoration.start,
+        decoration.spec,
+      );
 
   @override
   String toString() => 'SlotSegment(#$slotIndex @$viewOffset, $decoration)';

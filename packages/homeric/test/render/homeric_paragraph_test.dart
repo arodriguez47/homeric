@@ -251,6 +251,61 @@ void main() {
   // The outward half of the matrix — which of these triggers dispatch
   // onGeometryChanged, and which must not — lives in
   // `geometry_signal_test.dart`.
+  group('layout shape', () {
+    // A touch drag survives a relayout only when the shape matches; the
+    // shape must tell apart layouts that place document offsets apart.
+    ParagraphSource<TextStyle> folded(int at) => sourceOf(
+          'aaa',
+          decorations: [
+            Decoration.replace('b', at, at + 1, replacementLength: 0),
+          ],
+        );
+
+    testWidgets('an equal source laid out again has the same shape',
+        (tester) async {
+      await tester.pumpWidget(harness(HomericParagraph(source: folded(0))));
+      final render = renderOf(tester);
+      final before = render.layoutShape;
+      await tester.pumpWidget(harness(HomericParagraph(source: folded(0))));
+      render.markNeedsLayout();
+      await tester.pump();
+      expect(render.layoutShape, isNotNull);
+      expect(render.layoutShape, before);
+    });
+
+    testWidgets('the same view text under another fold is another shape',
+        (tester) async {
+      await tester.pumpWidget(harness(HomericParagraph(source: folded(0))));
+      final render = renderOf(tester);
+      final before = render.layoutShape;
+      await tester.pumpWidget(harness(HomericParagraph(source: folded(2))));
+      expect(render.source.viewText, 'aa');
+      expect(render.layoutShape, isNot(before),
+          reason: 'offset 1 sits at a different caret position');
+    });
+
+    testWidgets('a styler value that changes metrics is another shape',
+        (tester) async {
+      // Journal hosts refill the styler's values under an equal source.
+      // The test font keeps every advance under a heavier weight, so the
+      // line boxes match: only the resolved styles can tell them apart.
+      var weight = FontWeight.w400;
+      TextStyle styler(TextSegment<TextStyle> segment) =>
+          segment.style.copyWith(fontWeight: weight);
+      await tester.pumpWidget(harness(
+          HomericParagraph(source: sourceOf('hello'), paintStyler: styler)));
+      final render = renderOf(tester);
+      final before = render.layoutShape;
+      weight = FontWeight.w700;
+      await tester.pumpWidget(harness(
+          HomericParagraph(source: sourceOf('hello'), paintStyler: styler)));
+      await tester.pump();
+      expect(render.layoutShape, isNotNull);
+      expect(render.layoutShape!.lines, before!.lines);
+      expect(render.layoutShape, isNot(before));
+    });
+  });
+
   group('invalidation matrix', () {
     testWidgets('release-safe geometry readiness follows layout invalidation',
         (tester) async {

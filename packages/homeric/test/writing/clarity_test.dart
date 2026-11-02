@@ -63,7 +63,9 @@ void main() {
     test('thresholds can move', () {
       const tight = HomericClarity(long: 5, veryLong: 8);
       final found = tight.longSentencesInText('a', '${words(6)}. ${words(9)}.');
-      expect([for (final s in found) s.length], [
+      expect([
+        for (final s in found) s.length
+      ], [
         HomericSentenceLength.long,
         HomericSentenceLength.veryLong,
       ]);

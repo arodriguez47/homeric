@@ -1465,3 +1465,26 @@ inset rather than overlaying the page; pages keep reading
 `viewInsets.bottom > 0` as "keyboard up". A press that acts on the word at a
 caret selects the word first and puts the caret back afterwards, or the next
 key replaces the word. Evidence: `test/writing/keyboard_format_bar_test.dart`.
+
+## engineer — 2026-11-01 — A relayout that moves nothing must not end a touch drag
+
+**What:** On iPhone, Capture in Sprintnotes could not grow a selection: touching
+a handle hid both handles at once. A `^^` drop cap's gap is a widget slot whose
+`Decoration` hosts rebuild on every build, and `SlotSegment ==` compared
+decorations by identity, so `ParagraphSource` never matched and the paragraph
+reshaped every frame its host rebuilt. Every relayout bumps `layoutGeneration`,
+and a generation change on the stationary paragraph revoked the handle drag
+(and a long-press caret drag).
+
+**Fix:** `SlotSegment` compares its widget decoration by value (kind, block,
+range, inclusivity, spec). `RenderHomericParagraph.layoutShape` (size, the
+shaped source including view map and segments, line metrics, inline child
+offsets) lets a relayout with an equal shape keep a drag going; a real reflow,
+or a fold that moves which offset sits where with the same view text, still
+revokes it. Tests: `iOS handle drag outlives a relayout that moves nothing`,
+`a widget built afresh with an equal spec is the same slot`, `layout shape`.
+
+**Rule going forward:** `layoutGeneration` says a layout ran, not that anything
+moved; compare shapes before revoking gesture state. Payloads on widget slots
+need value equality, and a host's idle note should not relayout: watch
+`layoutGeneration` across idle pumps when a view animates.

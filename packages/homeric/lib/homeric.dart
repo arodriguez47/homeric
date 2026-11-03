@@ -20,6 +20,12 @@ export 'src/editing/spell_check.dart'
         HomericSpellCheckProvider,
         HomericSpellCheckRequest,
         HomericSpelledSlot;
+export 'src/editing/system_spelling.dart'
+    show
+        HomericMacSpelling,
+        HomericSpellingDictionary,
+        HomericTypingCorrections,
+        homericSystemSpellChecker;
 export 'src/editing/text_magnifier.dart'
     show
         HomericSystemLoupe,

@@ -22,6 +22,7 @@
 ///   [HomericWritingWidth] and focus dimming ([HomericFocusDimController]).
 library;
 
+export 'src/writing/block_family.dart';
 export 'src/writing/block_indent.dart';
 export 'src/writing/brevity.dart';
 export 'src/writing/clarity.dart';

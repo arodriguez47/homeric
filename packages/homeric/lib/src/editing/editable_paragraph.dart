@@ -1376,6 +1376,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         meta: true,
         shift: true,
       ): const _MoveDocumentBlockIntent(1),
+      // With ⌥ as well: the same move, which a host's onMoveBlock may read
+      // as "this line alone" (HomericBlockFamily does).
+      const SingleActivator(
+        LogicalKeyboardKey.arrowUp,
+        meta: true,
+        shift: true,
+        alt: true,
+      ): const _MoveDocumentBlockIntent(-1),
+      const SingleActivator(
+        LogicalKeyboardKey.arrowDown,
+        meta: true,
+        shift: true,
+        alt: true,
+      ): const _MoveDocumentBlockIntent(1),
     };
     final documentCommandBindings = _documentHost?.commandBindings ??
         const <HomericDocumentCommandBinding>[];

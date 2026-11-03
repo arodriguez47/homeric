@@ -307,6 +307,7 @@ final class HomericBlockMoveContext {
     required this.documentRevision,
     required this.blockId,
     required this.targetIndex,
+    required this.isStep,
     required bool Function() isCurrent,
   }) : _isCurrent = isCurrent;
 
@@ -317,6 +318,11 @@ final class HomericBlockMoveContext {
   final int documentRevision;
   final String blockId;
   final int targetIndex;
+
+  /// Whether this is a one-line step (⌘⇧↑/↓, `moveBlockBy`) rather than a
+  /// drop at [targetIndex] (the grabber): a host that moves groups steps
+  /// past a neighbour, but honours a drop's place.
+  final bool isStep;
   final bool Function() _isCurrent;
 
   /// Whether the originating reorder capability still owns current state.
@@ -1013,6 +1019,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   Document? _heightOrderDocument;
   Object? _globalLayoutSignature;
   _BlockMoveWitness? _dragMoveWitness;
+  final ValueNotifier<String?> _reorderingBlockId =
+      ValueNotifier<String?>(null);
+
+  /// The block a grabber drag is carrying, from the grab to the drop; null
+  /// otherwise. A host listens to show what travels with it.
+  ValueListenable<String?> get reorderingBlockId => _reorderingBlockId;
   int _selectionDragGeneration = 0;
   int? _selectionDragAnchor;
   ({int start, int end})? _selectionDragWordAnchor;
@@ -2309,6 +2321,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     return _moveBlock(
       _captureMoveWitness(sourceIndex),
       targetIndex,
+      isStep: true,
     );
   }
 
@@ -2859,9 +2872,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (index < 0 || index >= widget.controller.document.blockCount) return;
     final witness = _captureMoveWitness(index);
     _dragMoveWitness = canReorderBlock(witness.blockId) ? witness : null;
+    _reorderingBlockId.value = _dragMoveWitness?.blockId;
   }
 
-  void _reorderEnded(int _) => _dragMoveWitness = null;
+  void _reorderEnded(int _) {
+    _dragMoveWitness = null;
+    _reorderingBlockId.value = null;
+  }
 
   void _reorder(int oldIndex, int newIndex) {
     if (oldIndex < 0 || oldIndex >= widget.controller.document.blockCount) {
@@ -2874,7 +2891,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _moveBlock(witness, targetIndex);
   }
 
-  bool _moveBlock(_BlockMoveWitness witness, int targetIndex) {
+  bool _moveBlock(
+    _BlockMoveWitness witness,
+    int targetIndex, {
+    bool isStep = false,
+  }) {
     if (!canReorderBlock(witness.blockId)) return false;
     final anchor = _captureViewportAnchor(witness.blockId);
     final request = BlockMoveRequest(
@@ -2903,6 +2924,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         documentRevision: witness.documentRevision,
         blockId: witness.blockId,
         targetIndex: targetIndex,
+        isStep: isStep,
         isCurrent: isCurrent,
       ));
       if (widget.controller.stateRevision != stateRevision) {
@@ -3095,6 +3117,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   @override
   void dispose() {
+    _reorderingBlockId.dispose();
     _stopSelectionAutoscroll();
     _cancelTypewriterScrollIdleWait();
     _touchOverlayCoordinator.dispose();

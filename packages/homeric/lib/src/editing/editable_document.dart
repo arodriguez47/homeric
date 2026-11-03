@@ -1560,6 +1560,20 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     }
   }
 
+  /// Opens the selection's menu on the paragraph the selection's head is
+  /// in, the only paragraph that owns it: on a Mac the right-click menu
+  /// (format bar and rows), on a touch screen the edit menu. For a host
+  /// whose own layer sits over the selected words and takes their clicks
+  /// (a handle that drags them out), so a right-click there still finds
+  /// the menu. Returns whether a paragraph was there to open it.
+  bool showSelectionMenu() {
+    final id = widget.controller.activeBlockId;
+    final host = id == null ? null : _commandHosts[id];
+    if (host == null) return false;
+    host.showToolbar();
+    return true;
+  }
+
   /// Attaches platform input through the document-owned host capability.
   bool attachCommandHost(
     String blockId,

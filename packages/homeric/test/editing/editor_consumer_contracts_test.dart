@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/material.dart'
     show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold;
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -747,6 +748,54 @@ void main() {
         expect(presses, 1,
             reason: 'a press for a selection that changed is dropped');
         expect(_selectionMenu, findsNothing);
+        await tester.pumpWidget(const SizedBox.shrink());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('a host opens the selection menu where its layer takes clicks',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final controller = await _pumpMenuDocument(
+          tester,
+          selectionMenuItemsBuilder: (_, __, ___) => <ContextMenuButtonItem>[
+            ContextMenuButtonItem(label: 'Make a card', onPressed: () {}),
+          ],
+        );
+        final state = tester.state<HomericEditableDocumentState>(
+          find.byType(HomericEditableDocument),
+        );
+        // Nothing while no paragraph holds a selection.
+        controller.setSelection(null);
+        await tester.pump();
+        expect(state.showSelectionMenu(), isFalse);
+        expect(_selectionMenu, findsNothing);
+
+        controller.setSelection(const HomericSelection(anchor: 1, head: 4));
+        await tester.pump();
+        expect(state.showSelectionMenu(), isTrue);
+        await tester.pump();
+        expect(_selectionMenu, findsOneWidget);
+        expect(_menuLabels(tester).last, 'Make a card');
+        // The menu holds focus for its keys, and says so.
+        await tester.pump();
+        expect(
+          HomericEditableParagraph.isSelectionMenuFocus(
+            FocusManager.instance.primaryFocus,
+          ),
+          isTrue,
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(_selectionMenu, findsNothing);
+        expect(
+          HomericEditableParagraph.isSelectionMenuFocus(
+            FocusManager.instance.primaryFocus,
+          ),
+          isFalse,
+        );
         await tester.pumpWidget(const SizedBox.shrink());
       } finally {
         debugDefaultTargetPlatformOverride = null;

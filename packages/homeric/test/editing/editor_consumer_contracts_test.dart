@@ -753,6 +753,35 @@ void main() {
       }
     });
 
+    testWidgets('a host opens the selection menu where its layer takes clicks',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final controller = await _pumpMenuDocument(
+          tester,
+          selectionMenuItemsBuilder: (_, __, ___) => <ContextMenuButtonItem>[
+            ContextMenuButtonItem(label: 'Make a card', onPressed: () {}),
+          ],
+        );
+        final state = tester.state<HomericEditableDocumentState>(
+          find.byType(HomericEditableDocument),
+        );
+        // Nothing for a paragraph that isn't there.
+        expect(state.showSelectionMenu('missing'), isFalse);
+        expect(_selectionMenu, findsNothing);
+
+        controller.setSelection(const HomericSelection(anchor: 1, head: 4));
+        await tester.pump();
+        expect(state.showSelectionMenu(), isTrue);
+        await tester.pump();
+        expect(_selectionMenu, findsOneWidget);
+        expect(_menuLabels(tester).last, 'Make a card');
+        await tester.pumpWidget(const SizedBox.shrink());
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
     testWidgets('the menu is unchanged when the host supplies no items',
         (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

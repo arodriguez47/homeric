@@ -767,8 +767,10 @@ void main() {
         final state = tester.state<HomericEditableDocumentState>(
           find.byType(HomericEditableDocument),
         );
-        // Nothing for a paragraph that isn't there.
-        expect(state.showSelectionMenu('missing'), isFalse);
+        // Nothing while no paragraph holds a selection.
+        controller.setSelection(null);
+        await tester.pump();
+        expect(state.showSelectionMenu(), isFalse);
         expect(_selectionMenu, findsNothing);
 
         controller.setSelection(const HomericSelection(anchor: 1, head: 4));

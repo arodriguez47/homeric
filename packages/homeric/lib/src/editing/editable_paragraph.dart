@@ -32,6 +32,7 @@ import 'editor_controller.dart';
 import 'markdown_list_indent.dart';
 import 'selection_overlay.dart';
 import 'spell_check.dart';
+import 'system_spelling.dart';
 
 /// Builds layout-neutral consumer overlays from current paragraph geometry.
 typedef HomericEditableOverlayBuilder = List<Widget> Function(
@@ -511,6 +512,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _controller.addListener(_controllerChanged);
     _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
     widget.inputSession.addListener(_inputSessionChanged);
+    _spellingDictionary(widget)?.addListener(_spellingDictionaryChanged);
     WidgetsBinding.instance.addObserver(this);
     // A host may rebuild the same block under a different presentation
     // wrapper while retaining its document-owned FocusNode. The outgoing
@@ -634,6 +636,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _focusNode = widget.focusNode ?? FocusNode();
       if (hadFocus) _focusNode.requestFocus();
     }
+    if (spellProviderChanged) {
+      _spellingDictionary(oldWidget)
+          ?.removeListener(_spellingDictionaryChanged);
+      _spellingDictionary(widget)?.addListener(_spellingDictionaryChanged);
+    }
     if (hostDependenciesChanged || spellProviderChanged) {
       _clearTransientState();
     }
@@ -680,6 +687,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _documentHost?.unregisterSelectionHost(widget.blockId, this);
     _controller.removeListener(_controllerChanged);
     widget.inputSession.removeListener(_inputSessionChanged);
+    _spellingDictionary(widget)?.removeListener(_spellingDictionaryChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
       widget.inputSession.blur();
     }
@@ -935,15 +943,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           fit: PaintLayerFit.line,
         ),
       for (final suggestion in _currentSpellingSuggestions)
-        PaintLayer(
-          range: DocRange(
-            DocOffset(suggestion.range.start),
-            DocOffset(suggestion.range.end),
+        // The word still being typed, caret at its end, waits until the
+        // writer moves on, as on macOS.
+        if (!(focused &&
+            localSelection.isCollapsed &&
+            localSelection.start == suggestion.range.end))
+          PaintLayer(
+            range: DocRange(
+              DocOffset(suggestion.range.start),
+              DocOffset(suggestion.range.end),
+            ),
+            band: PaintBand.overlay,
+            painter: _paintSpellingSquiggle,
+            spec: UnderlineSpec(spellingColor),
           ),
-          band: PaintBand.overlay,
-          painter: _paintSpellingSquiggle,
-          spec: UnderlineSpec(spellingColor),
-        ),
       if (focused && localComposing != null && !localComposing.isCollapsed)
         PaintLayer(
           range: DocRange(
@@ -2792,6 +2805,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           for (final item in _spellingMenuItems(witness))
             row(item, emphasized: true),
         ],
+        [
+          for (final item in _spellingDictionaryMenuItems(witness)) row(item),
+        ],
         [for (final item in _editingMenuItems(witness)) row(item)],
         [for (final item in _historyMenuItems(witness)) row(item)],
         [
@@ -2839,13 +2855,52 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     ];
   }
 
+  /// The misspelled words under the right click.
+  Iterable<_ResolvedSpellingSuggestion> get _misspelledUnderMenu =>
+      _currentSpellingSuggestions.where((suggestion) {
+        final word = _secondaryWordRange;
+        return word != null &&
+            suggestion.range.start <= word.start &&
+            suggestion.range.end >= word.end;
+      });
+
+  /// "No Guesses Found" for a misspelled word with none, then Learn
+  /// Spelling and Ignore Spelling when the checker keeps a dictionary. The
+  /// desktop menu only: the touch menus keep to the guesses.
+  List<ContextMenuButtonItem> _spellingDictionaryMenuItems(
+    _MenuWitness witness,
+  ) {
+    final misspelled = _misspelledUnderMenu.firstOrNull;
+    if (misspelled == null) return const <ContextMenuButtonItem>[];
+    final dictionary = switch (widget.spellCheckProvider) {
+      final HomericSpellingDictionary dictionary => dictionary,
+      _ => null,
+    };
+    void teach(Future<void> Function(String word) action) {
+      final isCurrent = _isMenuWitnessCurrent(witness);
+      _dismissContextMenu();
+      _focusNode.requestFocus();
+      if (isCurrent) action(misspelled.word);
+    }
+
+    return <ContextMenuButtonItem>[
+      if (misspelled.replacements.isEmpty)
+        const ContextMenuButtonItem(label: 'No Guesses Found', onPressed: null),
+      if (dictionary != null) ...[
+        ContextMenuButtonItem(
+          label: 'Learn Spelling',
+          onPressed: () => teach(dictionary.learnSpelling),
+        ),
+        ContextMenuButtonItem(
+          label: 'Ignore Spelling',
+          onPressed: () => teach(dictionary.ignoreSpelling),
+        ),
+      ],
+    ];
+  }
+
   Iterable<ContextMenuButtonItem> _spellingMenuItems(_MenuWitness witness) {
-    final spelling = _spellingSuggestions.where((suggestion) {
-      final word = _secondaryWordRange;
-      return word != null &&
-          suggestion.range.start <= word.start &&
-          suggestion.range.end >= word.end;
-    });
+    final spelling = _misspelledUnderMenu;
     return <ContextMenuButtonItem>[
       for (final suggestion in spelling)
         for (final replacement in suggestion.replacements)
@@ -3427,6 +3482,21 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             suggestion.contentRevision == _controller.contentRevision,
       );
 
+  static Listenable? _spellingDictionary(HomericEditableParagraph widget) =>
+      switch (widget.spellCheckProvider) {
+        final HomericSpellingDictionary dictionary =>
+          dictionary.spellingChanges,
+        _ => null,
+      };
+
+  /// A word was learned or ignored: check this paragraph again, keeping
+  /// today's squiggles until the answer comes.
+  void _spellingDictionaryChanged() {
+    if (!mounted || _disposing) return;
+    _spellRequestKey = null;
+    setState(() {});
+  }
+
   void _ensureSpellCheck(ParagraphSource<Object?> source, String docText) {
     final provider = widget.spellCheckProvider;
     if (provider == null ||
@@ -3444,7 +3514,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
     if (_spellRequestKey == key) return;
     _spellRequestKey = key;
-    _spellingSuggestions = const [];
+    // Squiggles for this very text stay up while it is checked again (a
+    // learned word); any other text drops them.
+    if (_spellingSuggestions.isNotEmpty &&
+        _spellingSuggestions.first.contentRevision != key.contentRevision) {
+      _spellingSuggestions = const [];
+    }
     final generation = ++_spellRequestGeneration;
     final epoch = _hostEpoch;
     late final Future<List<SuggestionSpan>> pending;
@@ -3468,16 +3543,21 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       }
       final resolved = <_ResolvedSpellingSuggestion>[];
       for (final suggestion in suggestions) {
+        // A word with no guesses is still misspelled: it keeps its
+        // squiggle, and the menu says there are no guesses.
         if (suggestion.range.start < 0 ||
             suggestion.range.end <= suggestion.range.start ||
-            suggestion.range.end > spelled.text.length ||
-            suggestion.suggestions.isEmpty) {
+            suggestion.range.end > spelled.text.length) {
           continue;
         }
         final start = spelled.toDoc(suggestion.range.start, assoc: -1);
         final end = spelled.toDoc(suggestion.range.end, assoc: 1);
         if (start >= end) continue;
         resolved.add(_ResolvedSpellingSuggestion(
+          word: spelled.text.substring(
+            suggestion.range.start,
+            suggestion.range.end,
+          ),
           range: BlockTextRange(start, end),
           replacements: List<String>.unmodifiable(suggestion.suggestions),
           contentRevision: key.contentRevision,
@@ -4280,11 +4360,14 @@ final class _SpellRequestKey {
 
 final class _ResolvedSpellingSuggestion {
   const _ResolvedSpellingSuggestion({
+    required this.word,
     required this.range,
     required this.replacements,
     required this.contentRevision,
   });
 
+  /// The word as spelling read it.
+  final String word;
   final BlockTextRange range;
   final List<String> replacements;
   final int contentRevision;

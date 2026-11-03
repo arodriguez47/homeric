@@ -40,6 +40,7 @@ export 'src/writing/note_marks.dart';
 export 'src/writing/quote_continuation.dart';
 export 'src/writing/sentences.dart';
 export 'src/writing/smart_punctuation.dart';
+export 'src/writing/system_corrections.dart';
 export 'src/writing/syntax_decorations.dart';
 export 'src/writing/tags.dart';
 export 'src/writing/typed_wraps.dart';

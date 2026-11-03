@@ -242,5 +242,34 @@ void main() {
       expect(HomericSystemCorrections.wordBefore('a -b', 4),
           (start: 3, word: 'b'));
     });
+
+    test('digits continue a token: no correction, no replacement', () async {
+      final controller = controllerFor('');
+      type(controller, 'teh2 omw3 ');
+      await corrections.answer();
+      expect(textOf(controller), 'teh2 omw3 ');
+      expect(corrections.asked, isEmpty);
+      final after = controllerFor('2');
+      type(after, 'teh ');
+      await corrections.answer();
+      expect(textOf(after), '2teh ');
+    });
+
+    test('a correction on its way is dropped once the feature stops', () async {
+      final document = Document([
+        Block(id: 'b', type: 'paragraph', runs: const <InlineRun>[]),
+      ]);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+      );
+      addTearDown(controller.dispose);
+      final stop = HomericSystemCorrections(corrections: corrections)
+          .installOn(controller);
+      type(controller, 'teh ');
+      stop();
+      await corrections.answer();
+      expect(textOf(controller), 'teh ');
+    });
   });
 }

@@ -61,14 +61,21 @@ final class HomericSystemCorrections extends HomericWritingFeature {
   @override
   VoidCallback installOn(HomericEditorController controller) {
     final session = sessionFor(controller);
-    return controller.addCommandInterceptor(session.intercept);
+    final stopIntercepting =
+        controller.addCommandInterceptor(session.intercept);
+    return () {
+      session.close();
+      stopIntercepting();
+    };
   }
 
   /// Whether [character] ends a word for correcting: whitespace or
-  /// punctuation, not an apostrophe or a hyphen inside a word.
+  /// punctuation, not a digit, an apostrophe or a hyphen inside a word.
   static bool endsWord(String character) {
     if (character.isEmpty) return false;
-    if (_wordChar.hasMatch(character)) return false;
+    if (_wordChar.hasMatch(character) || _digit.hasMatch(character)) {
+      return false;
+    }
     return !'\'’-_'.contains(character);
   }
 
@@ -125,13 +132,21 @@ final class HomericSystemCorrectionsSession {
   final HomericEditorController controller;
 
   _Replaced? _last;
+  bool _closed = false;
+
+  /// Stops the session: a correction still on its way is dropped. Hosts
+  /// that call [intercept] from their own chain call this when they stop.
+  void close() {
+    _closed = true;
+    _last = null;
+  }
 
   HomericTypingCorrections get _source => feature.corrections;
 
   /// Interceptor: applies a text replacement at once, and asks for a
   /// correction of the word just ended, applied when it comes.
   HomericCommandInterception intercept(HomericEditorCommand command) {
-    if (command.controller != controller) {
+    if (_closed || command.controller != controller) {
       return HomericCommandInterception.ignored;
     }
     final last = _last;
@@ -366,7 +381,9 @@ final class HomericSystemCorrectionsSession {
     if (found == null || found.word.length < 2) return null;
     final start = found.start;
     final end = at.offset;
-    if (HomericSystemCorrections._digit.hasMatch(found.word) ||
+    // Part of a token with digits (`123abc`).
+    if ((start > 0 &&
+            HomericSystemCorrections._digit.hasMatch(text[start - 1])) ||
         _isLiteral(block, start, end)) {
       return null;
     }
@@ -388,7 +405,8 @@ final class HomericSystemCorrectionsSession {
     String corrected,
     String typed,
   ) {
-    if (feature.isActive?.call() == false ||
+    if (_closed ||
+        feature.isActive?.call() == false ||
         !_source.correctsSpellingAutomatically ||
         controller.composing != null) {
       return;

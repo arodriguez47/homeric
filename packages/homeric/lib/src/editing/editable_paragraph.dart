@@ -2023,7 +2023,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     );
     _syncTouchSelectionChrome(kind);
     // A tap on a misspelled word offers its replacements.
-    if (_spellingSuggestionAt(pending.position) != null) _showContextMenu();
+    // A touch menu has nothing to offer for a word with no guesses; the
+    // desktop menu still has Learn and Ignore.
+    final spelling = _spellingSuggestionAt(pending.position);
+    if (spelling != null &&
+        (_usesDesktopMenu || spelling.replacements.isNotEmpty)) {
+      _showContextMenu();
+    }
   }
 
   void _doubleTapDown(

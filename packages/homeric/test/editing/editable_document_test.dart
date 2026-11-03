@@ -3559,6 +3559,34 @@ void main() {
     );
   });
 
+  testWidgets('a move handler can tell a grabber drop from a one-line step',
+      (tester) async {
+    final document = _document(<String>['alpha', 'beta', 'gamma']);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 1)),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    final key = GlobalKey<HomericEditableDocumentState>();
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    final steps = <bool>[];
+    await tester.pumpWidget(_editableDocument(
+      controller,
+      session,
+      key: key,
+      onMoveBlock: (context) {
+        steps.add(context.isStep);
+        return HomericDocumentCommandResult.handled;
+      },
+    ));
+    await tester.pump();
+    key.currentState!.moveBlockBy('block-0', 1);
+    await tester.drag(find.text('⋮').at(0), const Offset(0, 80));
+    await tester.pumpAndSettle();
+    expect(steps, <bool>[true, false]);
+  });
+
   testWidgets('reorder handler cannot mutate the controller before returning',
       (tester) async {
     final document = _document(<String>['alpha', 'beta']);

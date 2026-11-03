@@ -50,7 +50,17 @@ abstract final class HomericBlockFamily {
         0;
   }
 
-  static bool _blank(Block block) => block.text.trim().isEmpty;
+  /// An empty text line, skipped inside a family. A block of another
+  /// type, or one [accepts] excludes, is never blank: an empty rule or
+  /// image ends the family even though it has no text.
+  static bool _blank(
+    Block block,
+    Set<String> types,
+    HomericIndentFilter? accepts,
+  ) =>
+      types.contains(block.type) &&
+      (accepts == null || accepts(block)) &&
+      block.text.trim().isEmpty;
 
   /// One past the last line of the family that starts at [index]: [index]
   /// + 1 when the line has nothing under it.
@@ -67,7 +77,7 @@ abstract final class HomericBlockFamily {
     var probe = index + 1;
     while (probe < blocks.length) {
       final block = blocks[probe];
-      if (_blank(block)) {
+      if (_blank(block, types, accepts)) {
         probe++;
         continue;
       }
@@ -127,7 +137,7 @@ abstract final class HomericBlockFamily {
       if (index == 0) return null;
       var above = index - 1;
       while (above > 0 &&
-          (_blank(blocks[above]) ||
+          (_blank(blocks[above], types, accepts) ||
               startOf(blocks[above], types: types, accepts: accepts) > start)) {
         above--;
       }
@@ -135,7 +145,7 @@ abstract final class HomericBlockFamily {
     }
     if (end >= blocks.length) return null;
     var next = end;
-    while (next < blocks.length - 1 && _blank(blocks[next])) {
+    while (next < blocks.length - 1 && _blank(blocks[next], types, accepts)) {
       next++;
     }
     final nextEnd = endOf(document, next, types: types, accepts: accepts);
@@ -170,9 +180,9 @@ abstract final class HomericBlockFamily {
 
   /// A family's move for `HomericEditableDocument(onMoveBlock:)`: a line
   /// with nothing under it is left to Homeric's own move; a family moves
-  /// whole, by [step] for a one-line request (⌘⇧↑/↓, which can't tell a
-  /// family from a line) and by [toIndex] for a drag. With ⌥ held the line
-  /// moves alone.
+  /// whole, by [step] for a one-line request (⌘⇧↑/↓,
+  /// [HomericBlockMoveContext.isStep]) and by [toIndex] for a drop, which
+  /// keeps the place it was dropped. With ⌥ held the line moves alone.
   static HomericDocumentCommandResult onMoveBlock(
     HomericBlockMoveContext context, {
     Set<String> types = HomericBlockIndent.defaultTypes,
@@ -189,8 +199,9 @@ abstract final class HomericBlockFamily {
     }
     final index = document.indexOfBlockId(context.blockId)!;
     final delta = context.targetIndex - index;
-    final transaction = delta.abs() == 1
-        ? step(document, context.blockId, delta, types: types, accepts: accepts)
+    final transaction = context.isStep
+        ? step(document, context.blockId, delta.sign,
+            types: types, accepts: accepts)
         : toIndex(
             document,
             context.blockId,

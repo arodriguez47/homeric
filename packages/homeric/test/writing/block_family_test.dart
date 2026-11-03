@@ -48,6 +48,15 @@ void main() {
       expect(HomericBlockFamily.idsOf(doc, 'l0'), ['l0', 'l1', 'l2']);
     });
 
+    test('an empty block of another type ends the family', () {
+      final doc = Document([
+        Block(id: 'p', type: 'paragraph', runs: [InlineRun('Parent')]),
+        Block(id: 'r', type: 'rule'),
+        Block(id: 'c', type: 'paragraph', runs: [InlineRun('  child')]),
+      ]);
+      expect(HomericBlockFamily.idsOf(doc, 'p'), ['p']);
+    });
+
     test('headings and quotes start at the margin', () {
       final doc = _doc(['## Title', '  indented', '> quote', '  under']);
       expect(HomericBlockFamily.idsOf(doc, 'l0'), ['l0', 'l1']);

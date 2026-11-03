@@ -307,6 +307,7 @@ final class HomericBlockMoveContext {
     required this.documentRevision,
     required this.blockId,
     required this.targetIndex,
+    required this.isStep,
     required bool Function() isCurrent,
   }) : _isCurrent = isCurrent;
 
@@ -317,6 +318,11 @@ final class HomericBlockMoveContext {
   final int documentRevision;
   final String blockId;
   final int targetIndex;
+
+  /// Whether this is a one-line step (⌘⇧↑/↓, `moveBlockBy`) rather than a
+  /// drop at [targetIndex] (the grabber): a host that moves groups steps
+  /// past a neighbour, but honours a drop's place.
+  final bool isStep;
   final bool Function() _isCurrent;
 
   /// Whether the originating reorder capability still owns current state.
@@ -2315,6 +2321,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     return _moveBlock(
       _captureMoveWitness(sourceIndex),
       targetIndex,
+      isStep: true,
     );
   }
 
@@ -2884,7 +2891,11 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     _moveBlock(witness, targetIndex);
   }
 
-  bool _moveBlock(_BlockMoveWitness witness, int targetIndex) {
+  bool _moveBlock(
+    _BlockMoveWitness witness,
+    int targetIndex, {
+    bool isStep = false,
+  }) {
     if (!canReorderBlock(witness.blockId)) return false;
     final anchor = _captureViewportAnchor(witness.blockId);
     final request = BlockMoveRequest(
@@ -2913,6 +2924,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
         documentRevision: witness.documentRevision,
         blockId: witness.blockId,
         targetIndex: targetIndex,
+        isStep: isStep,
         isCurrent: isCurrent,
       ));
       if (widget.controller.stateRevision != stateRevision) {

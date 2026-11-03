@@ -203,6 +203,20 @@ final class HomericEditableBlockGeometry {
 /// This widget additionally reveals replace decorations touched by the active
 /// selection or composing range for its own layout, paint, and semantics.
 class HomericEditableParagraph extends StatefulWidget {
+  /// Whether [node] is in a selection menu a paragraph has open (a Mac's
+  /// right-click menu takes focus for its keys). A host that ends writing
+  /// when focus leaves its editor can keep writing under the menu: focus
+  /// comes back to the paragraph when the menu closes.
+  static bool isSelectionMenuFocus(FocusNode? node) {
+    if (node == null) return false;
+    for (final scope in _HomericContextMenuFocusScopeState.open) {
+      if (identical(node, scope) || node.ancestors.contains(scope)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Creates one editable paragraph for [blockId].
   const HomericEditableParagraph({
     super.key,
@@ -4120,9 +4134,13 @@ class _HomericContextMenuFocusScopeState
     debugLabel: 'Homeric context menu',
   );
 
+  /// The menus open now, for [HomericEditableParagraph.isSelectionMenuFocus].
+  static final Set<FocusScopeNode> open = <FocusScopeNode>{};
+
   @override
   void initState() {
     super.initState();
+    open.add(_scope);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (!widget.canFocus()) {
@@ -4135,6 +4153,7 @@ class _HomericContextMenuFocusScopeState
 
   @override
   void dispose() {
+    open.remove(_scope);
     _scope.dispose();
     super.dispose();
   }

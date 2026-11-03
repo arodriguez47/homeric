@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/material.dart'
     show AdaptiveTextSelectionToolbar, MaterialApp, Scaffold;
 import 'package:flutter/widgets.dart' hide Decoration;
@@ -776,6 +777,23 @@ void main() {
         await tester.pump();
         expect(_selectionMenu, findsOneWidget);
         expect(_menuLabels(tester).last, 'Make a card');
+        // The menu holds focus for its keys, and says so.
+        await tester.pump();
+        expect(
+          HomericEditableParagraph.isSelectionMenuFocus(
+            FocusManager.instance.primaryFocus,
+          ),
+          isTrue,
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(_selectionMenu, findsNothing);
+        expect(
+          HomericEditableParagraph.isSelectionMenuFocus(
+            FocusManager.instance.primaryFocus,
+          ),
+          isFalse,
+        );
         await tester.pumpWidget(const SizedBox.shrink());
       } finally {
         debugDefaultTargetPlatformOverride = null;

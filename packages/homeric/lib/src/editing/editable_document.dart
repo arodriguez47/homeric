@@ -1013,6 +1013,12 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
   Document? _heightOrderDocument;
   Object? _globalLayoutSignature;
   _BlockMoveWitness? _dragMoveWitness;
+  final ValueNotifier<String?> _reorderingBlockId =
+      ValueNotifier<String?>(null);
+
+  /// The block a grabber drag is carrying, from the grab to the drop; null
+  /// otherwise. A host listens to show what travels with it.
+  ValueListenable<String?> get reorderingBlockId => _reorderingBlockId;
   int _selectionDragGeneration = 0;
   int? _selectionDragAnchor;
   ({int start, int end})? _selectionDragWordAnchor;
@@ -2859,9 +2865,13 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
     if (index < 0 || index >= widget.controller.document.blockCount) return;
     final witness = _captureMoveWitness(index);
     _dragMoveWitness = canReorderBlock(witness.blockId) ? witness : null;
+    _reorderingBlockId.value = _dragMoveWitness?.blockId;
   }
 
-  void _reorderEnded(int _) => _dragMoveWitness = null;
+  void _reorderEnded(int _) {
+    _dragMoveWitness = null;
+    _reorderingBlockId.value = null;
+  }
 
   void _reorder(int oldIndex, int newIndex) {
     if (oldIndex < 0 || oldIndex >= widget.controller.document.blockCount) {
@@ -3095,6 +3105,7 @@ class HomericEditableDocumentState extends State<HomericEditableDocument>
 
   @override
   void dispose() {
+    _reorderingBlockId.dispose();
     _stopSelectionAutoscroll();
     _cancelTypewriterScrollIdleWait();
     _touchOverlayCoordinator.dispose();

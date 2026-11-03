@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
 import 'package:homeric/writing.dart';
@@ -170,5 +171,53 @@ void main() {
           reason: 'a line with nothing under it moves one line');
       expect(_text(controller.document)[7], '- Beautiful typography');
     });
+
+    testWidgets('with ⌥ held the line moves alone', (tester) async {
+      final document = _doc(_outline);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection.collapsed(document.positionAt(1, 3)),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(controller.dispose);
+      final key = GlobalKey<HomericEditableDocumentState>();
+      await tester.pumpWidget(_editor(controller, session, key: key));
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      expect(key.currentState!.moveBlockBy('l1', 1), isTrue);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      expect(_text(controller.document).sublist(1, 3),
+          ['  - I want short content', '- A form of constraint']);
+    });
   });
 }
+
+Widget _editor(
+  HomericEditorController controller,
+  HomericTextInputSession session, {
+  Key? key,
+}) =>
+    MaterialApp(
+      home: Material(
+        child: SizedBox(
+          width: 500,
+          height: 600,
+          child: HomericEditableDocument.builder(
+            key: key,
+            controller: controller,
+            inputSession: session,
+            onMoveBlock: HomericBlockFamily.onMoveBlock,
+            estimatedBlockHeight: 44,
+            blockBuilder: (context, block, focusNode) =>
+                HomericEditableParagraph(
+              controller: controller,
+              inputSession: session,
+              blockId: block.id,
+              focusNode: focusNode,
+              resolveStyle: (_) => const TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+      ),
+    );

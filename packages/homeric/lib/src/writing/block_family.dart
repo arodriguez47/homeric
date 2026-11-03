@@ -13,6 +13,8 @@
 /// with it; blank lines after its last child stay.
 library;
 
+import 'package:flutter/services.dart' show HardwareKeyboard;
+
 import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
 import '../editing/markdown_list_indent.dart';
@@ -169,13 +171,18 @@ abstract final class HomericBlockFamily {
   /// A family's move for `HomericEditableDocument(onMoveBlock:)`: a line
   /// with nothing under it is left to Homeric's own move; a family moves
   /// whole, by [step] for a one-line request (⌘⇧↑/↓, which can't tell a
-  /// family from a line) and by [toIndex] for a drag.
+  /// family from a line) and by [toIndex] for a drag. With ⌥ held the line
+  /// moves alone.
   static HomericDocumentCommandResult onMoveBlock(
     HomericBlockMoveContext context, {
     Set<String> types = HomericBlockIndent.defaultTypes,
     HomericIndentFilter? accepts,
   }) {
     final document = context.document;
+    // ⌥ held (⌥⌘⇧↑/↓, or a drag dropped with ⌥): this line alone.
+    if (HardwareKeyboard.instance.isAltPressed) {
+      return HomericDocumentCommandResult.ignored;
+    }
     if (!hasChildren(document, context.blockId,
         types: types, accepts: accepts)) {
       return HomericDocumentCommandResult.ignored;

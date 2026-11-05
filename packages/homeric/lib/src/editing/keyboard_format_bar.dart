@@ -698,7 +698,7 @@ class _StylesKey extends StatelessWidget {
             alignment: Alignment.center,
             children: <Widget>[
               CustomPaint(
-                size: const Size(22, 16),
+                size: const Size(19, 14),
                 painter: _AaPainter(palette.ink),
               ),
               if (marked)
@@ -730,10 +730,12 @@ class _AaPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Drawn on a 22 × 16 grid, scaled to [size].
+    canvas.scale(size.width / 22, size.height / 16);
     final pen = Paint()
       ..color = ink
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = 2
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final capital = Path()
@@ -805,7 +807,9 @@ class _Tip extends StatelessWidget {
           child: Text(
             text,
             maxLines: 1,
-            style: TextStyle(color: palette.onTip, fontSize: 13, height: 1.2),
+            // The app's own face, as its other small text.
+            style: (Theme.of(context).textTheme.bodySmall ?? const TextStyle())
+                .copyWith(color: palette.onTip, fontSize: 13, height: 1.2),
           ),
         ),
       );

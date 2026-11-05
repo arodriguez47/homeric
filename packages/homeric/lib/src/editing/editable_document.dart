@@ -514,6 +514,7 @@ final class HomericFormatAction {
     this.isActive = false,
     this.startsGroup = false,
     this.actsOnBlock = false,
+    this.isStyle = false,
     this.onPressed,
   });
 
@@ -549,6 +550,11 @@ final class HomericFormatAction {
   /// as they are, without first selecting the word at the caret.
   final bool actsOnBlock;
 
+  /// Whether it styles the words (Bold, Highlight, a quote) rather than
+  /// attaching something to them or moving the line: a phone's keyboard
+  /// bar keeps such buttons behind its Aa key, to make room.
+  final bool isStyle;
+
   /// Runs once the menu has closed; null shows the button disabled.
   final VoidCallback? onPressed;
 
@@ -563,6 +569,7 @@ final class HomericFormatAction {
     bool? isActive,
     bool? startsGroup,
     bool? actsOnBlock,
+    bool? isStyle,
     VoidCallback? onPressed,
   }) =>
       HomericFormatAction(
@@ -575,6 +582,7 @@ final class HomericFormatAction {
         isActive: isActive ?? this.isActive,
         startsGroup: startsGroup ?? this.startsGroup,
         actsOnBlock: actsOnBlock ?? this.actsOnBlock,
+        isStyle: isStyle ?? this.isStyle,
         onPressed: onPressed ?? this.onPressed,
       );
 }

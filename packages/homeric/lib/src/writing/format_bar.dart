@@ -13,15 +13,22 @@ import 'package:flutter/widgets.dart';
 import '../editing/context_menu.dart' show homericMenuShortcut;
 import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
+import '../model/document.dart';
+import '../model/position.dart';
 import '../model/selection.dart';
+import '../transform/builders.dart';
+import '../transform/transaction.dart';
 import 'block_indent.dart';
+import 'note_marks.dart';
+import 'syntax_decorations.dart';
 import 'typed_wraps.dart';
 import 'wrap_shortcuts.dart';
 
 /// The standard format bar buttons.
 abstract final class HomericFormatBar {
-  /// Bold, Italic, Strikethrough, Highlight, Aside and Code, then Link,
-  /// Note and Footnote, for [selection] in [controller].
+  /// Bold, Italic, Strikethrough, Highlight, Aside (and with [quote],
+  /// Quote), then Code (and with [comment], Comment out), then Link, Note
+  /// and Footnote, for [selection] in [controller].
   ///
   /// Link and Note need [wraps] (they do what typing `[[` and `{{` over the
   /// words does, so the host's own link menu or note composer follows);
@@ -38,6 +45,8 @@ abstract final class HomericFormatBar {
     bool highlight = true,
     bool aside = true,
     bool code = true,
+    bool quote = false,
+    bool comment = false,
     bool link = true,
     bool note = true,
     VoidCallback? onFootnote,
@@ -56,7 +65,15 @@ abstract final class HomericFormatBar {
       HomericFormatBar.strikethrough(controller, selection),
       if (highlight) HomericFormatBar.highlight(controller, selection),
       if (aside) HomericFormatBar.aside(controller, selection),
-      if (code) HomericFormatBar.code(controller, selection),
+      if (quote) HomericFormatBar.quote(controller, selection),
+      // Code and Comment out are the quieter tools: a group of their own,
+      // last of the styles.
+      if (code)
+        HomericFormatBar.code(controller, selection)
+            .copyWith(startsGroup: quote || comment),
+      if (comment)
+        HomericFormatBar.comment(controller, selection)
+            .copyWith(startsGroup: !code),
       ...<HomericFormatAction?>[
         if (link)
           typed(
@@ -205,6 +222,7 @@ abstract final class HomericFormatBar {
         selection,
         marker: '==',
         icon: Icons.border_color_outlined,
+        glyph: const HomericHighlightGlyph(),
         label: 'Highlight',
         description: 'Marks the words as a pen would, to find them again.',
       );
@@ -219,6 +237,7 @@ abstract final class HomericFormatBar {
         selection,
         marker: '++',
         icon: Icons.short_text_rounded,
+        glyph: const HomericAsideGlyph(),
         label: 'Aside',
         description: 'Quiets the words into a second voice, said under '
             'your breath.',
@@ -275,6 +294,161 @@ abstract final class HomericFormatBar {
         syntax: '{{words|note}}',
       );
 
+  /// `> `: the line becomes a quote, or stops being one.
+  static HomericFormatAction quote(
+    HomericEditorController controller,
+    HomericSelection selection,
+  ) =>
+      linePrefix(
+        controller,
+        selection,
+        marker: '> ',
+        pattern: HomericSyntax.quoteLine,
+        icon: Icons.format_quote_rounded,
+        glyph: const HomericQuoteGlyph(),
+        label: 'Quote',
+        description: "Sets the line apart as someone else's words.",
+      );
+
+  /// `%% `: the line becomes a note to self, hidden when read, or comes
+  /// back.
+  static HomericFormatAction comment(
+    HomericEditorController controller,
+    HomericSelection selection,
+  ) =>
+      linePrefix(
+        controller,
+        selection,
+        marker: '%% ',
+        pattern: HomericNoteMarks.commentLine,
+        icon: Icons.percent_rounded,
+        label: 'Comment out',
+        description: 'Turns the line into a note to self, kept out of the '
+            'text when it is read.',
+      );
+
+  /// A button putting [marker] at the start of each line the selection
+  /// touches, in paragraphs only, as typing it there does; pressed when
+  /// every such line already starts with [pattern], and then it takes the
+  /// markers off. It acts on whole lines, so it works with only a caret.
+  static HomericFormatAction linePrefix(
+    HomericEditorController controller,
+    HomericSelection selection, {
+    required String marker,
+    required RegExp pattern,
+    required IconData icon,
+    Widget? glyph,
+    required String label,
+    String? description,
+    bool startsGroup = false,
+  }) {
+    final lines = _prefixLines(controller.document, selection);
+    final active =
+        lines.isNotEmpty && lines.every((l) => pattern.hasMatch(l.text));
+    return HomericFormatAction(
+      icon: icon,
+      glyph: glyph,
+      label: label,
+      description: description,
+      syntax: '${marker}line',
+      startsGroup: startsGroup,
+      isStyle: true,
+      actsOnBlock: true,
+      isActive: active,
+      onPressed: lines.isEmpty
+          ? null
+          : () => _togglePrefix(
+                controller,
+                controller.selection ?? selection,
+                marker,
+                pattern,
+              ),
+    );
+  }
+
+  static bool _togglePrefix(
+    HomericEditorController controller,
+    HomericSelection selection,
+    String marker,
+    RegExp pattern,
+  ) {
+    final document = controller.document;
+    final lines = _prefixLines(document, selection);
+    if (lines.isEmpty) return false;
+    final remove = lines.every((l) => pattern.hasMatch(l.text));
+    try {
+      final tx = Transaction(document);
+      // Last line first, so the offsets still to come stay where they were.
+      for (final line in lines.reversed) {
+        final at = tx.doc.positionAt(line.block, line.start);
+        if (remove) {
+          final m = pattern.firstMatch(line.text)!;
+          tx.deleteRange(at, tx.doc.positionAt(line.block, line.start + m.end));
+        } else if (!pattern.hasMatch(line.text)) {
+          tx.insertText(at, marker);
+        }
+      }
+      var after = selection.map(tx.mapping);
+      // A caret at the start of the line goes after the new marker, where
+      // the words begin.
+      if (!remove && after.isCollapsed) {
+        final caret = tx.doc.resolve(after.head);
+        if (caret is InlinePosition) {
+          final text = caret.block.text;
+          final lineStart = caret.offset == 0
+              ? 0
+              : text.lastIndexOf('\n', caret.offset - 1) + 1;
+          final m = pattern.firstMatch(text.substring(lineStart));
+          if (m != null && caret.offset < lineStart + m.end) {
+            after = HomericSelection.collapsed(
+                after.head + lineStart + m.end - caret.offset);
+          }
+        }
+      }
+      return controller.applyPreparedCommand(HomericPreparedCommand(
+        stages: <Transaction>[tx],
+        selection: after,
+      ));
+    } on ArgumentError {
+      return false;
+    }
+  }
+
+  /// The lines of paragraphs that [selection] touches: block index, the
+  /// line's offset in its block and its text.
+  static List<({int block, int start, String text})> _prefixLines(
+    Document document,
+    HomericSelection selection,
+  ) {
+    final from = document.resolve(selection.start);
+    final to = document.resolve(selection.end);
+    if (from is! InlinePosition || to is! InlinePosition) return const [];
+    final first = document.indexOfBlockId(from.block.id);
+    final last = document.indexOfBlockId(to.block.id);
+    if (first == null || last == null) return const [];
+    final lines = <({int block, int start, String text})>[];
+    for (var index = first; index <= last; index++) {
+      final block = document.blocks[index];
+      if (block.type != 'paragraph') continue;
+      final text = block.text;
+      final lo = index == first ? from.offset : 0;
+      final hi = index == last ? to.offset : text.length;
+      var start = 0;
+      for (final line in text.split('\n')) {
+        final end = start + line.length;
+        // A selection ending at the very start of a line leaves that line
+        // be, as the indent buttons do; a line it runs on past, empty or
+        // not, is in.
+        final endsAtItsStart =
+            index == last && start == hi && (index != first || lo < hi);
+        final touched = !endsAtItsStart && start <= hi && end >= lo;
+        if (touched) lines.add((block: index, start: start, text: line));
+        start = end + 1;
+      }
+    }
+    return lines;
+  }
+
   /// A button wrapping the selection in [marker], as
   /// [HomericWrapShortcuts.prepareWrap] does; pressed when it already is.
   static HomericFormatAction wrap(
@@ -282,6 +456,7 @@ abstract final class HomericFormatBar {
     HomericSelection selection, {
     required String marker,
     required IconData icon,
+    Widget? glyph,
     required String label,
     String? description,
     String? syntax,
@@ -295,11 +470,13 @@ abstract final class HomericFormatBar {
     );
     return HomericFormatAction(
       icon: icon,
+      glyph: glyph,
       label: label,
       description: description,
       syntax: syntax ?? '${marker}words${marker.split('').reversed.join()}',
       shortcut: shortcut,
       startsGroup: startsGroup,
+      isStyle: true,
       isActive: HomericWrapShortcuts.isWrapped(
         controller.document,
         selection,
@@ -442,4 +619,184 @@ class _FootnoteGlyphPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_FootnoteGlyphPainter old) => old.ink != ink;
+}
+
+/// The Highlight button's mark: the pen, with the stroke it leaves drawn in
+/// the highlighter's yellow, so it reads as "highlight", not "edit".
+///
+/// Sized and inked by the surrounding [IconTheme], like an [Icon]; the
+/// yellow fades with the ink when the button is disabled.
+class HomericHighlightGlyph extends StatelessWidget {
+  /// Creates the mark, [size] square, its pen in [color] (else the
+  /// [IconTheme]'s).
+  const HomericHighlightGlyph({super.key, this.size, this.color});
+
+  /// Its width and height; the [IconTheme]'s size when null.
+  final double? size;
+
+  /// The pen's ink; the [IconTheme]'s colour when null.
+  final Color? color;
+
+  /// The stroke's yellow.
+  static const Color yellow = Color(0xFFF2C94C);
+
+  @override
+  Widget build(BuildContext context) => _glyph(
+        context,
+        size,
+        color,
+        (ink) => _HighlightGlyphPainter(ink),
+        // The pen sits above the stroke it leaves.
+        under: (side, ink) => Align(
+          alignment: const Alignment(0, -1),
+          child: Icon(Icons.edit_outlined, size: side * 0.8, color: ink),
+        ),
+      );
+}
+
+/// The Aside button's mark: a small letter in parentheses, `(a)`, words
+/// said in passing.
+class HomericAsideGlyph extends StatelessWidget {
+  /// Creates the mark, [size] square in [color] (else the [IconTheme]'s).
+  const HomericAsideGlyph({super.key, this.size, this.color});
+
+  /// Its width and height; the [IconTheme]'s size when null.
+  final double? size;
+
+  /// Its ink; the [IconTheme]'s colour when null.
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) =>
+      _glyph(context, size, color, (ink) => _AsideGlyphPainter(ink));
+}
+
+/// The Quote button's mark: a letter behind a quote's rule, `|a`, as a
+/// quote sits in the text.
+class HomericQuoteGlyph extends StatelessWidget {
+  /// Creates the mark, [size] square in [color] (else the [IconTheme]'s).
+  const HomericQuoteGlyph({super.key, this.size, this.color});
+
+  /// Its width and height; the [IconTheme]'s size when null.
+  final double? size;
+
+  /// Its ink; the [IconTheme]'s colour when null.
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) =>
+      _glyph(context, size, color, (ink) => _QuoteGlyphPainter(ink));
+}
+
+/// A drawn mark [size] square (else the [IconTheme]'s), inked [color] (else
+/// the [IconTheme]'s), centred as an [Icon] is; [under] draws an icon
+/// beneath the painted strokes.
+Widget _glyph(
+  BuildContext context,
+  double? size,
+  Color? color,
+  CustomPainter Function(Color ink) painter, {
+  Widget Function(double side, Color ink)? under,
+}) {
+  final theme = IconTheme.of(context);
+  final side = size ?? theme.size ?? 24;
+  final base = color ?? theme.color ?? const Color(0xFF000000);
+  final ink = base.withValues(alpha: base.a * (theme.opacity ?? 1));
+  return Semantics(
+    excludeSemantics: true,
+    child: Center(
+      widthFactor: 1,
+      heightFactor: 1,
+      child: SizedBox.square(
+        dimension: side,
+        child: CustomPaint(
+          foregroundPainter: painter(ink),
+          child: under?.call(side, ink),
+        ),
+      ),
+    ),
+  );
+}
+
+Paint _pen(Color ink, [double width = 2.1]) => Paint()
+  ..color = ink
+  ..style = PaintingStyle.stroke
+  ..strokeWidth = width
+  ..strokeCap = StrokeCap.round
+  ..strokeJoin = StrokeJoin.round;
+
+class _HighlightGlyphPainter extends CustomPainter {
+  _HighlightGlyphPainter(this.ink);
+
+  final Color ink;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    // Toolbars ink their icons at about half; the yellow keeps full
+    // strength there and fades only as a disabled button's ink does.
+    final strength = (ink.a * 2).clamp(0.0, 1.0);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(3, 20, 21, 23.4),
+        const Radius.circular(1.7),
+      ),
+      Paint()
+        ..color =
+            HomericHighlightGlyph.yellow.withValues(alpha: 0.95 * strength),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_HighlightGlyphPainter old) => old.ink != ink;
+}
+
+class _AsideGlyphPainter extends CustomPainter {
+  _AsideGlyphPainter(this.ink);
+
+  final Color ink;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final parens = Path()
+      ..moveTo(7, 4.5)
+      ..quadraticBezierTo(2.6, 12, 7, 19.5)
+      ..moveTo(17, 4.5)
+      ..quadraticBezierTo(21.4, 12, 17, 19.5);
+    final a = Path()
+      ..addOval(Rect.fromCircle(center: const Offset(11.1, 13.6), radius: 3.1))
+      ..moveTo(14.2, 10.5)
+      ..lineTo(14.2, 16.7);
+    canvas
+      ..drawPath(parens, _pen(ink, 1.9))
+      ..drawPath(a, _pen(ink, 1.9));
+  }
+
+  @override
+  bool shouldRepaint(_AsideGlyphPainter old) => old.ink != ink;
+}
+
+class _QuoteGlyphPainter extends CustomPainter {
+  _QuoteGlyphPainter(this.ink);
+
+  final Color ink;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final rule = Path()
+      ..moveTo(4.6, 4.6)
+      ..lineTo(4.6, 19.4);
+    final a = Path()
+      ..addOval(Rect.fromCircle(center: const Offset(13.2, 14.6), radius: 4.7))
+      ..moveTo(17.9, 9.9)
+      ..lineTo(17.9, 19.3);
+    canvas
+      ..drawPath(rule, _pen(ink, 2.6))
+      ..drawPath(a, _pen(ink));
+  }
+
+  @override
+  bool shouldRepaint(_QuoteGlyphPainter old) => old.ink != ink;
 }

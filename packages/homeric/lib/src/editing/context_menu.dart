@@ -370,9 +370,13 @@ class _FormatBar extends StatelessWidget {
     }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
-      child: Row(
+      // One line as wide as its buttons; in a window too narrow for them
+      // all, the rest go on to a second line rather than off the menu.
+      child: Wrap(
         key: const ValueKey<String>('homeric-format-bar'),
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        runSpacing: 2,
         children: children,
       ),
     );

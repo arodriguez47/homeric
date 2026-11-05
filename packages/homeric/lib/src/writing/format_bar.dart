@@ -437,10 +437,11 @@ abstract final class HomericFormatBar {
       for (final line in text.split('\n')) {
         final end = start + line.length;
         // A selection ending at the very start of a line leaves that line
-        // be, as the indent buttons do.
-        final touched = selection.isCollapsed
-            ? lo >= start && lo <= end
-            : start < hi && end >= lo && !(start == hi && hi > lo);
+        // be, as the indent buttons do; a line it runs on past, empty or
+        // not, is in.
+        final endsAtItsStart =
+            index == last && start == hi && (index != first || lo < hi);
+        final touched = !endsAtItsStart && start <= hi && end >= lo;
         if (touched) lines.add((block: index, start: start, text: line));
         start = end + 1;
       }

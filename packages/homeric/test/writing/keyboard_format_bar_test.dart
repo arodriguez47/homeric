@@ -366,6 +366,28 @@ void main() {
     await _unmount(tester);
   });
 
+  test(
+      'Quote over a selection quotes every line it runs through, empty '
+      'ones too, and not the line it ends at the start of', () {
+    final controller = HomericEditorController(
+      document: Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('one\n')]),
+        Block(id: 'b', type: 'paragraph', runs: [InlineRun('')]),
+        Block(id: 'c', type: 'paragraph', runs: [InlineRun('two')]),
+        Block(id: 'd', type: 'paragraph', runs: [InlineRun('three')]),
+      ]),
+    );
+    addTearDown(controller.dispose);
+    final doc = controller.document;
+    final selection = HomericSelection(
+        anchor: doc.positionAt(0, 1), head: doc.positionAt(3, 0));
+    HomericFormatBar.quote(controller, selection).onPressed!();
+    expect(controller.document.blocks.map((b) => b.text).toList(),
+        ['> one\n> ', '> ', '> two', 'three']);
+    expect(
+        HomericSyntax.isQuote(controller.document.blocks.first.text), isTrue);
+  });
+
   testWidgets('a key held names itself and does nothing', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final harness = await _pump(tester, 'one two', lines: true);

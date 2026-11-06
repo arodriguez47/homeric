@@ -160,6 +160,56 @@ void main() {
       await tester.pump();
       expect(textOf(controller), 'a **word** here');
     });
+
+    testWidgets(
+        '⌘B at a bare caret starts bold there, and ⌘B again steps out, '
+        'on a controller the shortcuts are installed on', (tester) async {
+      final controller = controllerFor('a  here');
+      final session = HomericTextInputSession(controller: controller);
+      addTearDown(session.dispose);
+      addTearDown(const HomericWrapShortcuts().installOn(controller));
+      await tester.pumpWidget(MaterialApp(
+        home: Material(
+          child: SizedBox(
+            width: 500,
+            height: 300,
+            child: HomericEditableDocument.builder(
+              controller: controller,
+              inputSession: session,
+              commandBindings: HomericWritingKit.standard().commandBindings,
+              estimatedBlockHeight: 44,
+              blockBuilder: (context, block, focusNode) =>
+                  HomericEditableParagraph(
+                controller: controller,
+                inputSession: session,
+                blockId: block.id,
+                focusNode: focusNode,
+                resolveStyle: (_) => const TextStyle(fontSize: 16),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('homeric-editable-b')));
+      await tester.pump();
+      controller.setSelection(
+          HomericSelection.collapsed(controller.document.positionAt(0, 2)));
+      await tester.pump();
+      Future<void> commandB() async {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+      }
+
+      await commandB();
+      expect(textOf(controller), 'a **** here');
+      controller.replaceSelection('bold');
+      await commandB();
+      expect(textOf(controller), 'a **bold** here');
+      expect(controller.selection!.head, controller.document.positionAt(0, 10));
+    });
   });
 
   group('typography', () {

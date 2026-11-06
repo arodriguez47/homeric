@@ -157,19 +157,211 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('with a caret in a space the wraps are disabled', (tester) async {
+  testWidgets(
+      'with a caret in a space, Bold opens a pair round it, the words '
+      'typed go in, and Bold again steps out', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final harness = await _pump(tester, 'one  two');
-    final document = harness.controller.document;
-    harness.controller
-        .setSelection(HomericSelection.collapsed(document.positionAt(0, 4)));
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
     await tester.pump();
     await _openStyles(tester);
 
-    expect(_enabled(tester, 'Bold'), isFalse);
+    expect(_enabled(tester, 'Bold'), isTrue);
     await tester.tap(_button('Bold'));
     await tester.pump();
-    expect(harness.controller.document.blocks.single.text, 'one  two');
+    expect(controller.document.blocks.single.text, 'one **** two');
+    expect(controller.selection!.head, controller.document.positionAt(0, 6));
+    expect(_pressed(tester, 'Bold'), isTrue);
+
+    controller.replaceSelection('new');
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one **new** two');
+    // Still inside: Bold shows pressed, not acting on the word "new".
+    expect(_pressed(tester, 'Bold'), isTrue);
+
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one **new** two');
+    expect(controller.selection!.head, controller.document.positionAt(0, 11));
+    expect(_pressed(tester, 'Bold'), isFalse);
+    expect(harness.focus().hasFocus, isTrue);
+    await _unmount(tester);
+  });
+
+  testWidgets(
+      'a pair left empty goes away when the caret leaves, with nothing '
+      'left to undo', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two');
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Italic'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one ** two');
+
+    // The caret goes to the end, past the empty pair.
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 10)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one  two');
+    expect(controller.selection!.head, controller.document.positionAt(0, 8));
+    expect(controller.canUndo, isFalse);
+    await _unmount(tester);
+  });
+
+  testWidgets(
+      'a caret moved into an empty pair\'s marker lands where the pair '
+      'stood', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two');
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one **** two');
+
+    // One step left: between the two stars of the opening marker.
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 5)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one  two');
+    expect(controller.selection!.head, controller.document.positionAt(0, 4));
+    await _unmount(tester);
+  });
+
+  testWidgets(
+      'an empty pair left after another change is taken out, and the '
+      'other change stays', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two', indents: true);
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    await tester.tap(_key('styles-back'));
+    await tester.pump();
+    await tester.tap(_button('Indent'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one **** two');
+
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 14)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one  two');
+    await _unmount(tester);
+  });
+
+  testWidgets('empty pairs opened one inside another all go together',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two', indents: true);
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    await tester.tap(_button('Highlight'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one **====** two');
+    // Indent first, so the pairs go by deleting rather than by undo.
+    await tester.tap(_key('styles-back'));
+    await tester.pump();
+    await tester.tap(_button('Indent'));
+    await tester.pump();
+
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 0)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one  two');
+    await _unmount(tester);
+  });
+
+  testWidgets('Bold then Italic, both empty, go together (`******`)',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two', indents: true);
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    await tester.tap(_button('Italic'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one ****** two');
+    // Indent first, so the pairs go by deleting rather than by undo.
+    await tester.tap(_key('styles-back'));
+    await tester.pump();
+    await tester.tap(_button('Indent'));
+    await tester.pump();
+
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 0)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one  two');
+    await _unmount(tester);
+  });
+
+  testWidgets('with a caret after a space, Note pins to the word before it',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one two ');
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 8)));
+    await tester.pump();
+
+    expect(_enabled(tester, 'Note'), isTrue);
+    await tester.tap(_button('Note'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one {{two|}} ');
+    // In the note's slot.
+    expect(controller.selection!.head, controller.document.positionAt(0, 10));
+    await _unmount(tester);
+  });
+
+  testWidgets('with a caret in a space, Link starts [[ there', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'see ');
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+
+    await tester.tap(_button('Link'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'see [[');
+    expect(controller.selection!.head, controller.document.positionAt(0, 6));
+    await _unmount(tester);
+  });
+
+  testWidgets('Footnote works with only a caret', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    var pressed = 0;
+    final harness =
+        await _pump(tester, 'one  two', onFootnote: () => pressed++);
+    harness.controller.setSelection(HomericSelection.collapsed(
+        harness.controller.document.positionAt(0, 4)));
+    await tester.pump();
+
+    expect(_enabled(tester, 'Footnote'), isTrue);
+    await tester.tap(_button('Footnote'));
+    await tester.pump();
+    expect(pressed, 1);
     await _unmount(tester);
   });
 
@@ -264,10 +456,9 @@ void main() {
       'Italic',
       'Strikethrough',
       'Highlight',
-      'Aside',
       'Quote',
       'Code',
-      'Comment out',
+      'Comment',
     ]);
     expect(_key('undo'), findsNothing);
     final box = _key('style-box');
@@ -279,7 +470,7 @@ void main() {
         find.descendant(of: box, matching: _button('Highlight')), findsNothing);
     // Every key fits; nothing scrolls off the side.
     final hide = tester.getTopLeft(_key('hide')).dx;
-    expect(tester.getTopRight(_button('Comment out')).dx, lessThan(hide + 1));
+    expect(tester.getTopRight(_button('Comment')).dx, lessThan(hide + 1));
     expect(
         tester.getSize(_button('Highlight')).width, greaterThanOrEqualTo(34));
 
@@ -335,8 +526,8 @@ void main() {
   });
 
   testWidgets(
-      'Quote and Comment out put their marker on the caret line and take '
-      'it off again', (tester) async {
+      'Quote and Comment put their marker on the caret line, whatever word '
+      'the caret is in, and take it off again', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final harness = await _pump(tester, 'one two', lines: true);
     harness.controller.setSelection(HomericSelection.collapsed(
@@ -356,13 +547,32 @@ void main() {
     await tester.pump();
     expect(harness.controller.document.blocks.single.text, 'one two');
 
-    await tester.tap(_button('Comment out'));
+    await tester.tap(_button('Comment'));
     await tester.pump();
     expect(harness.controller.document.blocks.single.text, '%% one two');
-    expect(_pressed(tester, 'Comment out'), isTrue);
-    await tester.tap(_button('Comment out'));
+    expect(_pressed(tester, 'Comment'), isTrue);
+    await tester.tap(_button('Comment'));
     await tester.pump();
     expect(harness.controller.document.blocks.single.text, 'one two');
+    await _unmount(tester);
+  });
+
+  testWidgets('Comment over selected words makes them an aside',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one two', lines: true);
+    final document = harness.controller.document;
+    harness.controller.setSelection(HomericSelection(
+      anchor: document.positionAt(0, 4),
+      head: document.positionAt(0, 7),
+    ));
+    await tester.pump();
+    await _openStyles(tester);
+
+    await tester.tap(_button('Comment'));
+    await tester.pump();
+    expect(harness.controller.document.blocks.single.text, 'one ++two++');
+    expect(_pressed(tester, 'Comment'), isTrue);
     await _unmount(tester);
   });
 
@@ -397,15 +607,15 @@ void main() {
     await _openStyles(tester);
 
     final gesture =
-        await tester.startGesture(tester.getCenter(_button('Aside')));
+        await tester.startGesture(tester.getCenter(_button('Highlight')));
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Aside · ++words++'), findsOneWidget);
+    expect(find.text('Highlight · ==words=='), findsOneWidget);
     // Above the bar.
     expect(tester.getBottomLeft(_key('tip')).dy,
         lessThan(tester.getTopLeft(_bar).dy));
     await gesture.up();
     await tester.pump();
-    expect(find.text('Aside · ++words++'), findsNothing);
+    expect(find.text('Highlight · ==words=='), findsNothing);
     expect(harness.controller.document.blocks.single.text, 'one two');
     await _unmount(tester);
   });
@@ -422,10 +632,9 @@ void main() {
       'Italic',
       'Strikethrough',
       'Highlight',
-      'Aside',
       'Quote',
       'Code',
-      'Comment out',
+      'Comment',
       'Link',
       'Note',
       'Outdent',

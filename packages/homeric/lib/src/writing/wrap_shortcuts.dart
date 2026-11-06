@@ -4,8 +4,11 @@
 /// `` `code` ``, `~~struck~~`), so a host that shows markdown as live
 /// preview gets the styling from its own syntax, and the source stays
 /// plain text. Pressing the shortcut again on a selection that is already
-/// wrapped in exactly that marker takes the marker off.
+/// wrapped in exactly that marker takes the marker off. With nothing
+/// selected the shortcut starts the mark at the caret ([HomericOpenPairs]).
 library;
+
+import 'dart:async';
 
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/widgets.dart' show SingleActivator, VoidCallback;
@@ -17,6 +20,7 @@ import '../model/position.dart';
 import '../model/selection.dart';
 import '../transform/builders.dart';
 import '../transform/transaction.dart';
+import 'open_pairs.dart';
 import 'writing_feature.dart';
 
 /// One wrap shortcut: the key, with ⌘ (and Ctrl on other platforms), and
@@ -38,8 +42,9 @@ final class HomericWrap {
 /// The wrap shortcuts as a [HomericWritingFeature].
 ///
 /// Each shortcut is bound twice, with ⌘ and with Ctrl, so it works the same
-/// on macOS and elsewhere. It acts on a selection inside one block; a
-/// collapsed caret or a selection across blocks is left to the host.
+/// on macOS and elsewhere. It acts on a selection inside one block, or
+/// starts the mark at a bare caret; a selection across blocks is left to
+/// the host.
 final class HomericWrapShortcuts extends HomericWritingFeature {
   /// Creates the feature with [wraps].
   const HomericWrapShortcuts({this.wraps = standardWraps});
@@ -58,9 +63,16 @@ final class HomericWrapShortcuts extends HomericWritingFeature {
   @override
   String get id => 'wrapShortcuts';
 
+  /// The controllers this feature is installed on, so a shortcut pressed
+  /// at a bare caret can start its mark there ([HomericOpenPairs]).
+  static final List<HomericEditorController> _installed =
+      <HomericEditorController>[];
+
   @override
-  VoidCallback installOn(HomericEditorController controller) =>
-      homericWritingNoop;
+  VoidCallback installOn(HomericEditorController controller) {
+    _installed.add(controller);
+    return () => _installed.remove(controller);
+  }
 
   @override
   List<HomericDocumentCommandBinding> get commandBindings =>
@@ -84,6 +96,31 @@ final class HomericWrapShortcuts extends HomericWritingFeature {
     String marker,
   ) {
     if (!context.isCurrent || context.composing != null) {
+      return HomericDocumentCommandResult.ignored;
+    }
+    final caret = context.selection;
+    if (caret != null && caret.isCollapsed) {
+      // With nothing selected, the mark starts at the caret; pressed again
+      // inside it, the caret steps out.
+      // The context names no controller: the one whose document and caret
+      // these are. Two that match can't be told apart, so neither acts.
+      final matches = <HomericEditorController>[
+        for (final controller in _installed)
+          if (identical(controller.document, context.document) &&
+              controller.selection == caret &&
+              HomericOpenPairs.canOpen(controller, caret))
+            controller,
+      ];
+      if (matches.length == 1) {
+        final controller = matches.single;
+        // A handler can't change the editor itself: right after it.
+        scheduleMicrotask(() {
+          if (controller.selection == caret) {
+            HomericOpenPairs.of(controller).press(marker);
+          }
+        });
+        return HomericDocumentCommandResult.handled;
+      }
       return HomericDocumentCommandResult.ignored;
     }
     try {

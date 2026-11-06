@@ -102,18 +102,24 @@ final class HomericWrapShortcuts extends HomericWritingFeature {
     if (caret != null && caret.isCollapsed) {
       // With nothing selected, the mark starts at the caret; pressed again
       // inside it, the caret steps out.
-      for (final controller in _installed) {
-        if (identical(controller.document, context.document) &&
-            controller.selection == caret &&
-            HomericOpenPairs.canOpen(controller, caret)) {
-          // A handler can't change the editor itself: right after it.
-          scheduleMicrotask(() {
-            if (controller.selection == caret) {
-              HomericOpenPairs.of(controller).press(marker);
-            }
-          });
-          return HomericDocumentCommandResult.handled;
-        }
+      // The context names no controller: the one whose document and caret
+      // these are. Two that match can't be told apart, so neither acts.
+      final matches = <HomericEditorController>[
+        for (final controller in _installed)
+          if (identical(controller.document, context.document) &&
+              controller.selection == caret &&
+              HomericOpenPairs.canOpen(controller, caret))
+            controller,
+      ];
+      if (matches.length == 1) {
+        final controller = matches.single;
+        // A handler can't change the editor itself: right after it.
+        scheduleMicrotask(() {
+          if (controller.selection == caret) {
+            HomericOpenPairs.of(controller).press(marker);
+          }
+        });
+        return HomericDocumentCommandResult.handled;
       }
       return HomericDocumentCommandResult.ignored;
     }

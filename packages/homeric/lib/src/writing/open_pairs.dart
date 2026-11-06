@@ -100,7 +100,7 @@ final class HomericOpenPairs {
       marker: marker,
       inner: inner,
       close: inner,
-      openedAt: _controller.contentRevision,
+      openedAt: _controller.documentRevision,
     ));
     return true;
   }
@@ -142,13 +142,19 @@ final class HomericOpenPairs {
     // Only the pair just opened, left untouched: undoing its opening takes
     // it out without a step to undo, and the caret goes where it was put.
     if (empty.length == 1 &&
-        empty.single.openedAt == _controller.contentRevision &&
+        empty.single.openedAt == _controller.documentRevision &&
         caret != null) {
       final pair = empty.single;
       final width = 2 * pair.marker.length;
       final start = pair.inner - pair.marker.length;
-      HomericSelection back(int p) =>
-          HomericSelection.collapsed(p <= start ? p : p - width);
+      // A place inside the markers taken out lands where they stood.
+      HomericSelection back(int p) => HomericSelection.collapsed(
+            p <= start
+                ? p
+                : p >= start + width
+                    ? p - width
+                    : start,
+          );
       final target = caret.isCollapsed
           ? back(caret.head)
           : HomericSelection(
@@ -200,7 +206,8 @@ final class _OpenPair {
   /// Global position of the closing marker.
   int close;
 
-  /// The controller's content revision right after opening.
+  /// The controller's document revision right after opening: any later
+  /// change to the document, text or not, moves it on.
   final int openedAt;
 
   bool holds(HomericSelection caret) =>

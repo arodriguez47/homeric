@@ -214,6 +214,54 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets(
+      'a caret moved into an empty pair\'s marker lands where the pair '
+      'stood', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two');
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one **** two');
+
+    // One step left: between the two stars of the opening marker.
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 5)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one  two');
+    expect(controller.selection!.head, controller.document.positionAt(0, 4));
+    await _unmount(tester);
+  });
+
+  testWidgets(
+      'an empty pair left after another change is taken out, and the '
+      'other change stays', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two', indents: true);
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    await tester.tap(_key('styles-back'));
+    await tester.pump();
+    await tester.tap(_button('Indent'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one **** two');
+
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 14)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one  two');
+    await _unmount(tester);
+  });
+
   testWidgets('with a caret after a space, Note pins to the word before it',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;

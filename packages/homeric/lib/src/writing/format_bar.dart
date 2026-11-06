@@ -20,6 +20,7 @@ import '../transform/builders.dart';
 import '../transform/transaction.dart';
 import 'block_indent.dart';
 import 'note_marks.dart';
+import 'open_pairs.dart';
 import 'syntax_decorations.dart';
 import 'typed_wraps.dart';
 import 'wrap_shortcuts.dart';
@@ -64,10 +65,11 @@ abstract final class HomericFormatBar {
       HomericFormatBar.italic(controller, selection),
       HomericFormatBar.strikethrough(controller, selection),
       if (highlight) HomericFormatBar.highlight(controller, selection),
-      if (aside) HomericFormatBar.aside(controller, selection),
+      // With Comment on the bar, an aside is Comment over selected words.
+      if (aside && !comment) HomericFormatBar.aside(controller, selection),
       if (quote) HomericFormatBar.quote(controller, selection),
-      // Code and Comment out are the quieter tools: a group of their own,
-      // last of the styles.
+      // Code and Comment are the quieter tools: a group of their own, last
+      // of the styles.
       if (code)
         HomericFormatBar.code(controller, selection)
             .copyWith(startsGroup: quote || comment),
@@ -91,7 +93,9 @@ abstract final class HomericFormatBar {
               'foot of the page.',
           syntax: 'words^[note]',
           shortcut: footnoteShortcut,
-          onPressed: words ? onFootnote : null,
+          onPressed: words || HomericOpenPairs.canOpen(controller, selection)
+              ? onFootnote
+              : null,
         ),
       if (indents) ...[
         HomericFormatBar.outdent(
@@ -269,6 +273,7 @@ abstract final class HomericFormatBar {
         selection,
         wraps,
         typed: '[',
+        startAtCaret: '[[',
         icon: Icons.link_rounded,
         label: 'Link',
         description: 'Links the words to another note; they stay as the '
@@ -287,6 +292,7 @@ abstract final class HomericFormatBar {
         selection,
         wraps,
         typed: '{',
+        wordBeforeCaret: true,
         icon: Icons.sticky_note_2_outlined,
         label: 'Note',
         description: 'Pins a note to the words, shown beside them in the '
@@ -310,22 +316,39 @@ abstract final class HomericFormatBar {
         description: "Sets the line apart as someone else's words.",
       );
 
-  /// `%% `: the line becomes a note to self, hidden when read, or comes
-  /// back.
+  /// Comment, one button for both kinds: over selected words it is the
+  /// aside `++words++`, said under the breath and left out when read; with
+  /// nothing selected it is the whole line, `%% `, a note to self, and
+  /// takes the marker off a line that already has it.
   static HomericFormatAction comment(
     HomericEditorController controller,
     HomericSelection selection,
-  ) =>
-      linePrefix(
+  ) {
+    const label = 'Comment';
+    const description = 'With words selected, quiets them into an aside '
+        'left out when read. With none, turns the whole line into a note '
+        'to self.';
+    if (!selection.isCollapsed) {
+      return wrap(
         controller,
         selection,
-        marker: '%% ',
-        pattern: HomericNoteMarks.commentLine,
+        marker: '++',
         icon: Icons.percent_rounded,
-        label: 'Comment out',
-        description: 'Turns the line into a note to self, kept out of the '
-            'text when it is read.',
+        label: label,
+        description: description,
+        syntax: '++words++ or %% line',
       );
+    }
+    return linePrefix(
+      controller,
+      selection,
+      marker: '%% ',
+      pattern: HomericNoteMarks.commentLine,
+      icon: Icons.percent_rounded,
+      label: label,
+      description: description,
+    ).copyWith(syntax: '++words++ or %% line');
+  }
 
   /// A button putting [marker] at the start of each line the selection
   /// touches, in paragraphs only, as typing it there does; pressed when
@@ -451,6 +474,10 @@ abstract final class HomericFormatBar {
 
   /// A button wrapping the selection in [marker], as
   /// [HomericWrapShortcuts.prepareWrap] does; pressed when it already is.
+  ///
+  /// With nothing selected it starts the mark: the marker twice, the caret
+  /// between ([HomericOpenPairs]), pressed while the caret stays inside,
+  /// and a second press steps out past the closing marker.
   static HomericFormatAction wrap(
     HomericEditorController controller,
     HomericSelection selection, {
@@ -463,6 +490,26 @@ abstract final class HomericFormatBar {
     String? shortcut,
     bool startsGroup = false,
   }) {
+    final syntaxText =
+        syntax ?? '${marker}words${marker.split('').reversed.join()}';
+    if (selection.isCollapsed) {
+      final open = HomericOpenPairs.maybeOf(controller);
+      return HomericFormatAction(
+        icon: icon,
+        glyph: glyph,
+        label: label,
+        description: description,
+        syntax: syntaxText,
+        shortcut: shortcut,
+        startsGroup: startsGroup,
+        isStyle: true,
+        isActive: open?.isOpen(selection, marker) ?? false,
+        actsAtCaret: open?.holds(selection) ?? false,
+        onPressed: !HomericOpenPairs.canOpen(controller, selection)
+            ? null
+            : () => HomericOpenPairs.of(controller).press(marker),
+      );
+    }
     final command = HomericWrapShortcuts.prepareWrap(
       controller.document,
       selection,
@@ -473,7 +520,7 @@ abstract final class HomericFormatBar {
       glyph: glyph,
       label: label,
       description: description,
-      syntax: syntax ?? '${marker}words${marker.split('').reversed.join()}',
+      syntax: syntaxText,
       shortcut: shortcut,
       startsGroup: startsGroup,
       isStyle: true,
@@ -498,6 +545,11 @@ abstract final class HomericFormatBar {
   /// A button doing what typing [typed] over the words does
   /// ([HomericTypedWrapsSession.prepareMenuWrap]); pressed when the words
   /// already carry the whole pair.
+  ///
+  /// With nothing selected it writes [startAtCaret] at the caret, as
+  /// typing it would (`[[` starts a link); or, with [wordBeforeCaret], it
+  /// takes the word just written before the caret as its words (a note
+  /// pinned to it, as the footnote shortcut goes after it).
   static HomericFormatAction typedWrap(
     HomericEditorController controller,
     HomericSelection selection,
@@ -509,8 +561,46 @@ abstract final class HomericFormatBar {
     String? syntax,
     String? shortcut,
     bool startsGroup = false,
+    String? startAtCaret,
+    bool wordBeforeCaret = false,
   }) {
-    final possible = wraps.canMenuWrap(selection, typed);
+    VoidCallback? onPressed;
+    if (!selection.isCollapsed) {
+      if (wraps.canMenuWrap(selection, typed)) {
+        onPressed = () {
+          final command = wraps.prepareMenuWrap(
+            controller.selection ?? selection,
+            typed,
+          );
+          if (command != null) controller.applyPreparedCommand(command);
+        };
+      }
+    } else if (HomericOpenPairs.canOpen(controller, selection)) {
+      if (wordBeforeCaret) {
+        final word = _wordBefore(controller.document, selection);
+        if (word != null && wraps.canMenuWrap(word, typed)) {
+          onPressed = () {
+            final now = controller.selection ?? selection;
+            final words = _wordBefore(controller.document, now);
+            if (words == null) return;
+            final command = wraps.prepareMenuWrap(words, typed);
+            if (command != null) controller.applyPreparedCommand(command);
+          };
+        }
+      } else if (startAtCaret != null) {
+        onPressed = () {
+          final now = controller.selection ?? selection;
+          if (!HomericOpenPairs.canOpen(controller, now)) return;
+          final tx = Transaction(controller.document)
+            ..insertText(now.head, startAtCaret);
+          controller.applyPreparedCommand(HomericPreparedCommand(
+            stages: <Transaction>[tx],
+            selection: HomericSelection.collapsed(
+                now.head + startAtCaret.length),
+          ));
+        };
+      }
+    }
     return HomericFormatAction(
       icon: icon,
       label: label,
@@ -519,17 +609,48 @@ abstract final class HomericFormatBar {
       shortcut: shortcut,
       startsGroup: startsGroup,
       isActive: wraps.isWrapped(selection, typed),
-      onPressed: !possible
-          ? null
-          : () {
-              final command = wraps.prepareMenuWrap(
-                controller.selection ?? selection,
-                typed,
-              );
-              if (command != null) controller.applyPreparedCommand(command);
-            },
+      onPressed: onPressed,
     );
   }
+
+  /// The word ending at [caret], or before the spaces just behind it, in
+  /// the caret's line; null at a line's start or after punctuation alone.
+  static HomericSelection? _wordBefore(
+    Document document,
+    HomericSelection caret,
+  ) {
+    final at = document.resolve(caret.head);
+    if (at is! InlinePosition) return null;
+    final text = at.block.text;
+    var end = at.offset.clamp(0, text.length);
+    while (end > 0 && (text[end - 1] == ' ' || text[end - 1] == '\t')) {
+      end--;
+    }
+    var start = end;
+    while (start > 0 && _isWordUnit(text[start - 1])) {
+      start--;
+    }
+    // Apostrophes join a word's letters; they don't start or end one.
+    while (start < end && _isApostrophe(text[start])) {
+      start++;
+    }
+    while (end > start && _isApostrophe(text[end - 1])) {
+      end--;
+    }
+    if (start == end) return null;
+    final base = caret.head - at.offset;
+    return HomericSelection(anchor: base + start, head: base + end);
+  }
+
+  static final RegExp _letter = RegExp(r'[\p{L}\p{M}\p{N}]', unicode: true);
+
+  static bool _isApostrophe(String c) => c == "'" || c == '\u2019';
+
+  static bool _isWordUnit(String c) =>
+      _isApostrophe(c) ||
+      // Either half of a surrogate pair: letters beyond the basic plane.
+      (c.codeUnitAt(0) >= 0xD800 && c.codeUnitAt(0) <= 0xDFFF) ||
+      _letter.hasMatch(c);
 }
 
 extension on List<HomericFormatAction> {

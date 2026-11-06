@@ -515,6 +515,7 @@ final class HomericFormatAction {
     this.startsGroup = false,
     this.actsOnBlock = false,
     this.isStyle = false,
+    this.actsAtCaret = false,
     this.onPressed,
   });
 
@@ -555,6 +556,12 @@ final class HomericFormatAction {
   /// bar keeps such buttons behind its Aa key, to make room.
   final bool isStyle;
 
+  /// Whether the caret sits inside a mark this button started there
+  /// (`**▍**`): the keyboard bar then hands every button the caret itself,
+  /// not the word around it, so a second press steps out of the mark
+  /// rather than styling the words just typed.
+  final bool actsAtCaret;
+
   /// Runs once the menu has closed; null shows the button disabled.
   final VoidCallback? onPressed;
 
@@ -570,6 +577,7 @@ final class HomericFormatAction {
     bool? startsGroup,
     bool? actsOnBlock,
     bool? isStyle,
+    bool? actsAtCaret,
     VoidCallback? onPressed,
   }) =>
       HomericFormatAction(
@@ -583,6 +591,7 @@ final class HomericFormatAction {
         startsGroup: startsGroup ?? this.startsGroup,
         actsOnBlock: actsOnBlock ?? this.actsOnBlock,
         isStyle: isStyle ?? this.isStyle,
+        actsAtCaret: actsAtCaret ?? this.actsAtCaret,
         onPressed: onPressed ?? this.onPressed,
       );
 }

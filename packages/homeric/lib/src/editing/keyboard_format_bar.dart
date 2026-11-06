@@ -158,7 +158,13 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
     if (builder == null || selection == null) {
       return const <HomericFormatAction>[];
     }
-    final word = selection.isCollapsed ? _wordAt(controller, selection) : null;
+    var word = selection.isCollapsed ? _wordAt(controller, selection) : null;
+    // What each button does at the bare caret: a line's button (an indent,
+    // a comment) acts on the line whatever word the caret is in, and inside
+    // a mark a button started at the caret every button acts at the caret,
+    // so the same one again steps out.
+    final atCaret = word == null ? null : _caretActions(builder, controller);
+    if (atCaret != null && atCaret.any((a) => a.actsAtCaret)) word = null;
     final target = word ?? selection;
     final head = controller.document.resolve(target.head);
     if (head is! InlinePosition) return const <HomericFormatAction>[];
@@ -174,21 +180,38 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
       if (fragment == null) return const <HomericFormatAction>[];
       blockSelection = fragment;
     }
+    final lineActions = <String, HomericFormatAction>{
+      if (word != null)
+        for (final action in atCaret!)
+          if (action.actsOnBlock) action.label: action,
+    };
     return <HomericFormatAction>[
-      for (final action in builder(target, blockId, blockSelection))
-        if (action.onPressed case final onPressed?)
-          action.copyWith(
-            // A line's indent is the line's, whatever word the caret is in.
-            onPressed: () => _press(
-              controller,
-              selection,
-              action.actsOnBlock ? null : word,
-              onPressed,
-            ),
-          )
-        else
-          action,
+      for (final built in builder(target, blockId, blockSelection))
+        if (lineActions[built.label] ?? built case final action)
+          if (action.onPressed case final onPressed?)
+            action.copyWith(
+              onPressed: () => _press(
+                controller,
+                selection,
+                action.actsOnBlock ? null : word,
+                onPressed,
+              ),
+            )
+          else
+            action,
     ];
+  }
+
+  static List<HomericFormatAction>? _caretActions(
+    HomericSelectionFormatBarBuilder builder,
+    HomericEditorController controller,
+  ) {
+    final caret = controller.selection;
+    if (caret == null) return null;
+    final at = controller.document.resolve(caret.head);
+    if (at is! InlinePosition) return null;
+    return builder(
+        caret, at.block.id, BlockTextSelection.collapsed(at.offset));
   }
 
   void _press(

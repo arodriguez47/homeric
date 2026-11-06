@@ -133,11 +133,21 @@ final class HomericOpenPairs {
     ];
     if (left.isEmpty) return;
     _pairs.removeWhere(left.contains);
-    final empty = <_OpenPair>[
+    // Empty: nothing between the markers, or only another empty pair
+    // opened inside (`**==▍==**`). Innermost first.
+    final standing = [
       for (final pair in left)
-        if (pair.inner == pair.close && pair.standsIn(_controller.document))
-          pair,
-    ];
+        if (pair.standsIn(_controller.document)) pair,
+    ]..sort((a, b) => (a.close - a.inner).compareTo(b.close - b.inner));
+    final empty = <_OpenPair>[];
+    for (final pair in standing) {
+      if (pair.inner == pair.close ||
+          empty.any((q) =>
+              q.inner - q.marker.length == pair.inner &&
+              q.close + q.marker.length == pair.close)) {
+        empty.add(pair);
+      }
+    }
     if (empty.isEmpty || _controller.isReadOnly) return;
     // Only the pair just opened, left untouched: undoing its opening takes
     // it out without a step to undo, and the caret goes where it was put.
@@ -174,11 +184,24 @@ final class HomericOpenPairs {
     final document = _controller.document;
     try {
       final tx = Transaction(document);
-      // Furthest first, so the offsets still to come stay where they were.
-      final ordered = [...empty]..sort((a, b) => b.inner.compareTo(a.inner));
-      for (final pair in ordered) {
-        final length = pair.marker.length;
-        tx.deleteRange(pair.inner - length, pair.close + length);
+      // Empty pairs opened one inside another (`***▍***`) are one run of
+      // markers: merge the spans, then delete furthest first, so the
+      // offsets still to come stay where they were.
+      final spans = <(int, int)>[
+        for (final pair in empty)
+          (pair.inner - pair.marker.length, pair.close + pair.marker.length),
+      ]..sort((a, b) => a.$1.compareTo(b.$1));
+      final merged = <(int, int)>[];
+      for (final span in spans) {
+        if (merged.isNotEmpty && span.$1 <= merged.last.$2) {
+          final last = merged.removeLast();
+          merged.add((last.$1, span.$2 > last.$2 ? span.$2 : last.$2));
+        } else {
+          merged.add(span);
+        }
+      }
+      for (final (from, to) in merged.reversed) {
+        tx.deleteRange(from, to);
       }
       _controller.applyPreparedCommand(HomericPreparedCommand(
         stages: <Transaction>[tx],

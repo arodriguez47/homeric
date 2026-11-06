@@ -262,6 +262,33 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('empty pairs opened one inside another all go together',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final harness = await _pump(tester, 'one  two', indents: true);
+    final controller = harness.controller;
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+    await tester.pump();
+    await _openStyles(tester);
+    await tester.tap(_button('Bold'));
+    await tester.pump();
+    await tester.tap(_button('Highlight'));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, 'one **====** two');
+    // Indent first, so the pairs go by deleting rather than by undo.
+    await tester.tap(_key('styles-back'));
+    await tester.pump();
+    await tester.tap(_button('Indent'));
+    await tester.pump();
+
+    controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 0)));
+    await tester.pump();
+    expect(controller.document.blocks.single.text, '  one  two');
+    await _unmount(tester);
+  });
+
   testWidgets('with a caret after a space, Note pins to the word before it',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;

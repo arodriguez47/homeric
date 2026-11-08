@@ -56,11 +56,12 @@ final class HomericMentionQuery {
 
   /// A sentence moving on: punctuation and then a space, or a closing
   /// bracket or quote, which no name ends in. A square bracket starts or
-  /// ends a link. An apostrophe or a straight quote can be inside a name
-  /// (`O’Brien`), so only one with a space after ends it. So does a
-  /// `#word` with a space after: no name has one, so it was a tag.
+  /// ends a link. An apostrophe, curly or straight, or a straight quote can
+  /// be inside a name (`O’Brien`, `O'Brien`), so only one with a space
+  /// after ends it (`'@Julien' said`). So does a `#word` with a space
+  /// after: no name has one, so it was a tag.
   static final RegExp _movedOn = RegExp(
-    r'[.,;:!?"’]\s|[\[\])}”»]|(?:^|\s)#\S*\s',
+    r'''[.,;:!?"'’]\s|[\[\])}”»]|(?:^|\s)#\S*\s''',
   );
 
   /// The mention being typed in [text] with the caret at [caret], or null.

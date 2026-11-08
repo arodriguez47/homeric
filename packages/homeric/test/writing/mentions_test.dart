@@ -67,8 +67,12 @@ void main() {
       expect(at('“@Julien”'), isNull);
       expect(at('«@Julien»'), isNull);
       expect(at('(@Julien'), isNotNull);
-      // An apostrophe can be inside a name.
+      // An apostrophe can be inside a name; with a space after, it closed
+      // a quote.
       expect(at('@O’Brien')!.name, 'O’Brien');
+      expect(at("@O'Brien")!.name, "O'Brien");
+      expect(at("'@Julien' said"), isNull);
+      expect(at('‘@Julien’ said'), isNull);
       // Mid-name punctuation with no space after is still the name.
       expect(at('@Dr.Who')!.name, 'Dr.Who');
       // A trailing space keeps it open: names have more than one word.

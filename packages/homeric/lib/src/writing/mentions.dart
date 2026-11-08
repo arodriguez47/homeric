@@ -57,8 +57,11 @@ final class HomericMentionQuery {
   /// A sentence moving on: punctuation and then a space, or a closing
   /// bracket or quote, which no name ends in. A square bracket starts or
   /// ends a link. An apostrophe or a straight quote can be inside a name
-  /// (`O’Brien`), so only one with a space after ends it.
-  static final RegExp _movedOn = RegExp(r'[.,;:!?"’]\s|[\[\])}”»]');
+  /// (`O’Brien`), so only one with a space after ends it. So does a
+  /// `#word` with a space after: no name has one, so it was a tag.
+  static final RegExp _movedOn = RegExp(
+    r'[.,;:!?"’]\s|[\[\])}”»]|(?:^|\s)#\S*\s',
+  );
 
   /// The mention being typed in [text] with the caret at [caret], or null.
   ///
@@ -66,7 +69,8 @@ final class HomericMentionQuery {
   /// (the line's start, or after a space, bracket or quote) and is
   /// followed by a name, not a space. It ends where the sentence moves on
   /// (`@Julien, then`), at a closing bracket or quote (`(@Julien)`), at a
-  /// square bracket, or past [maxLength].
+  /// square bracket, after a `#word` and a space (`@Julien #idea `), or
+  /// past [maxLength].
   static HomericMentionQuery? at(String blockId, String text, int caret) {
     if (caret < 1 || caret > text.length) return null;
     final lineStart = text.lastIndexOf('\n', caret - 1) + 1;

@@ -32,6 +32,12 @@ void main() {
       expect(at('@Rouge #')!.kind, '');
       expect(at('@Rouge #Book')!.kind, 'book');
       expect(at('@Rouge')!.kind, isNull);
+      // With a space after, the #word was a tag: the mention is over.
+      expect(at('@Rouge #book '), isNull);
+      expect(at('@Julien #idea and then'), isNull);
+      expect(at('@#book '), isNull);
+      // A # inside a word is part of the name.
+      expect(at('@C# in Depth')!.name, 'C# in Depth');
     });
 
     test('only up to the caret, on its own line', () {

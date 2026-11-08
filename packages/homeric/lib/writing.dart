@@ -13,6 +13,7 @@
 ///   [HomericBrevity].
 /// - Typed syntax, folded away in live preview by [HomericSyntax]:
 ///   markdown, `[[links]]` ([HomericWikiLinks], [HomericLinkQuery]),
+///   `@` mentions being typed ([HomericMentionQuery]),
 ///   `#tags` ([HomericTags]), to-dos ([HomericChecklists]), `---`
 ///   dividers ([HomericDivider]), and the writing layer of asides,
 ///   comments, annotations, footnotes, strikes, drop caps and images
@@ -37,6 +38,7 @@ export 'src/writing/list_hang.dart';
 export 'src/writing/mark_deletes.dart';
 export 'src/writing/list_nesting.dart';
 export 'src/writing/marker_stroke.dart';
+export 'src/writing/mentions.dart';
 export 'src/writing/note_marks.dart';
 export 'src/writing/open_pairs.dart';
 export 'src/writing/quote_continuation.dart';

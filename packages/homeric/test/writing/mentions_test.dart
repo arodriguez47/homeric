@@ -55,6 +55,14 @@ void main() {
       expect(at('@Julien. Then'), isNull);
       expect(at('@Julien) and'), isNull);
       expect(at('@Jul[[ien'), isNull);
+      // A closing bracket or quote ends it at once: no name ends in one.
+      expect(at('(@Julien)'), isNull);
+      expect(at('{@Julien}'), isNull);
+      expect(at('“@Julien”'), isNull);
+      expect(at('«@Julien»'), isNull);
+      expect(at('(@Julien'), isNotNull);
+      // An apostrophe can be inside a name.
+      expect(at('@O’Brien')!.name, 'O’Brien');
       // Mid-name punctuation with no space after is still the name.
       expect(at('@Dr.Who')!.name, 'Dr.Who');
       // A trailing space keeps it open: names have more than one word.

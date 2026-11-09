@@ -85,8 +85,10 @@ void AddLanguage(std::vector<std::wstring>* tags, const std::wstring& tag) {
   if (!base.empty() && base != tag) tags->push_back(base);
 }
 
-// The languages to try, best first: the writer's Windows languages (Settings
-// > Time & language > Language), then their regional format, then US
+// The languages to try, best first: the writer's Windows display languages
+// (Settings > Time & language > Language), then the languages they type in
+// (each keyboard layout's language, so a language added for typing without
+// its display pack still counts), then their regional format, then US
 // English. The regional format comes after, as many set it only for dates
 // and money.
 std::vector<std::wstring> PreferredLanguages() {
@@ -102,6 +104,20 @@ std::vector<std::wstring> PreferredLanguages() {
       // A list of names, each ended by a nul, the list by another.
       for (const wchar_t* name = names.data(); *name;
            name += wcslen(name) + 1) {
+        AddLanguage(&tags, name);
+      }
+    }
+  }
+  const int layouts = ::GetKeyboardLayoutList(0, nullptr);
+  if (layouts > 0) {
+    std::vector<HKL> list(static_cast<size_t>(layouts));
+    const int got = ::GetKeyboardLayoutList(layouts, list.data());
+    for (int i = 0; i < got; ++i) {
+      // The low word of a layout handle is its input language.
+      const LANGID language = LOWORD(reinterpret_cast<UINT_PTR>(list[i]));
+      wchar_t name[LOCALE_NAME_MAX_LENGTH] = {};
+      if (::LCIDToLocaleName(MAKELCID(language, SORT_DEFAULT), name,
+                             LOCALE_NAME_MAX_LENGTH, 0) > 0) {
         AddLanguage(&tags, name);
       }
     }

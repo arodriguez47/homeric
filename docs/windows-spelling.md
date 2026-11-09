@@ -35,6 +35,8 @@ handler only once a setting can be read reliably.
 One checker per language, for each language Windows can check from this
 list, best first: the writer's Windows languages in order (Settings › Time &
 language › Language, `en-GB`) and the language each narrows (`en`), then the
+language of each keyboard layout (a language added for typing without its
+display pack still counts), then the
 regional format (Settings › Time & language › Region), then US English. The
 regional format comes after the languages because many people set it only
 for dates and money: an English writer with Spanish formats gets English,

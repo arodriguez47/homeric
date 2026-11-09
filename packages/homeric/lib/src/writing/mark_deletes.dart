@@ -21,6 +21,7 @@ import '../decoration/decoration.dart';
 import '../decoration/markdown_mark_visibility.dart';
 import '../editing/editor_controller.dart';
 import '../model/block.dart';
+import '../model/document.dart';
 import '../model/position.dart';
 import '../model/selection.dart';
 import '../transform/transaction.dart';
@@ -280,6 +281,38 @@ int _caretAfterUnwrap(HomericMarkPair p, int caret) {
   return (at, at + first.length);
 }
 
+/// Block [index] joined to the one before it (or with [forward], the one
+/// after), the caret kept beside the same letters; null when they can't
+/// be joined (the first or last block, or a neighbour that isn't text).
+HomericPreparedCommand? _join(
+  Document document,
+  int index,
+  int caret, {
+  required bool forward,
+}) {
+  final second = forward ? index + 1 : index;
+  if (second <= 0 || second >= document.blockCount) return null;
+  final before = document.blocks[second - 1];
+  if (before.type == 'code' || document.blocks[second].type == 'code') {
+    return null;
+  }
+  final shift = forward ? 0 : before.contentLength;
+  try {
+    final transaction = Transaction(document)
+      ..joinBlocks(document.positionBeforeBlock(second));
+    return HomericPreparedCommand(
+      stages: <Transaction>[transaction],
+      selection: HomericSelection.collapsed(
+        transaction.doc.positionAt(second - 1, shift + caret),
+      ),
+    );
+  } on ArgumentError {
+    return null;
+  } on StepFailedError {
+    return null;
+  }
+}
+
 final HomericPreparedCommand _nothing = HomericPreparedCommand(
   stages: const <Transaction>[],
   selection: null,
@@ -356,8 +389,19 @@ final class HomericMarkDeletes extends HomericWritingFeature {
       revealCaret: revealCaret == null ? head.offset : revealCaret!(block.id),
     );
     if (plan == null) return null;
-    if (plan.ranges.isEmpty) return _nothing;
     final index = head.blockIndex;
+    if (plan.ranges.isEmpty) {
+      // Only folded marks between the caret and the block's edge: the
+      // marks are not there, so the key joins the blocks as it would at
+      // the edge, and the marks go along whole.
+      return _join(
+            document,
+            index,
+            head.offset,
+            forward: edit.start == head.offset,
+          ) ??
+          _nothing;
+    }
     final transaction = Transaction(document);
     final ranges = [...plan.ranges]..sort((a, b) => b.$1.compareTo(a.$1));
     try {

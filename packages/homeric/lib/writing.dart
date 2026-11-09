@@ -47,6 +47,7 @@ export 'src/writing/smart_punctuation.dart';
 export 'src/writing/system_corrections.dart';
 export 'src/writing/syntax_decorations.dart';
 export 'src/writing/tags.dart';
+export 'src/writing/typed_pairs.dart';
 export 'src/writing/typed_wraps.dart';
 export 'src/writing/typography.dart';
 export 'src/writing/wiki_links.dart';

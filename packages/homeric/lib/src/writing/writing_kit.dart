@@ -9,6 +9,7 @@ import 'block_indent.dart';
 import 'list_nesting.dart';
 import 'quote_continuation.dart';
 import 'smart_punctuation.dart';
+import 'typed_pairs.dart';
 import 'typed_wraps.dart';
 import 'wrap_shortcuts.dart';
 import 'writing_feature.dart';
@@ -66,6 +67,8 @@ final class HomericWritingKit {
     HomericSmartPunctuation(),
     HomericWrapShortcuts(),
     HomericTypedWraps(),
+    // Before the indent: its Tab steps out of an open mark first.
+    HomericTypedPairs(),
     HomericListNesting(),
     HomericBlockIndent(),
     HomericQuoteContinuation(),

@@ -146,18 +146,43 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     expect(homericSystemSpellChecker(locale: () => const Locale('en')),
         same(HomericMacSpelling.instance));
+    // Windows answers the same channel, from its own checker.
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    expect(homericSystemSpellChecker(locale: () => const Locale('en')),
+        same(HomericSystemSpelling.instance));
+    expect(HomericSystemSpelling.forPlatform, same(HomericMacSpelling.instance));
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     expect(homericSystemSpellChecker(locale: () => const Locale('en')), isNull);
+    expect(HomericSystemSpelling.forPlatform, isNull);
     debugDefaultTargetPlatformOverride = null;
   });
 
-  group('the right-click menu on the Mac', () {
+  test('Windows settings leave typing alone', () async {
+    // What the Windows handler answers: no autocorrect, no replacements.
+    mac.settings = <String, Object?>{
+      'autocorrect': false,
+      'replacement': false,
+      'replacements': <String, String>{},
+    };
+    spelling.dispose();
+    spelling = HomericSystemSpelling.forTesting(_channel);
+    await Future<void>.delayed(Duration.zero);
+    expect(spelling.isAvailable, isTrue);
+    expect(spelling.correctsSpellingAutomatically, isFalse);
+    expect(spelling.replacesTextAutomatically, isFalse);
+    expect(spelling.textReplacements, isEmpty);
+    expect(await spelling.correction('a wrod', 2, 6), isNull);
+    expect(mac.calls.where((call) => call.method == 'correct'), isEmpty);
+  });
+
+  group('the right-click menu on the desktop', () {
     Future<HomericEditorController> pump(
       WidgetTester tester,
       String text, {
       int? caret,
+      TargetPlatform platform = TargetPlatform.macOS,
     }) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      debugDefaultTargetPlatformOverride = platform;
       final document = Document(<Block>[
         Block(id: 'b', type: 'paragraph', runs: <InlineRun>[InlineRun(text)]),
       ]);
@@ -273,6 +298,28 @@ void main() {
       await tester.pump();
       expect(mac.calls.where((call) => call.method == 'ignore'), hasLength(1));
       expect(squiggles(tester), 0);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('Windows gets the same squiggles, guesses and Learn',
+        (tester) async {
+      final controller = await pump(
+        tester,
+        'a wrod here',
+        platform: TargetPlatform.windows,
+      );
+      expect(squiggles(tester), 1);
+      await rightClick(tester, 2, 6);
+      expect(row('word'), findsOneWidget);
+      expect(row('Learn Spelling'), findsOneWidget);
+      expect(row('Ignore Spelling'), findsOneWidget);
+      await tester.tap(row('Learn Spelling'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(mac.calls.where((call) => call.method == 'learn'), hasLength(1));
+      expect(squiggles(tester), 0);
+      expect(controller.document.blocks.single.text, 'a wrod here');
       debugDefaultTargetPlatformOverride = null;
     });
 

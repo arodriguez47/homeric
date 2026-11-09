@@ -30,8 +30,8 @@ the `homeric/spelling` method channel. The app answers it with one Swift file.
    ```
 
 2. Pass the system checker to the editor. `homericSystemSpellChecker` picks
-   Flutter's service on iOS and Android, `HomericMacSpelling` on macOS, and
-   null on Windows, Linux and the web:
+   Flutter's service on iOS and Android, `HomericMacSpelling` on macOS and
+   Windows, and null on Linux and the web:
 
    ```dart
    spellCheckProvider: homericSystemSpellChecker(
@@ -50,6 +50,9 @@ the `homeric/spelling` method channel. The app answers it with one Swift file.
 
 An app without the Swift file gets no squiggles and no corrections; nothing
 else changes.
+
+Windows answers the same channel from its own checker with a C++ file; see
+[windows-spelling.md](windows-spelling.md).
 
 ## Not possible in Flutter 3.47
 

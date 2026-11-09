@@ -24,6 +24,7 @@ export 'src/editing/system_spelling.dart'
     show
         HomericMacSpelling,
         HomericSpellingDictionary,
+        HomericSystemSpelling,
         HomericTypingCorrections,
         homericSystemSpellChecker;
 export 'src/editing/text_magnifier.dart'

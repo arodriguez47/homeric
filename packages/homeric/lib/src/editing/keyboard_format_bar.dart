@@ -210,8 +210,7 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
     if (caret == null) return null;
     final at = controller.document.resolve(caret.head);
     if (at is! InlinePosition) return null;
-    return builder(
-        caret, at.block.id, BlockTextSelection.collapsed(at.offset));
+    return builder(caret, at.block.id, BlockTextSelection.collapsed(at.offset));
   }
 
   void _press(

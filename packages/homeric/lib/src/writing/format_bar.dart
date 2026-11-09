@@ -595,8 +595,8 @@ abstract final class HomericFormatBar {
             ..insertText(now.head, startAtCaret);
           controller.applyPreparedCommand(HomericPreparedCommand(
             stages: <Transaction>[tx],
-            selection: HomericSelection.collapsed(
-                now.head + startAtCaret.length),
+            selection:
+                HomericSelection.collapsed(now.head + startAtCaret.length),
           ));
         };
       }

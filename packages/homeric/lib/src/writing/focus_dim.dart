@@ -1,4 +1,5 @@
-/// Focus dimming for a writing surface: paragraph, line or sentence.
+/// Focus dimming for a writing surface: section, paragraph, line or
+/// sentence.
 library;
 
 import 'package:flutter/animation.dart';
@@ -26,16 +27,62 @@ enum HomericFocusGranularity {
   line,
 
   /// The sentences the selection touches.
-  sentence;
+  sentence,
+
+  /// The section holding the caret: its heading and every block under it,
+  /// up to the next heading of the same or a higher level. The host may say
+  /// what a section is ([HomericFocusDimController.sectionOf]); by default
+  /// it is [homericHeadingSection].
+  section;
 
   /// The toolbar and keyboard cycle order: off, paragraph, line,
-  /// sentence, off.
+  /// sentence, section, off. Section comes last so the existing steps keep
+  /// their keys.
   HomericFocusGranularity get next => switch (this) {
         HomericFocusGranularity.off => HomericFocusGranularity.paragraph,
         HomericFocusGranularity.paragraph => HomericFocusGranularity.line,
         HomericFocusGranularity.line => HomericFocusGranularity.sentence,
-        HomericFocusGranularity.sentence => HomericFocusGranularity.off,
+        HomericFocusGranularity.sentence => HomericFocusGranularity.section,
+        HomericFocusGranularity.section => HomericFocusGranularity.off,
       };
+}
+
+/// The ids of the blocks in the section holding block [blockId] of
+/// [document], for [HomericFocusGranularity.section].
+typedef HomericFocusSectionResolver = Set<String> Function(
+  Document document,
+  String blockId,
+);
+
+/// The default [HomericFocusSectionResolver]: a heading is a block whose
+/// type is `heading`, its level the numeric `level` attribute (1 when
+/// missing). The section runs from the nearest heading at or above
+/// [blockId] down to, not including, the next heading of the same or a
+/// higher level. Above the first heading, the section is everything
+/// before it.
+Set<String> homericHeadingSection(Document document, String blockId) {
+  final blocks = document.blocks;
+  final index = document.indexOfBlockId(blockId);
+  if (index == null) return const <String>{};
+  int? levelOf(Block block) {
+    if (block.type != 'heading') return null;
+    final level = block.attributes['level'];
+    return level is num ? level.toInt().clamp(1, 6) : 1;
+  }
+
+  var start = index;
+  while (start >= 0 && levelOf(blocks[start]) == null) {
+    start--;
+  }
+  final level = start < 0 ? 0 : levelOf(blocks[start])!;
+  if (start < 0) start = 0;
+  var end = index + 1;
+  while (end < blocks.length) {
+    final l = levelOf(blocks[end]);
+    if (l != null && (level == 0 || l <= level)) break;
+    end++;
+  }
+  return {for (var i = start; i < end; i++) blocks[i].id};
 }
 
 /// Focus dimming: everything but the paragraph, line or sentence being
@@ -54,7 +101,9 @@ final class HomericFocusDimController extends ChangeNotifier {
     required TickerProvider vsync,
     HomericFocusGranularity initialGranularity = HomericFocusGranularity.off,
     double strength = homericFocusDimDefaultStrength,
+    HomericFocusSectionResolver? sectionOf,
   })  : _granularity = initialGranularity,
+        sectionOf = sectionOf ?? homericHeadingSection,
         _strength = _validStrength(strength),
         _fromAmount = initialGranularity == HomericFocusGranularity.off ? 0 : 1,
         _toAmount = initialGranularity == HomericFocusGranularity.off ? 0 : 1,
@@ -76,6 +125,13 @@ final class HomericFocusDimController extends ChangeNotifier {
 
   /// The easing of dimming in and out.
   static const Curve curve = Curves.easeOutQuint;
+
+  /// What a section is, for [HomericFocusGranularity.section].
+  final HomericFocusSectionResolver sectionOf;
+
+  /// The section last resolved, for the document revision and selection
+  /// it was resolved at: every row asks while painting.
+  ({int revision, HomericSelection? selection, Set<String> ids})? _section;
 
   final AnimationController _animation;
   final Map<String, _HomericLineWitness> _lineWitnesses =
@@ -289,6 +345,11 @@ final class HomericFocusDimController extends ChangeNotifier {
     Block block,
     HomericEditorController editor,
   ) {
+    if (_paintGranularity == HomericFocusGranularity.section) {
+      return _sectionIds(editor).contains(block.id)
+          ? BlockTextRange(0, block.contentLength)
+          : null;
+    }
     final local =
         _localSelectionForBlock(editor.document, editor.selection, block.id);
     if (local == null) return null;
@@ -320,7 +381,41 @@ final class HomericFocusDimController extends ChangeNotifier {
           local.end,
         );
         return touched ?? BlockTextRange(0, block.contentLength);
+      case HomericFocusGranularity.section:
+        return BlockTextRange(0, block.contentLength);
     }
+  }
+
+  Set<String> _sectionIds(HomericEditorController editor) {
+    final selection = editor.selection;
+    final cached = _section;
+    if (cached != null &&
+        cached.revision == editor.documentRevision &&
+        cached.selection == selection) {
+      return cached.ids;
+    }
+    final document = editor.document;
+    String? caret;
+    if (selection != null) {
+      for (final block in document.blocks) {
+        final local = _localSelectionForBlock(
+          document,
+          HomericSelection.collapsed(selection.head),
+          block.id,
+        );
+        if (local != null) {
+          caret = block.id;
+          break;
+        }
+      }
+    }
+    final ids = caret == null ? const <String>{} : sectionOf(document, caret);
+    _section = (
+      revision: editor.documentRevision,
+      selection: selection,
+      ids: ids,
+    );
+    return ids;
   }
 
   @override

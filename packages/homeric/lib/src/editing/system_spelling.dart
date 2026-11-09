@@ -19,8 +19,9 @@ import 'spell_check.dart';
 /// Words the writer teaches the checker, or tells it to pass over.
 ///
 /// A [HomericSpellCheckProvider] that is also a dictionary gets Learn
-/// Spelling and Ignore Spelling in the right-click menu, and every paragraph
-/// checks again when [spellingChanges] fires.
+/// Spelling and Ignore Spelling in the right-click menu (Add to dictionary
+/// and Ignore all on Windows), and every paragraph checks again when
+/// [spellingChanges] fires.
 abstract interface class HomericSpellingDictionary {
   /// Fires when the words the checker accepts change.
   Listenable get spellingChanges;

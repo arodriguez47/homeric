@@ -2890,7 +2890,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
 
   /// "No Guesses Found" for a misspelled word with none, then Learn
   /// Spelling and Ignore Spelling when the checker keeps a dictionary. The
-  /// desktop menu only: the touch menus keep to the guesses.
+  /// desktop menu only: the touch menus keep to the guesses. Windows gets
+  /// its own words for them, as its other apps say them.
   List<ContextMenuButtonItem> _spellingDictionaryMenuItems(
     _MenuWitness witness,
   ) {
@@ -2907,16 +2908,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       if (isCurrent) action(misspelled.word);
     }
 
+    final windows = defaultTargetPlatform == TargetPlatform.windows;
     return <ContextMenuButtonItem>[
       if (misspelled.replacements.isEmpty)
-        const ContextMenuButtonItem(label: 'No Guesses Found', onPressed: null),
+        ContextMenuButtonItem(
+          label: windows ? 'No suggestions' : 'No Guesses Found',
+          onPressed: null,
+        ),
       if (dictionary != null) ...[
         ContextMenuButtonItem(
-          label: 'Learn Spelling',
+          label: windows ? 'Add to dictionary' : 'Learn Spelling',
           onPressed: () => teach(dictionary.learnSpelling),
         ),
         ContextMenuButtonItem(
-          label: 'Ignore Spelling',
+          label: windows ? 'Ignore all' : 'Ignore Spelling',
           onPressed: () => teach(dictionary.ignoreSpelling),
         ),
       ],

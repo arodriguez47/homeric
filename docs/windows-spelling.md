@@ -9,14 +9,16 @@ also known by its first name, `HomericMacSpelling`.
 
 ## What the writer gets
 
-- Red squiggles under misspelled words, in the writer's Windows language.
-  The word still being typed waits until the writer moves on.
+- Red squiggles under misspelled words: words wrong in every one of the
+  writer's Windows languages, so a bilingual writer sees none under either
+  language. The word still being typed waits until the writer moves on.
 - In the right-click menu, under the format bar: the guesses (bold), then
-  **Learn Spelling** and **Ignore Spelling**, or **No Guesses Found**.
-  Learn adds the word to the user's Windows dictionary for that language,
-  which other apps share; Ignore lasts until the app quits. Every paragraph
-  checks again at once, and again when the dictionary changes in another
-  app.
+  **Add to dictionary** and **Ignore all**, or **No suggestions**, in
+  Windows' own words (the Mac keeps its Learn Spelling, Ignore Spelling and
+  No Guesses Found). Add to dictionary puts the word in the user's Windows
+  dictionary for each of their languages, which other apps share; Ignore
+  all lasts until the app quits. Every paragraph checks again at once, and
+  again when the dictionary changes in another app.
 - A word on Windows' autocorrect list (`teh`) is squiggled with its
   replacement as the first guess.
 - Code, web addresses, `#tags`, `@names` and `[[links]]` keep what was typed.
@@ -30,12 +32,21 @@ handler only once a setting can be read reliably.
 
 ## Language
 
-One checker, in the first language Windows can check from this list: the
-writer's regional format (Settings › Time & language › Region, `en-GB`), the
-language it narrows (`en`), the Windows display languages in order, US
-English, then any language Windows has a dictionary for. Windows installs a
-dictionary with each language pack. The language is chosen when the app
-starts.
+One checker per language, for each language Windows can check from this
+list, best first: the writer's Windows languages in order (Settings › Time &
+language › Language, `en-GB`) and the language each narrows (`en`), then the
+regional format (Settings › Time & language › Region), then US English. The
+regional format comes after the languages because many people set it only
+for dates and money: an English writer with Spanish formats gets English,
+and Spanish too only if Spanish is one of their languages. One checker
+covers each language (`en-GB` and `en-US` are one), up to four. If none of
+them can be checked, the handler uses any language Windows has a dictionary
+for. Windows installs a dictionary with each language pack.
+
+A word is squiggled only when every checker flags it, and its guesses come
+from the first. The checkers are made on the first `check`, not at startup,
+so loading the dictionaries never holds up the first frame; the languages
+are those of that moment until the app restarts.
 
 ## Host setup
 
@@ -86,24 +97,28 @@ Windows' `wchar_t` indices.
 | --- | --- | --- |
 | `check` | `{text}` | `[{start, end, guesses}]`, up to 6 guesses each |
 | `correct` | `{text, start, end}` | the autocorrect list's replacement for that word, or null |
-| `learn` | `{word}` | null; `ISpellChecker::Add` |
-| `ignore` | `{word}` | null; `ISpellChecker::Ignore` |
+| `learn` | `{word}` | null; `ISpellChecker::Add` on every checker |
+| `ignore` | `{word}` | null; `ISpellChecker::Ignore` on every checker |
 | `settings` | none | `{autocorrect: false, replacement: false, replacements: {}}` |
 
 The handler calls `settingsChanged` on Flutter when `SpellCheckerChanged`
 fires. That event can come on any thread, so the handler passes it through
-a message-only window to the platform thread.
+a message-only window to the platform thread, once however many checkers
+fired. The events in the second after the app's own `learn` or `ignore` are
+dropped, as the editor checks again after those by itself; the Mac doesn't
+send them either.
 
-`check` uses `ISpellChecker::Check`. Each `ISpellingError` gives the word's
-start and length; `CORRECTIVE_ACTION_GET_SUGGESTIONS` takes its guesses from
+`check` uses `ISpellChecker::Check` on every checker and keeps the words
+they all flag (overlapping counts, as languages can split a word
+differently). Each `ISpellingError` gives the word's start and length; `CORRECTIVE_ACTION_GET_SUGGESTIONS` takes its guesses from
 `Suggest`, `CORRECTIVE_ACTION_REPLACE` puts the replacement first.
 `CORRECTIVE_ACTION_DELETE` (a repeated word, "the the") is left out, as the
 Mac checks spelling only.
 
 ## Not possible yet
 
-- More than one language at a time: the Mac detects the language per
-  paragraph; Windows checks in one.
+- Picking up a language added in Settings while the app runs: the
+  languages are read once, on the first check.
 - Grammar: `ISpellChecker` checks spelling only.
-- Windows' own context menu with Add to dictionary: Homeric draws its own
-  menu, with the Mac's words.
+- Windows' own context menu: Homeric draws its own menu, with Windows'
+  words for the spelling rows.

@@ -26,6 +26,8 @@ import 'package:flutter/widgets.dart' show SingleActivator;
 
 import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
+import '../model/attributes.dart';
+import '../model/block.dart';
 import '../model/position.dart';
 import '../model/selection.dart';
 import '../transform/builders.dart';
@@ -168,6 +170,7 @@ final class HomericTypedPairs extends HomericWritingFeature {
           controller,
           selection.head + marker.length,
           controller.documentRevision,
+          typed,
         );
         return controller.setSelection(
           HomericSelection.collapsed(selection.head + marker.length),
@@ -180,7 +183,9 @@ final class HomericTypedPairs extends HomericWritingFeature {
       if (stepped != null &&
           identical(stepped.$1, controller) &&
           stepped.$2 == selection.head &&
-          stepped.$3 == controller.documentRevision) {
+          stepped.$3 == controller.documentRevision &&
+          stepped.$4 == typed &&
+          marker.length == 2) {
         _stepped = null;
         return HomericCommandInterception.rejected(#typedPairsStepped);
       }
@@ -190,12 +195,24 @@ final class HomericTypedPairs extends HomericWritingFeature {
       // undo takes back only the closing marker.
       final Transaction typedTx;
       final Transaction closeTx;
+      // The attributes the key would have typed with, for both, so a pair
+      // opened in an italic run stays italic.
+      final attributes =
+          edits?.single.attributes ?? _typingAttributes(at.block, at.offset);
       try {
         typedTx = Transaction(document)
-          ..insertText(document.positionAt(at.blockIndex, at.offset), typed);
+          ..insertText(
+            document.positionAt(at.blockIndex, at.offset),
+            typed,
+            attributes: attributes,
+          );
         final next = typedTx.finish().doc;
         closeTx = Transaction(next)
-          ..insertText(next.positionAt(at.blockIndex, at.offset + 1), marker);
+          ..insertText(
+            next.positionAt(at.blockIndex, at.offset + 1),
+            marker,
+            attributes: attributes,
+          );
       } on ArgumentError {
         return HomericCommandInterception.ignored;
       }
@@ -254,7 +271,23 @@ final class HomericTypedPairs extends HomericWritingFeature {
   }
 }
 
-(HomericEditorController, int, int)? _stepped;
+(HomericEditorController, int, int, String)? _stepped;
+
+/// The attributes a key typed at [offset] in [block] takes: those of the
+/// letter before it, or at a block's start the letter after, as the
+/// controller types.
+Attributes _typingAttributes(Block block, int offset) {
+  if (block.runs.isEmpty) return emptyAttributes;
+  final probe =
+      offset > 0 ? offset - 1 : (offset < block.contentLength ? offset : 0);
+  var start = 0;
+  for (final run in block.runs) {
+    final next = start + run.length;
+    if (!run.isEmpty && probe >= start && probe < next) return run.attributes;
+    start = next;
+  }
+  return block.runs.last.attributes;
+}
 
 /// What may stand before a mark's opening: a space or an opening bracket,
 /// quote or dash.

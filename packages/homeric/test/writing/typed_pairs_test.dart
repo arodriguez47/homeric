@@ -121,6 +121,31 @@ void main() {
     expect(caretOf(controller), 7);
   });
 
+  test('only the stepped marker\'s own second half is swallowed', () async {
+    final controller = controllerFor('');
+    await type(controller, '**bold*=');
+    expect(textOf(controller), '**bold**=');
+  });
+
+  test('a pair opened in an italic run keeps the italic', () async {
+    final document = Document([
+      Block(id: 'b', type: 'paragraph', runs: [
+        InlineRun('so ', attributes: const {'italic': true}),
+      ]),
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 3)),
+    );
+    addTearDown(controller.dispose);
+    addTearDown(const HomericTypedPairs().installOn(controller));
+    await type(controller, '**a');
+    expect(textOf(controller), 'so **a**');
+    for (final run in controller.document.blocks.single.runs) {
+      expect(run.attributes['italic'], isTrue, reason: run.text);
+    }
+  });
+
   test('the standard kit carries it before the indent', () {
     final ids = [for (final f in HomericWritingKit.standardFeatures) f.id];
     expect(ids.indexOf('typedPairs'), lessThan(ids.indexOf('blockIndent')));

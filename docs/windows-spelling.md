@@ -39,8 +39,9 @@ language of each keyboard layout (a language added for typing without its
 display pack still counts), then the
 regional format (Settings › Time & language › Region), then US English. The
 regional format comes after the languages because many people set it only
-for dates and money: an English writer with Spanish formats gets English,
-and Spanish too only if Spanish is one of their languages. One checker
+for dates and money. It still adds a checker when Windows has a dictionary
+for it: an English writer with Spanish formats gets English and Spanish,
+so a word spelled right in Spanish isn't squiggled. One checker
 covers each language (`en-GB` and `en-US` are one), up to four. If none of
 them can be checked, the handler uses any language Windows has a dictionary
 for. Windows installs a dictionary with each language pack.

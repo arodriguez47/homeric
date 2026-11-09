@@ -53,6 +53,19 @@ void main() {
       expect(homericHeadingSection(doc, 'e'), {'h1b', 'e'});
     });
 
+    test('ATX headings typed in the text count too', () {
+      final typed = Document([
+        _p('x', 'Intro'),
+        _p('m', '## Mission'),
+        _p('y', 'A home for clear thinking.'),
+        _p('t', '## Things missing'),
+        _p('z', '- [ ] An undo button.'),
+        _p('q', '#hashtag is not a heading'),
+      ]);
+      expect(homericHeadingSection(typed, 'y'), {'m', 'y'});
+      expect(homericHeadingSection(typed, 'z'), {'t', 'z', 'q'});
+    });
+
     test('an unknown block has no section', () {
       expect(homericHeadingSection(doc, 'nope'), isEmpty);
     });

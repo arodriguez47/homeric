@@ -56,18 +56,23 @@ typedef HomericFocusSectionResolver = Set<String> Function(
 
 /// The default [HomericFocusSectionResolver]: a heading is a block whose
 /// type is `heading`, its level the numeric `level` attribute (1 when
-/// missing). The section runs from the nearest heading at or above
+/// missing), or a block whose text opens with an ATX mark (`## `, as the
+/// shared syntax draws it), its level the number of `#`. The section runs from the nearest heading at or above
 /// [blockId] down to, not including, the next heading of the same or a
 /// higher level. Above the first heading, the section is everything
 /// before it.
+final RegExp _atxHeading = RegExp(r'^(#{1,6}) ');
+
 Set<String> homericHeadingSection(Document document, String blockId) {
   final blocks = document.blocks;
   final index = document.indexOfBlockId(blockId);
   if (index == null) return const <String>{};
   int? levelOf(Block block) {
-    if (block.type != 'heading') return null;
-    final level = block.attributes['level'];
-    return level is num ? level.toInt().clamp(1, 6) : 1;
+    if (block.type == 'heading') {
+      final level = block.attributes['level'];
+      return level is num ? level.toInt().clamp(1, 6) : 1;
+    }
+    return _atxHeading.firstMatch(block.text)?.group(1)!.length;
   }
 
   var start = index;

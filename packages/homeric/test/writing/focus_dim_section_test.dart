@@ -139,4 +139,43 @@ void main() {
     expect(dimmed('e'), isFalse);
     expect(dimmed('c'), isTrue);
   });
+
+  testWidgets('a second editor gets its own section, not the first one\'s', (
+    tester,
+  ) async {
+    final other = Document([
+      _h('x1', 'Other', 1),
+      _p('x', 'Under other.'),
+      _h('y1', 'Elsewhere', 1),
+      _p('y', 'Under elsewhere.'),
+    ]);
+    // Same revision (0) and the same caret offset in both.
+    final first = HomericEditorController(
+      document: doc,
+      selection: HomericSelection.collapsed(doc.positionAt(0, 1)),
+    );
+    final second = HomericEditorController(
+      document: other,
+      selection: HomericSelection.collapsed(other.positionAt(0, 1)),
+    );
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+    final controller = HomericFocusDimController(
+      vsync: const TestVSync(),
+      initialGranularity: HomericFocusGranularity.section,
+    );
+    addTearDown(controller.dispose);
+    bool dimmed(HomericEditorController editor, String id) => controller
+        .paintLayersFor(
+          block: editor.document.blocks[editor.document.indexOfBlockId(id)!],
+          editor: editor,
+          foregroundColor: ink,
+          backgroundColor: paper,
+        )
+        .isNotEmpty;
+    expect(dimmed(first, 'intro'), isFalse);
+    expect(dimmed(second, 'x1'), isFalse);
+    expect(dimmed(second, 'x'), isFalse);
+    expect(dimmed(second, 'y'), isTrue);
+  });
 }

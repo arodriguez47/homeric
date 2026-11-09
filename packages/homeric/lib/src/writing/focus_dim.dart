@@ -54,15 +54,15 @@ typedef HomericFocusSectionResolver = Set<String> Function(
   String blockId,
 );
 
+final RegExp _atxHeading = RegExp(r'^(#{1,6}) ');
+
 /// The default [HomericFocusSectionResolver]: a heading is a block whose
 /// type is `heading`, its level the numeric `level` attribute (1 when
 /// missing), or a block whose text opens with an ATX mark (`## `, as the
-/// shared syntax draws it), its level the number of `#`. The section runs from the nearest heading at or above
-/// [blockId] down to, not including, the next heading of the same or a
-/// higher level. Above the first heading, the section is everything
-/// before it.
-final RegExp _atxHeading = RegExp(r'^(#{1,6}) ');
-
+/// shared syntax draws it), its level the number of `#`. The section runs
+/// from the nearest heading at or above [blockId] down to, not including,
+/// the next heading of the same or a higher level. Above the first heading,
+/// the section is everything before it.
 Set<String> homericHeadingSection(Document document, String blockId) {
   final blocks = document.blocks;
   final index = document.indexOfBlockId(blockId);
@@ -136,7 +136,12 @@ final class HomericFocusDimController extends ChangeNotifier {
 
   /// The section last resolved, for the document revision and selection
   /// it was resolved at: every row asks while painting.
-  ({int revision, HomericSelection? selection, Set<String> ids})? _section;
+  ({
+    Document document,
+    int revision,
+    HomericSelection? selection,
+    Set<String> ids,
+  })? _section;
 
   final AnimationController _animation;
   final Map<String, _HomericLineWitness> _lineWitnesses =
@@ -394,7 +399,10 @@ final class HomericFocusDimController extends ChangeNotifier {
   Set<String> _sectionIds(HomericEditorController editor) {
     final selection = editor.selection;
     final cached = _section;
+    // Another editor's revisions count from zero too: the document itself
+    // keeps one editor's section from answering for another's.
     if (cached != null &&
+        identical(cached.document, editor.document) &&
         cached.revision == editor.documentRevision &&
         cached.selection == selection) {
       return cached.ids;
@@ -416,6 +424,7 @@ final class HomericFocusDimController extends ChangeNotifier {
     }
     final ids = caret == null ? const <String>{} : sectionOf(document, caret);
     _section = (
+      document: document,
       revision: editor.documentRevision,
       selection: selection,
       ids: ids,

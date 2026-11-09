@@ -163,6 +163,26 @@ void main() {
     expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
+  testWidgets('the touch edit menu leaves the keyboard with the text',
+      (tester) async {
+    // A hardware keyboard's Tab after tapping the caret went to the menu's
+    // buttons instead of the editor's indent binding.
+    const text = 'alpha beta';
+    await pumpParagraph(tester, text: text, caret: 0);
+    final focused = FocusManager.instance.primaryFocus;
+
+    await touchTap(tester, caretPoint(tester, text, 0));
+    await tester.pump();
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    expect(FocusManager.instance.primaryFocus, same(focused));
+    expect(
+      HomericEditableParagraph.isSelectionMenuFocus(
+        FocusManager.instance.primaryFocus,
+      ),
+      isFalse,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('a touch double tap selects the word and opens the menu',
       (tester) async {
     const text = 'alpha beta';

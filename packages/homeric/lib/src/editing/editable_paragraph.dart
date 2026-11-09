@@ -2649,6 +2649,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         // click never activates it.
         return TextFieldTapRegion(
           child: _HomericContextMenuFocusScope(
+            // A touch toolbar leaves the keyboard with the text, so a
+            // hardware keyboard's Tab still indents rather than walking the
+            // toolbar's buttons.
+            takesFocus: desktop,
             canFocus: () =>
                 mounted && menu.isShown && _isMenuWitnessCurrent(witness),
             onStale: _dismissContextMenu,
@@ -4214,11 +4218,14 @@ class _RenderYieldToInteractiveSlots extends RenderProxyBox {
 
 class _HomericContextMenuFocusScope extends StatefulWidget {
   const _HomericContextMenuFocusScope({
+    required this.takesFocus,
     required this.canFocus,
     required this.onStale,
     required this.child,
   });
 
+  /// Whether the menu moves keyboard focus to its first item.
+  final bool takesFocus;
   final bool Function() canFocus;
   final VoidCallback onStale;
   final Widget child;
@@ -4247,7 +4254,7 @@ class _HomericContextMenuFocusScopeState
         widget.onStale();
         return;
       }
-      _scope.nextFocus();
+      if (widget.takesFocus) _scope.nextFocus();
     });
   }
 

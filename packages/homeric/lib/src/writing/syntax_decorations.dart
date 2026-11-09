@@ -211,9 +211,11 @@ final class HomericSyntax {
   ///
   /// A `[[link]]`, `{{annotation}}`, `++aside++` or `~~strike~~` holding
   /// [caret] (a caret offset in this block), or just after it, shows its
-  /// whole source so it can be edited. [noteMarkers] puts the small mark
-  /// after an annotated passage; off when its note is shown as a sidenote
-  /// instead.
+  /// whole source so it can be edited. So do `**bold**`, `*italic*`,
+  /// `` `code` `` and `==highlight==`: both delimiters at once, from just
+  /// before the opening one to just before the closing one ends.
+  /// [noteMarkers] puts the small mark after an annotated passage; off
+  /// when its note is shown as a sidenote instead.
   ///
   /// With [dropCap], a `^^` initial is sunk into the first two lines
   /// instead of raised above the first. [indentFilter] and [indentTypes]
@@ -257,8 +259,8 @@ final class HomericSyntax {
     final rest = <Decoration>[
       if (markdown) ...[
         ..._attributeMarkDecorations(block),
-        ..._markdownBlockDecorations(block),
-        ..._markdownMarkDecorations(block),
+        ..._markdownBlockDecorations(block, caret: caret),
+        ..._markdownMarkDecorations(block, caret: caret),
         ..._listMarkDecorations(
           block,
           glyphs: listGlyphs,
@@ -986,8 +988,20 @@ Iterable<Decoration> _tagMarkDecorations(Block block) sync* {
   }
 }
 
+/// Whether [caret] is in a paired mark's span `[start, end)`, so both its
+/// delimiters show at once: the writer sees where the mark starts and
+/// ends, and a caret just inside the opening `**` never looks as if it
+/// stood at the line's start. A caret just after the closing delimiter is
+/// out of the mark, so a mark folds the moment it is closed and Backspace
+/// there takes its last letter ([HomericMarkDeletes]).
+bool _showsPair(int? caret, int start, int end) =>
+    caret != null && caret >= start && caret < end;
+
 /// ATX headings, blockquotes, `==highlight==`.
-Iterable<Decoration> _markdownBlockDecorations(Block block) sync* {
+Iterable<Decoration> _markdownBlockDecorations(
+  Block block, {
+  int? caret,
+}) sync* {
   final text = block.text;
 
   final headingMatch = RegExp(r'^(#{1,6}) ').firstMatch(text);
@@ -1022,8 +1036,10 @@ Iterable<Decoration> _markdownBlockDecorations(Block block) sync* {
   }
 
   for (final m in RegExp(r'==(.+?)==').allMatches(text)) {
-    yield markdownMarkHideReplacement(block.id, m.start, m.start + 2);
-    yield markdownMarkHideReplacement(block.id, m.end - 2, m.end);
+    if (!_showsPair(caret, m.start, m.end)) {
+      yield markdownMarkHideReplacement(block.id, m.start, m.start + 2);
+      yield markdownMarkHideReplacement(block.id, m.end - 2, m.end);
+    }
     yield Decoration.inline(
       block.id,
       m.start + 2,
@@ -1094,12 +1110,14 @@ Iterable<Decoration> _attributeMarkDecorations(Block block) sync* {
 }
 
 /// `**bold**`, `*italic*`, `` `code` `` — hide delimiters + style content.
-Iterable<Decoration> _markdownMarkDecorations(Block block) sync* {
+Iterable<Decoration> _markdownMarkDecorations(Block block, {int? caret}) sync* {
   final text = block.text;
   // Bold **...**
   for (final m in RegExp(r'\*\*(.+?)\*\*').allMatches(text)) {
-    yield markdownMarkHideReplacement(block.id, m.start, m.start + 2);
-    yield markdownMarkHideReplacement(block.id, m.end - 2, m.end);
+    if (!_showsPair(caret, m.start, m.end)) {
+      yield markdownMarkHideReplacement(block.id, m.start, m.start + 2);
+      yield markdownMarkHideReplacement(block.id, m.end - 2, m.end);
+    }
     yield Decoration.inline(
       block.id,
       m.start + 2,
@@ -1111,8 +1129,10 @@ Iterable<Decoration> _markdownMarkDecorations(Block block) sync* {
   for (final m in RegExp(
     r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)',
   ).allMatches(text)) {
-    yield markdownMarkHideReplacement(block.id, m.start, m.start + 1);
-    yield markdownMarkHideReplacement(block.id, m.end - 1, m.end);
+    if (!_showsPair(caret, m.start, m.end)) {
+      yield markdownMarkHideReplacement(block.id, m.start, m.start + 1);
+      yield markdownMarkHideReplacement(block.id, m.end - 1, m.end);
+    }
     yield Decoration.inline(
       block.id,
       m.start + 1,
@@ -1122,8 +1142,10 @@ Iterable<Decoration> _markdownMarkDecorations(Block block) sync* {
   }
   // Code `...`
   for (final m in RegExp(r'`([^`]+)`').allMatches(text)) {
-    yield markdownMarkHideReplacement(block.id, m.start, m.start + 1);
-    yield markdownMarkHideReplacement(block.id, m.end - 1, m.end);
+    if (!_showsPair(caret, m.start, m.end)) {
+      yield markdownMarkHideReplacement(block.id, m.start, m.start + 1);
+      yield markdownMarkHideReplacement(block.id, m.end - 1, m.end);
+    }
     yield Decoration.inline(
       block.id,
       m.start + 1,

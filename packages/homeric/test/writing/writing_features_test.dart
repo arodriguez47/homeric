@@ -114,7 +114,8 @@ void main() {
       }
       expect(
         HomericWritingKit.standard(
-            without: const {'wrapShortcuts', 'blockIndent'}).commandBindings,
+                without: const {'wrapShortcuts', 'blockIndent', 'typedPairs'})
+            .commandBindings,
         isEmpty,
       );
     });

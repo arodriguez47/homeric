@@ -6,7 +6,8 @@
 ///
 /// - Typing rules, installed on a controller by a [HomericWritingKit]:
 ///   [HomericSmartPunctuation], [HomericWrapShortcuts] (⌘B ⌘I ⌘E ⌘⇧S),
-///   [HomericTypedWraps] (a typed `{`, `[`, `=`… wraps the selection),
+///   [HomericTypedWraps] (a typed `{`, `[`, `=`… wraps the selection; an
+///   `@` can make it a mention, for a host's `@` menu),
 ///   [HomericFootnotePunctuation], keyboard-only list nesting
 ///   [HomericListNesting], indenting paragraphs and list lines alike
 ///   [HomericBlockIndent] (Tab, Shift-Tab) and the soft word cap

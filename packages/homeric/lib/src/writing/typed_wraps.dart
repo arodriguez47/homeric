@@ -13,12 +13,25 @@
 /// it with [HomericLinkQuery.at]'s `wrappedAt`). A host with its own note
 /// composer turns the slot off and answers [HomericTypedWraps.onWrapped].
 ///
+/// For a host with an `@` menu, `@` can make the words a mention
+/// ([HomericTypedWraps.mentionSelection], off by default): `@words|` with
+/// the caret after them, no longer selected, so [HomericMentionQuery.at]
+/// reads exactly those words as the name and the menu opens on them (pick
+/// a hub to link, or make one by that name). Spaces at either end of the selection, and
+/// sentence punctuation (`.,;:!?`) at its end, stay outside the mention.
+/// Words that can't all be one mention replace as typed: across a line
+/// break, holding punctuation that ends a mention (`Julien, Sorel`), a
+/// bracket or a closing quote, starting inside a word or with an `@`
+/// already, inside or around a `[[link]]`, or in a code block.
+/// Backspace straight after takes the `@` back and selects the words again.
+///
 /// Only plain typing wraps: a character an input method is still composing
 /// (a dead key's `"`, `'`, `` ` ``, `^` or `~` on US-International) replaces
 /// the selection as it always has, since the platform owns that text until
 /// it commits.
 library;
 
+import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -28,6 +41,8 @@ import '../model/position.dart';
 import '../model/selection.dart';
 import '../transform/builders.dart';
 import '../transform/transaction.dart';
+import 'mentions.dart';
+import 'wiki_links.dart';
 import 'writing_feature.dart';
 
 /// The marker one typed character wraps a selection in.
@@ -64,11 +79,12 @@ final class HomericTypedWrap {
   /// The block the words are in.
   final String blockId;
 
-  /// The character typed (`{`, `[`, `=`…).
+  /// The character typed (`{`, `[`, `=`…, or `@` for a mention, which
+  /// writes only the `@` before the words: [end] is [innerEnd]).
   final String typed;
 
   /// How many layers of it now sit around the words; 0 when the press
-  /// took the wrap off.
+  /// took the wrap off. Always 1 for `@`.
   final int depth;
 
   /// Block-local start of the first marker.
@@ -110,6 +126,7 @@ final class HomericTypedWraps extends HomericWritingFeature {
     this.pairs = standardPairs,
     this.annotationNoteSlot = true,
     this.linkAlias = true,
+    this.mentionSelection = false,
     this.curlyQuotes,
     this.isActive,
     this.onWrapped,
@@ -144,6 +161,12 @@ final class HomericTypedWraps extends HomericWritingFeature {
   /// selected.
   final bool linkAlias;
 
+  /// Whether `@` typed over selected words writes `@words` with the caret
+  /// after them, so a host's `@` menu ([HomericMentionQuery.at]) opens on
+  /// them. Off (the default, for hosts with no `@` menu), `@` replaces the
+  /// selection as typed.
+  final bool mentionSelection;
+
   /// Read on each quote; false writes straight quotes. Null is curly, as
   /// smart punctuation types them. Code always gets straight quotes.
   final ValueGetter<bool>? curlyQuotes;
@@ -152,7 +175,8 @@ final class HomericTypedWraps extends HomericWritingFeature {
   final ValueGetter<bool>? isActive;
 
   /// Hears each wrap after the frame that lays it out, so a host can open
-  /// its note composer on `{{` or place a menu.
+  /// its note composer on `{{` or place a menu, or know that an `@`
+  /// mention's name is words the writer had selected.
   final ValueChanged<HomericTypedWrap>? onWrapped;
 
   @override
@@ -245,6 +269,12 @@ final class HomericTypedWrapsSession {
       return null;
     }
     final typed = result[start];
+    if (typed == '@' &&
+        feature.mentionSelection &&
+        result == text.replaceRange(start, end, typed)) {
+      return _prepareMention(
+          document, selection, anchor.blockIndex, start, end);
+    }
     final pair = feature.pairs[typed];
     if (pair == null || result != text.replaceRange(start, end, typed)) {
       return null;
@@ -485,6 +515,105 @@ final class HomericTypedWrapsSession {
     );
   }
 
+  /// `@` typed over `[start, end)`: `@` before the words, the caret after
+  /// them, when the words read as one mention there; null to type over
+  /// them as usual.
+  HomericPreparedCommand? _prepareMention(
+    Document document,
+    HomericSelection selection,
+    int index,
+    int start,
+    int end,
+  ) {
+    final block = document.blocks[index];
+    if (block.type == 'code') return null;
+    final text = block.text;
+    // Spaces either side, and the sentence's punctuation after the words,
+    // aren't the name.
+    var from = start;
+    var to = end;
+    while (from < to && _isSpace(text[from])) {
+      from++;
+    }
+    while (to > from &&
+        (_isSpace(text[to - 1]) || _closesSentence.contains(text[to - 1]))) {
+      to--;
+    }
+    if (from == to || text[from] == '@') return null;
+    // An @ inside a link breaks it; one around a link isn't a name.
+    for (final link in HomericWikiLinks.allMatches(text)) {
+      if (link.start < to && from < link.end) return null;
+    }
+    // The words must be the whole mention, as it reads with the @ typed:
+    // the @ starting a word, nothing in them that ends a mention early.
+    final caret = to + 1;
+    final query = HomericMentionQuery.at(
+      block.id,
+      text.replaceRange(from, from, '@'),
+      caret,
+    );
+    if (query == null || query.start != from || query.name.isEmpty) {
+      return null;
+    }
+    final transaction = Transaction(document);
+    try {
+      // Only the @ goes in, so the words keep their runs and anchors.
+      transaction.insertText(document.positionAt(index, from), '@');
+    } on ArgumentError {
+      return null;
+    } on StepFailedError {
+      return null;
+    }
+    final after = transaction.doc;
+    final selected = HomericSelection.collapsed(
+      after.positionAt(index, caret),
+      affinity: selection.affinity,
+    );
+    final words = text.substring(from, to);
+    _last = _LastWrap(
+      document: after,
+      blockId: block.id,
+      selection: selected,
+      start: from,
+      end: caret,
+      original: words,
+      leading: 0,
+      originalWords: words,
+      wordsAt: from + 1,
+      forward: selection.head >= selection.anchor,
+      affinity: selection.affinity,
+      selectedStart: start,
+      selectedEnd: end,
+    );
+    final callback = feature.onWrapped;
+    if (callback != null) {
+      final report = HomericTypedWrap(
+        blockId: block.id,
+        typed: '@',
+        depth: 1,
+        start: from,
+        end: caret,
+        innerStart: from + 1,
+        innerEnd: caret,
+      );
+      SchedulerBinding.instance
+        ..addPostFrameCallback((_) {
+          if (identical(controller.document, after)) callback(report);
+        })
+        ..ensureVisualUpdate();
+    }
+    return HomericPreparedCommand(
+      stages: <Transaction>[transaction],
+      selection: selected,
+    );
+  }
+
+  static bool _isSpace(String char) => char.trim().isEmpty;
+
+  /// Punctuation that ends a sentence or clause, left out of a mention made
+  /// of selected words (`Sorel.` mentions `Sorel`).
+  static const _closesSentence = '.,;:!?';
+
   /// Backspace (or Delete) straight after a wrap takes back every wrap typed
   /// in that run and selects the words again.
   HomericPreparedCommand? _revert(
@@ -518,8 +647,8 @@ final class HomericTypedWrapsSession {
       return null;
     }
     final reverted = transaction.doc;
-    final from = last.start + last.leading;
-    final to = from + last.originalWords.length;
+    final from = last.selectedStart ?? last.start + last.leading;
+    final to = last.selectedEnd ?? from + last.originalWords.length;
     return HomericPreparedCommand(
       stages: <Transaction>[transaction],
       selection: HomericSelection(
@@ -532,7 +661,8 @@ final class HomericTypedWrapsSession {
 
   /// Whether going from [text] to [result] deletes what a Backspace or
   /// Delete would at the selection `[start, end)`: the selected words, or
-  /// one character beside a caret.
+  /// one character beside a caret: a whole grapheme, so a name ending in
+  /// an emoji or a decomposed accent (`Jose\u0301`) counts too.
   static bool _deletesAtSelection(
     String text,
     String result,
@@ -540,12 +670,15 @@ final class HomericTypedWrapsSession {
     int end,
   ) {
     if (start != end) return result == text.replaceRange(start, end, '');
-    if (result.length >= text.length) return false;
-    final before =
-        start > 0 && result == text.replaceRange(start - 1, start, '');
-    final after = start < text.length &&
-        result == text.replaceRange(start, start + 1, '');
-    return before || after;
+    final removed = text.length - result.length;
+    if (removed <= 0) return false;
+    bool oneGrapheme(int from, int to) =>
+        from >= 0 &&
+        to <= text.length &&
+        result == text.replaceRange(from, to, '') &&
+        text.substring(from, to).characters.length == 1;
+    return oneGrapheme(start - removed, start) ||
+        oneGrapheme(start, start + removed);
   }
 
   /// How many layers of [pair] already sit right around `[start, end)` of
@@ -585,6 +718,8 @@ final class _LastWrap {
     required this.wordsAt,
     required this.forward,
     required this.affinity,
+    this.selectedStart,
+    this.selectedEnd,
   });
 
   /// The document right after the wrap.
@@ -612,4 +747,10 @@ final class _LastWrap {
 
   final bool forward;
   final HomericCaretAffinity affinity;
+
+  /// The selection to give back, block-local, when it was more than the
+  /// words (a mention leaves out the spaces around them); null selects the
+  /// words.
+  final int? selectedStart;
+  final int? selectedEnd;
 }

@@ -422,6 +422,22 @@ void main() {
       expect(selected(controller), (4, 16));
     });
 
+    test('Backspace puts back a name that ends in a wide character', () {
+      for (final name in const ['Jose\u0301', 'Rouge 🌹']) {
+        final text = 'see $name here';
+        final controller = controllerFor(
+          text,
+          4,
+          4 + name.length,
+          feature: mentions,
+        );
+        controller.replaceSelection('@');
+        expect(controller.deleteBackward(), isTrue, reason: name);
+        expect(textOf(controller), text, reason: name);
+        expect(selected(controller), (4, 4 + name.length), reason: name);
+      }
+    });
+
     test('Backspace gives back the selection as it was made', () {
       final controller =
           controllerFor('see  Julien Sorel. Then', 19, 4, feature: mentions);

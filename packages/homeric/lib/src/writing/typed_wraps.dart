@@ -31,6 +31,7 @@
 /// it commits.
 library;
 
+import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -660,7 +661,8 @@ final class HomericTypedWrapsSession {
 
   /// Whether going from [text] to [result] deletes what a Backspace or
   /// Delete would at the selection `[start, end)`: the selected words, or
-  /// one character beside a caret.
+  /// one character beside a caret: a whole grapheme, so a name ending in
+  /// an emoji or a decomposed accent (`Jose\u0301`) counts too.
   static bool _deletesAtSelection(
     String text,
     String result,
@@ -668,12 +670,15 @@ final class HomericTypedWrapsSession {
     int end,
   ) {
     if (start != end) return result == text.replaceRange(start, end, '');
-    if (result.length >= text.length) return false;
-    final before =
-        start > 0 && result == text.replaceRange(start - 1, start, '');
-    final after = start < text.length &&
-        result == text.replaceRange(start, start + 1, '');
-    return before || after;
+    final removed = text.length - result.length;
+    if (removed <= 0) return false;
+    bool oneGrapheme(int from, int to) =>
+        from >= 0 &&
+        to <= text.length &&
+        result == text.replaceRange(from, to, '') &&
+        text.substring(from, to).characters.length == 1;
+    return oneGrapheme(start - removed, start) ||
+        oneGrapheme(start, start + removed);
   }
 
   /// How many layers of [pair] already sit right around `[start, end)` of

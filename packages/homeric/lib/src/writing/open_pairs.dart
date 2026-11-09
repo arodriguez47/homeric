@@ -9,6 +9,11 @@
 /// - a pair still empty when the caret leaves it is taken out again, so
 ///   no stray `****` is left in the text. When opening it was the last
 ///   change, the removal undoes it, leaving nothing in the history.
+///
+/// A pair typed by hand (`**` closed for the writer by [HomericTypedPairs])
+/// is followed the same way, except that left empty only the closing marker
+/// it added goes: the opening the writer typed stays. Tab steps out of
+/// either kind ([stepOut]).
 library;
 
 import 'dart:async';
@@ -76,6 +81,49 @@ final class HomericOpenPairs {
       }
     }
     return _open(marker, caret!);
+  }
+
+  /// Steps the caret out past the closing marker of the innermost mark
+  /// holding it. Returns whether it moved.
+  bool stepOut() {
+    final caret = _controller.selection;
+    if (caret == null || !caret.isCollapsed) return false;
+    _OpenPair? inner;
+    for (final pair in _pairs) {
+      if (!pair.holds(caret)) continue;
+      if (inner == null ||
+          pair.close - pair.inner < inner.close - inner.inner) {
+        inner = pair;
+      }
+    }
+    if (inner == null) return false;
+    return _controller.setSelection(
+      HomericSelection.collapsed(inner.close + inner.marker.length),
+    );
+  }
+
+  /// The open mark whose closing [marker] starts at [caret], if any.
+  ({int inner, int close})? closingAt(HomericSelection? caret, String marker) {
+    if (caret == null || !caret.isCollapsed) return null;
+    for (final pair in _pairs.reversed) {
+      if (pair.marker == marker && pair.close == caret.head) {
+        return (inner: pair.inner, close: pair.close);
+      }
+    }
+    return null;
+  }
+
+  /// Follows a [marker] pair typed by hand whose words start at global
+  /// position [inner] and whose closing marker (added for the writer)
+  /// starts at [close]. Left empty, only that closing marker goes.
+  void followTyped(String marker, {required int inner, required int close}) {
+    _pairs.add(_OpenPair(
+      marker: marker,
+      inner: inner,
+      close: close,
+      openedAt: _controller.documentRevision,
+      typed: true,
+    ));
   }
 
   bool _open(String marker, HomericSelection caret) {
@@ -149,6 +197,17 @@ final class HomericOpenPairs {
       }
     }
     if (empty.isEmpty || _controller.isReadOnly) return;
+    // A pair typed by hand keeps the opening the writer typed; only the
+    // closing marker added for them goes.
+    final typed = [
+      for (final pair in empty)
+        if (pair.typed) pair,
+    ];
+    if (typed.isNotEmpty) {
+      empty.removeWhere(typed.contains);
+      _removeClosings(typed, caret);
+      if (empty.isEmpty) return;
+    }
     // Only the pair just opened, left untouched: undoing its opening takes
     // it out without a step to undo, and the caret goes where it was put.
     if (empty.length == 1 &&
@@ -178,6 +237,23 @@ final class HomericOpenPairs {
       }
     }
     _removeMarkers(empty, caret);
+  }
+
+  void _removeClosings(List<_OpenPair> typed, HomericSelection? caret) {
+    try {
+      final tx = Transaction(_controller.document);
+      final closings = [for (final pair in typed) pair]
+        ..sort((a, b) => b.close.compareTo(a.close));
+      for (final pair in closings) {
+        tx.deleteRange(pair.close, pair.close + pair.marker.length);
+      }
+      _controller.applyPreparedCommand(HomericPreparedCommand(
+        stages: <Transaction>[tx],
+        selection: caret?.map(tx.mapping),
+      ));
+    } on ArgumentError {
+      // The text moved on under the pair; leave it be.
+    }
   }
 
   void _removeMarkers(List<_OpenPair> empty, HomericSelection? caret) {
@@ -219,9 +295,13 @@ final class _OpenPair {
     required this.inner,
     required this.close,
     required this.openedAt,
+    this.typed = false,
   });
 
   final String marker;
+
+  /// Typed by hand: only the closing marker was added for the writer.
+  final bool typed;
 
   /// Global position just after the opening marker.
   int inner;

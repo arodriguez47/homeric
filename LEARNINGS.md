@@ -1488,3 +1488,24 @@ revokes it. Tests: `iOS handle drag outlives a relayout that moves nothing`,
 moved; compare shapes before revoking gesture state. Payloads on widget slots
 need value equality, and a host's idle note should not relayout: watch
 `layoutGeneration` across idle pumps when a view animates.
+
+## engineer — 2026-11-09 — A caret beside a hidden delimiter has two places
+
+**What:** In Sprintnotes, with `**Every**` opening a paragraph and its marks
+folded, a caret just after the hidden `**` drew at the line's start. Backspace
+there did nothing (`HomericMarkDeletes` stepped over the folded `**`, found the
+block's edge and swallowed the key), where the eye expected the paragraph to
+join the one above. Markdown marks revealed only the delimiter holding the
+caret, half-open, so offsets 0 and 2 drew in the same place with different
+meanings.
+
+**Fix:** `HomericSyntax.decorationsFor(caret:)` shows both delimiters of a
+`**bold**`, `*italic*`, `` `code` `` or `==highlight==` while the caret is in
+`[start, end)`, as asides, strikes and annotations already did; just after the
+closing delimiter the mark folds again. `HomericMarkDeletes` joins the blocks
+when only folded marks stand between the caret and the edge (a host that keeps
+marks drawn).
+
+**Rule going forward:** a folded range must never leave two caret offsets that
+draw in one place with different key behaviour. Either reveal it while the
+caret could be on either side, or make every key treat it as absent.

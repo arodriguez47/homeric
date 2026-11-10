@@ -192,10 +192,12 @@ final class DerivedViewText {
 ///   [StyledRange] in view coordinates, clipped to visible text: its start
 ///   maps with `assoc: 1` and its end with `assoc: -1`, so hidden spans at
 ///   the edges are excluded (and replacement content or slots strictly
-///   inside the range stay covered). An inline ending exactly where a
-///   replacement with content ends covers that content, even when a hide
-///   starting there folds into the same view position. Inline ranges may
-///   overlap freely.
+///   inside the range stay covered). An inline that starts at or before
+///   a replacement with content and ends at that replacement's end, or in
+///   the zero-length hides right after it, covers the content, though
+///   those hides fold into the same view span. Content inserted by a
+///   zero-length replace at the inline's end stays outside it. Inline
+///   ranges may overlap freely.
 ///
 /// Throws [ArgumentError] when a decoration belongs to a different block,
 /// lies outside `[0, contentLength]`, or violates the replace contracts
@@ -245,8 +247,10 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
   final triples = <int>[];
   final slots = <ViewSlot>[];
   final textSlots = <ViewTextSlot>[];
-  // The view end of each replacement with content, by its document end.
-  final replacementEnds = <int, int>{};
+  // Each replacement with content over a non-empty range, with the
+  // document end of the fold it begins (its own end, carried across the
+  // hides right after it) and the view end of its content.
+  final contentFolds = <_ContentFold>[];
   var docPos = 0;
 
   // Canonicalization (dropping no-op triples, absorbing adjacent
@@ -283,7 +287,16 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
           buffer.length, buffer.length + replacement.length, replace));
     }
     buffer.write(replacement);
-    if (replacement.isNotEmpty) replacementEnds[replace.end] = buffer.length;
+    if (replacement.isNotEmpty && replace.end > replace.start) {
+      contentFolds.add(_ContentFold(replace.start, replace.end, buffer.length));
+    } else if (replacement.isEmpty &&
+        contentFolds.isNotEmpty &&
+        contentFolds.last.foldEnd == replace.start &&
+        contentFolds.last.viewEnd == buffer.length) {
+      // A hide right after the fold, with no text or widget between,
+      // joins it in the view map.
+      contentFolds.last.foldEnd = replace.end;
+    }
     docPos = replace.end;
     // Widgets strictly inside the replaced span are hidden with it.
     while (wi < widgets.length && widgets[wi].start < replace.end) {
@@ -301,10 +314,14 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
   final styled = <StyledRange>[];
   for (final inline in inlines) {
     final start = viewMap.docToView(inline.start, assoc: 1);
-    // An inline ending with replacement content keeps covering it even
-    // when a hide right after joins the replaced span in the view map.
-    final end =
-        replacementEnds[inline.end] ?? viewMap.docToView(inline.end, assoc: -1);
+    var end = viewMap.docToView(inline.end, assoc: -1);
+    // An inline that covers replacement content and ends in the hides
+    // right after it keeps covering the content, though those hides join
+    // the replaced span in the view map.
+    final fold = _foldEndingAround(contentFolds, inline.end);
+    if (fold != null && inline.start <= fold.start && fold.viewEnd > end) {
+      end = fold.viewEnd;
+    }
     if (end > start) styled.add(StyledRange(start, end, inline));
   }
 
@@ -316,6 +333,41 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
     List<ViewTextSlot>.unmodifiable(textSlots),
     viewMap,
   );
+}
+
+/// A replacement with content over `[start, end)` and the hides right
+/// after it, which the view map folds into one span ending at [foldEnd].
+final class _ContentFold {
+  _ContentFold(this.start, this.end, this.viewEnd) : foldEnd = end;
+
+  final int start;
+  final int end;
+
+  /// The view offset just after the replacement content.
+  final int viewEnd;
+
+  /// The document end of the fold: [end], carried across the zero-length
+  /// hides that follow it with no visible text or widget between.
+  int foldEnd;
+}
+
+/// The fold in [folds] (sorted, disjoint) whose `[end, foldEnd]` holds
+/// [offset], or null.
+_ContentFold? _foldEndingAround(List<_ContentFold> folds, int offset) {
+  var low = 0;
+  var high = folds.length;
+  // The first fold whose foldEnd is at or after offset.
+  while (low < high) {
+    final mid = (low + high) >> 1;
+    if (folds[mid].foldEnd < offset) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  if (low == folds.length) return null;
+  final fold = folds[low];
+  return fold.end <= offset ? fold : null;
 }
 
 /// Resolves the replacement view text for a `replace` decoration,

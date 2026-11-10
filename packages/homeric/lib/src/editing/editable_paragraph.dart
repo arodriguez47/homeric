@@ -4057,7 +4057,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (builder == null || source.textSlots.isEmpty) return const <Widget>[];
     final map = source.viewMap;
     final pieces = <Widget>[];
-    for (final slot in source.textSlots) {
+    for (var ordinal = 0; ordinal < source.textSlots.length; ordinal++) {
+      final slot = source.textSlots[ordinal];
       final decoration = slot.decoration;
       // The words' view range, widened in the document to the folds
       // around it: a hide right after the words joins their span in the
@@ -4080,7 +4081,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         );
         if (child == null) continue;
         pieces.add(Positioned.fromRect(
-          key: ValueKey<Object>(('homeric-text-slot', decoration, index)),
+          // Keyed by place, not by the decoration: a host may build a new
+          // spec each derivation, and Decoration.== compares specs by
+          // identity, so that key would tear the piece down (dropping a
+          // tap in flight and its State) on every rebuild.
+          key: ValueKey<Object>(('homeric-text-slot', ordinal, index)),
           rect: rects[index],
           child: child,
         ));

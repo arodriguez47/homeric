@@ -38,10 +38,13 @@ void main() {
     HomericSpellCheckProvider? spellCheckProvider,
     FocusNode? focusNode,
     int? caret,
+    bool otherBlock = false,
   }) async {
     final controller = HomericEditorController(
       document: Document([
         Block(id: 'b', type: 'paragraph', runs: [InlineRun(_text)]),
+        if (otherBlock)
+          Block(id: 'c', type: 'paragraph', runs: [InlineRun('other')]),
       ]),
       readOnly: readOnly,
     );
@@ -64,6 +67,8 @@ void main() {
             focusNode: focusNode,
             blockId: 'b',
             resolveStyle: (_) => _style,
+            // A new spec each derivation, as a host whose words come from
+            // live data builds them.
             deriveDecorations: (_) => _linkDecorations(words),
             textSlotBuilder: textSlotBuilder,
             spellCheckProvider: spellCheckProvider,
@@ -300,6 +305,48 @@ void main() {
       expect(pieces, isEmpty);
     });
 
+    testWidgets('a tap survives a rebuild between down and up', (tester) async {
+      var taps = 0;
+      final controller = await pump(
+        tester,
+        caret: 0,
+        textSlotBuilder: (_, piece) => tapTarget(piece, () => taps++),
+      );
+      final before = controller.selection;
+
+      final gesture = await tester.startGesture(
+          tester.getCenter(find.byKey(const ValueKey<String>('words-0'))));
+      // The host rebuilds the paragraph (a spelling answer, an autosave),
+      // deriving a new, equal spec for the words.
+      tester.element(find.byType(HomericEditableParagraph)).markNeedsBuild();
+      await tester.pump();
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(taps, 1);
+      expect(controller.selection, before);
+    });
+
+    testWidgets("a piece's State survives typing in another block",
+        (tester) async {
+      _Piece.inits = 0;
+      final controller = await pump(
+        tester,
+        otherBlock: true,
+        textSlotBuilder: (_, piece) => const _Piece(),
+      );
+      expect(_Piece.inits, 1);
+
+      controller.setSelection(HomericSelection.collapsed(
+          controller.globalPositionForBlockOffset('c', 5)));
+      await tester.pump();
+      controller.replaceSelection('x');
+      await tester.pump();
+
+      expect(controller.document.blocks.last.text, 'otherx');
+      expect(_Piece.inits, 1);
+    });
+
     testWidgets('works in a read-only paragraph', (tester) async {
       var taps = 0;
       final controller = await pump(
@@ -328,6 +375,27 @@ final class _TextSlot implements HomericTextSlot {
 
   @override
   int get hashCode => text.hashCode;
+}
+
+/// A text slot piece that counts how often its State is created.
+class _Piece extends StatefulWidget {
+  const _Piece();
+
+  static int inits = 0;
+
+  @override
+  State<_Piece> createState() => _PieceState();
+}
+
+class _PieceState extends State<_Piece> {
+  @override
+  void initState() {
+    super.initState();
+    _Piece.inits++;
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.expand();
 }
 
 final class _FakeSpellProvider implements HomericSpellCheckProvider {

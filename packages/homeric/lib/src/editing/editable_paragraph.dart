@@ -25,6 +25,8 @@ import '../render/paint_layers.dart';
 import '../render/paragraph_geometry.dart';
 import '../render/paragraph_source.dart';
 import '../view/view_map.dart';
+import '../view/view_text.dart'
+    show HomericTextSlot, objectReplacementCharacter;
 import 'context_menu.dart';
 import 'editable_document.dart';
 import 'editor_clipboard.dart';
@@ -38,6 +40,17 @@ import 'system_spelling.dart';
 typedef HomericEditableOverlayBuilder = List<Widget> Function(
   BuildContext context,
   HomericEditableBlockGeometry geometry,
+);
+
+/// Builds the gesture child laid over one line of a text slot's words, or
+/// null for none.
+///
+/// Homeric places the result with [Positioned.fromRect] at [piece]'s rect,
+/// above the selection plane, so an opaque [GestureDetector] there takes
+/// the tap and the caret stays where it was.
+typedef HomericTextSlotBuilder = Widget? Function(
+  BuildContext context,
+  HomericTextSlotPiece piece,
 );
 
 /// Observes one tap after Homeric has arbitrated it against drag and
@@ -191,6 +204,44 @@ final class HomericEditableBlockGeometry {
   }
 }
 
+/// One line of a text slot's words, as offered to a [HomericTextSlotBuilder].
+///
+/// A text slot is a `replace` decoration whose spec is a [HomericTextSlot].
+/// Its words wrap like any other text, so they can fill several lines; the
+/// builder is called once for each of [rects].
+final class HomericTextSlotPiece {
+  const HomericTextSlotPiece._({
+    required this.decoration,
+    required this.rect,
+    required this.rects,
+    required this.index,
+  });
+
+  /// The `replace` decoration drawn as words; its spec is the
+  /// [HomericTextSlot].
+  final Decoration decoration;
+
+  /// The text slot itself, the spec of [decoration].
+  HomericTextSlot get textSlot => decoration.spec! as HomericTextSlot;
+
+  /// The hidden source range the words stand for, in canonical block
+  /// coordinates.
+  BlockTextRange get range => BlockTextRange(decoration.start, decoration.end);
+
+  /// This line's ink rect around the words, paragraph-local.
+  final Rect rect;
+
+  /// The ink rects of all the words, one per line, paragraph-local.
+  final List<Rect> rects;
+
+  /// Which of [rects] this piece is.
+  final int index;
+
+  @override
+  String toString() =>
+      'HomericTextSlotPiece($decoration, #$index of ${rects.length}, $rect)';
+}
+
 /// A directly editable Homeric paragraph backed by canonical editor state.
 ///
 /// This surface is experimental until a real Nexus consumer validates it.
@@ -254,6 +305,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.spellCheckProvider,
     this.spellingColor,
     this.overlayBuilder,
+    this.textSlotBuilder,
     this.onSingleTap,
     this.onHover,
     this.onHoverExit,
@@ -386,6 +438,15 @@ class HomericEditableParagraph extends StatefulWidget {
 
   /// Builds consumer overlays from the current paragraph generation.
   final HomericEditableOverlayBuilder? overlayBuilder;
+
+  /// Builds a gesture child over each line of each text slot drawn as
+  /// words (a `replace` decoration whose spec is a [HomericTextSlot]).
+  ///
+  /// A text slot revealed as source, because the selection touches it, is
+  /// not offered. Each child sits above the selection plane, so an opaque
+  /// [GestureDetector] there takes taps over the words without moving the
+  /// caret into the hidden source. This works in read-only paragraphs too.
+  final HomericTextSlotBuilder? textSlotBuilder;
 
   /// Observes a completed single tap after Homeric updates the caret.
   ///
@@ -1233,6 +1294,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
               child: hoverPlane,
             ),
           ),
+          ..._textSlotPieces(overlayContext, source, consumerGeometry),
           ..._selectionEndpointTargets(geometry),
           if (fullySelectedEmptyBlock)
             Positioned.fill(
@@ -3579,15 +3641,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             suggestion.range.end > spelled.text.length) {
           continue;
         }
-        final start = spelled.toDoc(suggestion.range.start, assoc: -1);
-        final end = spelled.toDoc(suggestion.range.end, assoc: 1);
-        if (start >= end) continue;
+        final range = spelled.docRangeOf(
+          suggestion.range.start,
+          suggestion.range.end,
+        );
+        if (range == null) continue;
         resolved.add(_ResolvedSpellingSuggestion(
           word: spelled.text.substring(
             suggestion.range.start,
             suggestion.range.end,
           ),
-          range: BlockTextRange(start, end),
+          range: range,
           replacements: List<String>.unmodifiable(suggestion.suggestions),
           contentRevision: key.contentRevision,
         ));
@@ -3982,6 +4046,49 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     return _paragraphGeometry = ParagraphGeometry(render);
   }
 
+  /// The [HomericEditableParagraph.textSlotBuilder] children for the text
+  /// slots drawn as words, one per line of each, placed over its ink.
+  List<Widget> _textSlotPieces(
+    BuildContext context,
+    ParagraphSource<Object?> source,
+    HomericEditableBlockGeometry geometry,
+  ) {
+    final builder = widget.textSlotBuilder;
+    if (builder == null || source.textSlots.isEmpty) return const <Widget>[];
+    final map = source.viewMap;
+    final pieces = <Widget>[];
+    for (final slot in source.textSlots) {
+      final decoration = slot.decoration;
+      // The words' view range, widened in the document to the folds
+      // around it: a hide right after the words joins their span in the
+      // view map, so the decoration's own end would draw nothing.
+      final rects = geometry.rectsForRange(BlockTextRange(
+        map.viewToDoc(slot.viewStart, assoc: -1),
+        map.viewToDoc(slot.viewEnd, assoc: 1),
+      ));
+      // Stale geometry offers nothing until the next layout.
+      if (rects == null) return const <Widget>[];
+      for (var index = 0; index < rects.length; index++) {
+        final child = builder(
+          context,
+          HomericTextSlotPiece._(
+            decoration: decoration,
+            rect: rects[index],
+            rects: rects,
+            index: index,
+          ),
+        );
+        if (child == null) continue;
+        pieces.add(Positioned.fromRect(
+          key: ValueKey<Object>(('homeric-text-slot', decoration, index)),
+          rect: rects[index],
+          child: child,
+        ));
+      }
+    }
+    return pieces;
+  }
+
   HomericEditableBlockGeometry _consumerGeometry(
     ParagraphGeometry geometry,
     int documentRevision,
@@ -4303,14 +4410,30 @@ final class _MenuWitness {
 }
 
 /// What spelling reads for one paragraph: its view text, with each
-/// [HomericSpelledSlot] read as the letters it stands for.
+/// [HomericSpelledSlot] read as the letters it stands for and each
+/// [HomericTextSlot]'s words blanked out.
 final class _SpelledText {
-  const _SpelledText._(this.text, this._viewMap, this._standIns);
+  const _SpelledText._(this.text, this._viewMap, this._standIns, this._fences);
 
   factory _SpelledText.of(ParagraphSource<Object?> source, String docText) {
-    final viewText = source.viewText;
     final map = source.viewMap;
-    final standIns = <({int start, int length, int doc})>[];
+    // A text slot's words stand for hidden source, so spelling reads them
+    // as object replacement characters of the same length: no word inside
+    // them is checked, and every offset still maps through the view.
+    var viewText = source.viewText;
+    if (source.textSlots.isNotEmpty) {
+      final blanked = StringBuffer();
+      var from = 0;
+      for (final slot in source.textSlots) {
+        blanked
+          ..write(viewText.substring(from, slot.viewStart))
+          ..write(objectReplacementCharacter * (slot.viewEnd - slot.viewStart));
+        from = slot.viewEnd;
+      }
+      blanked.write(viewText.substring(from));
+      viewText = blanked.toString();
+    }
+    final standIns = <({int view, int start, int length, int doc})>[];
     final text = StringBuffer();
     var view = 0;
     for (final slot in source.slots) {
@@ -4328,21 +4451,60 @@ final class _SpelledText {
         continue;
       }
       text.write(viewText.substring(view, slot.viewOffset));
-      standIns.add((start: text.length, length: spelling.length, doc: doc));
+      standIns.add((
+        view: slot.viewOffset,
+        start: text.length,
+        length: spelling.length,
+        doc: doc,
+      ));
       text.write(spelling);
       view = slot.viewEnd;
     }
-    if (standIns.isEmpty) return _SpelledText._(viewText, map, const []);
+    // Each text slot's words, where they sit in the text spelling reads.
+    final fences = <({int start, int end})>[
+      for (final slot in source.textSlots)
+        () {
+          var shift = 0;
+          for (final standIn in standIns) {
+            if (standIn.view >= slot.viewStart) break;
+            shift += standIn.length - 1;
+          }
+          return (start: slot.viewStart + shift, end: slot.viewEnd + shift);
+        }(),
+    ];
+    if (standIns.isEmpty) {
+      return _SpelledText._(viewText, map, const [], fences);
+    }
     text.write(viewText.substring(view));
-    return _SpelledText._(text.toString(), map, standIns);
+    return _SpelledText._(text.toString(), map, standIns, fences);
   }
 
   final String text;
   final ViewMap _viewMap;
-  final List<({int start, int length, int doc})> _standIns;
+  final List<({int view, int start, int length, int doc})> _standIns;
+  final List<({int start, int end})> _fences;
+
+  /// The document range of `[start, end)` in [text], or null when it
+  /// reaches into a text slot's words, which stand for hidden source.
+  ///
+  /// A range that ends where a text slot starts, or starts where one ends,
+  /// keeps to its own side, so a fix never takes in the hidden source
+  /// beside the words.
+  BlockTextRange? docRangeOf(int start, int end) {
+    var startAssoc = -1;
+    var endAssoc = 1;
+    for (final fence in _fences) {
+      if (start < fence.end && end > fence.start) return null;
+      if (end == fence.start) endAssoc = -1;
+      if (start == fence.end) startAssoc = 1;
+    }
+    final docStart = _toDoc(start, assoc: startAssoc);
+    final docEnd = _toDoc(end, assoc: endAssoc);
+    return docStart < docEnd ? BlockTextRange(docStart, docEnd) : null;
+  }
 
   /// The document offset of [offset] in [text].
-  int toDoc(int offset, {required int assoc}) {
+  int _toDoc(int offset, {required int assoc}) {
     // Each stand-in reads as its letters where the view has one slot.
     var shift = 0;
     for (final standIn in _standIns) {

@@ -1509,3 +1509,40 @@ marks drawn).
 **Rule going forward:** a folded range must never leave two caret offsets that
 draw in one place with different key behaviour. Either reveal it while the
 caret could be on either side, or make every key treat it as absent.
+
+## engineer — 2026-11-10 — Text slots draw hidden source as words, not a box
+
+**What:** A widget slot is one U+FFFC placeholder: one box that cannot wrap
+and does not take the line's style. A host that wants a hidden range (a
+`[[target|Label]]` link in a heading) to read as words in the line now gives
+its `replace` decoration a spec implementing `HomericTextSlot` (a marker on
+`ReplacementContent`). The words are real view text: they wrap, the run style
+resolver styles them, and the `ViewMap` folds them so the caret steps over
+them and a tap on them lands on an edge of the source. `deriveViewText` and
+`ParagraphSource` list them as `textSlots`; a revealed one is not listed.
+
+**Spelling fence:** spelling reads view text, so it used to read the words,
+and a fix mapped back with `toDoc(start, -1)` / `toDoc(end, 1)` would replace
+the whole hidden source. Spelling now reads each text slot as U+FFFC of the
+same length, drops any report that reaches into one, and maps a word that
+only touches one with the assoc that keeps to its own side, so a fix never
+takes in `[[t|` or `]]`.
+
+**Gestures:** Homeric's paragraph has no recognizers; a tap on words goes to
+the selection plane and moves the caret, which reveals the source.
+`HomericEditableParagraph.textSlotBuilder` is called once per ink rect of
+each text slot drawn as words and placed right above the selection plane, so
+an opaque `GestureDetector` there takes the tap and the selection stays put.
+
+**Trap:** a zero-length hide that starts where a replacement ends (the `]]`
+after a label) joins the replacement's span in the `ViewMap`. A document range
+ending at the label's end then maps inside the fold: `rectsForRange` on the
+label alone comes back empty, and an inline over the label alone used to be
+dropped. `deriveViewText` now keeps an inline that ends with replacement
+content covering it; geometry for a text slot comes from its view range,
+widened in the document to the folds around it.
+
+**Rule going forward:** show hidden source as words through a text slot, not
+a sized widget; reach its geometry through its view range, never through the
+decoration's own document end; and keep spelling and every other text reader
+off the words, because they stand for source the writer cannot see.

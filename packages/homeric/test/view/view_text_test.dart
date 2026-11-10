@@ -526,6 +526,87 @@ void main() {
     });
   });
 
+  group('text slots', () {
+    // 'see [[t|Label]] now' with the wiki link's source folded and its
+    // label drawn as the words 'Shown' (offsets: `[[t|` 4..8, `Label`
+    // 8..13, `]]` 13..15).
+    const text = 'see [[t|Label]] now';
+    final slot = Decoration.replace('a', 8, 13,
+        replacementLength: 5, spec: const _TextSlot('Shown'));
+    final decorations = [
+      Decoration.replace('a', 4, 8, replacementLength: 0),
+      slot,
+      Decoration.replace('a', 13, 15, replacementLength: 0),
+    ];
+
+    test('draws the words and reports their view range', () {
+      final derived = deriveViewText(para('a', text), decorations);
+      expect(derived.viewText, 'see Shown now');
+      expect(derived.textSlots, [ViewTextSlot(4, 9, slot)]);
+      expect(derived.slots, isEmpty);
+    });
+
+    test('plain replacement content is not a text slot', () {
+      final derived = deriveViewText(para('a', 'a[LONG]b'), [
+        Decoration.replace('a', 1, 7,
+            replacementLength: 3, spec: const ReplacementText('###')),
+      ]);
+      expect(derived.textSlots, isEmpty);
+    });
+
+    test('an empty text slot draws nothing and is not listed', () {
+      final derived = deriveViewText(para('a', 'a[x]b'), [
+        Decoration.replace('a', 1, 4,
+            replacementLength: 0, spec: const _TextSlot('')),
+      ]);
+      expect(derived.viewText, 'ab');
+      expect(derived.textSlots, isEmpty);
+    });
+
+    test('an inline over the label styles the words', () {
+      // The `]]` hide after the label folds into the text slot's span in
+      // the view map; an inline ending at the label still covers the
+      // words.
+      final link = Decoration.inline('a', 8, 13, spec: 'link');
+      final derived = deriveViewText(para('a', text), [...decorations, link]);
+      expect(derived.styledRanges, [StyledRange(4, 9, link)]);
+    });
+
+    test('no document offset maps inside the words', () {
+      final block = para('a', text);
+      final map = deriveViewText(block, decorations).viewMap;
+      for (var doc = 0; doc <= block.contentLength; doc++) {
+        for (final assoc in const [-1, 1]) {
+          final view = map.docToView(doc, assoc: assoc);
+          expect(view <= 4 || view >= 9, isTrue,
+              reason: 'doc $doc (assoc $assoc) mapped to view $view, '
+                  'inside the words');
+        }
+      }
+      checkViewMapRoundTrip(map, block.contentLength);
+    });
+
+    test('assoc picks an edge of the hidden source', () {
+      final map = deriveViewText(para('a', text), decorations).viewMap;
+      // Every view offset inside the words maps out to an edge, never
+      // into the label: the label's start before, and after the `]]`
+      // (the map folds that trailing hide into the text slot's span).
+      for (var view = 5; view < 9; view++) {
+        expect(map.viewToDoc(view, assoc: -1), 8, reason: 'view $view');
+        expect(map.viewToDoc(view, assoc: 1), 15, reason: 'view $view');
+      }
+      // The words' leading edge stays before the hidden `[[t|` only
+      // when asked to.
+      expect(map.viewToDoc(4, assoc: -1), 4);
+      expect(map.viewToDoc(4, assoc: 1), 8);
+      // The text either side keeps its own offsets.
+      expect(map.viewToDoc(3), 3);
+      expect(map.viewToDoc(10), 16);
+      expect(map.docToView(3), 3);
+      expect(map.docToView(16), 10);
+    });
+  });
+
   group('round-trip helper', () {
     test('accepts the identity map and rejects bad lengths', () {
       checkViewMapRoundTrip(ViewMap.identity, 10);
@@ -541,4 +622,11 @@ void main() {
       expect(ViewMap.identity, ViewMap(const []));
     });
   });
+}
+
+final class _TextSlot implements HomericTextSlot {
+  const _TextSlot(this.text);
+
+  @override
+  final String text;
 }

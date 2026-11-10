@@ -37,6 +37,18 @@ abstract interface class ReplacementContent {
   String get text;
 }
 
+/// Marks a `replace` decoration's [ReplacementContent] as a text slot: a
+/// hidden source range drawn as real words in the paragraph flow.
+///
+/// The words wrap like any other text and take their style from the run
+/// style resolver, but they stand for source the writer does not see (a
+/// wiki link's target, say). The caret never stops inside them, spelling
+/// never reads them, and an editable paragraph offers each drawn text slot
+/// to its `textSlotBuilder`, so a host can make the words tappable without
+/// the tap moving the caret into the hidden source. [deriveViewText]
+/// reports each one in [DerivedViewText.textSlots].
+abstract interface class HomericTextSlot implements ReplacementContent {}
+
 /// A styled span of view text contributed by an `inline` decoration:
 /// `[start, end)` in **view coordinates**, carrying the source decoration
 /// (and through it the consumer's opaque spec).
@@ -96,10 +108,39 @@ final class ViewSlot {
   String toString() => 'ViewSlot(@$viewOffset, $decoration)';
 }
 
+/// One text slot in view text: the view range its words fill and the
+/// `replace` decoration whose spec is the [HomericTextSlot].
+final class ViewTextSlot {
+  /// Creates a text slot record.
+  const ViewTextSlot(this.viewStart, this.viewEnd, this.decoration);
+
+  /// Start of the words, as a view text offset.
+  final int viewStart;
+
+  /// End of the words (exclusive), as a view text offset.
+  final int viewEnd;
+
+  /// The `replace` decoration that produced the words.
+  final Decoration decoration;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ViewTextSlot &&
+      other.viewStart == viewStart &&
+      other.viewEnd == viewEnd &&
+      other.decoration == decoration;
+
+  @override
+  int get hashCode => Object.hash(viewStart, viewEnd, decoration);
+
+  @override
+  String toString() => 'ViewTextSlot([$viewStart, $viewEnd), $decoration)';
+}
+
 /// The result of [deriveViewText] for one block.
 final class DerivedViewText {
-  const DerivedViewText._(
-      this.viewText, this.styledRanges, this.slots, this.viewMap);
+  const DerivedViewText._(this.viewText, this.styledRanges, this.slots,
+      this.textSlots, this.viewMap);
 
   /// The block's view text: document text with replaced spans substituted
   /// and widget slots injected.
@@ -113,6 +154,11 @@ final class DerivedViewText {
 
   /// Widget placeholder slots in view-offset order (unmodifiable).
   final List<ViewSlot> slots;
+
+  /// Text slots, the `replace` decorations whose spec is a
+  /// [HomericTextSlot], in view-offset order (unmodifiable). One whose
+  /// text is empty draws no words and is not listed.
+  final List<ViewTextSlot> textSlots;
 
   /// The bidirectional offset map between document content offsets and
   /// [viewText] offsets.
@@ -146,7 +192,10 @@ final class DerivedViewText {
 ///   [StyledRange] in view coordinates, clipped to visible text: its start
 ///   maps with `assoc: 1` and its end with `assoc: -1`, so hidden spans at
 ///   the edges are excluded (and replacement content or slots strictly
-///   inside the range stay covered). Inline ranges may overlap freely.
+///   inside the range stay covered). An inline ending exactly where a
+///   replacement with content ends covers that content, even when a hide
+///   starting there folds into the same view position. Inline ranges may
+///   overlap freely.
 ///
 /// Throws [ArgumentError] when a decoration belongs to a different block,
 /// lies outside `[0, contentLength]`, or violates the replace contracts
@@ -195,6 +244,9 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
   final buffer = StringBuffer();
   final triples = <int>[];
   final slots = <ViewSlot>[];
+  final textSlots = <ViewTextSlot>[];
+  // The view end of each replacement with content, by its document end.
+  final replacementEnds = <int, int>{};
   var docPos = 0;
 
   // Canonicalization (dropping no-op triples, absorbing adjacent
@@ -226,7 +278,12 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
     emitTextUpTo(replace.start);
     final replacement = _replacementTextFor(block, replace);
     addTriple(replace.start, replace.length, replacement.length);
+    if (replace.spec is HomericTextSlot && replacement.isNotEmpty) {
+      textSlots.add(ViewTextSlot(
+          buffer.length, buffer.length + replacement.length, replace));
+    }
     buffer.write(replacement);
+    if (replacement.isNotEmpty) replacementEnds[replace.end] = buffer.length;
     docPos = replace.end;
     // Widgets strictly inside the replaced span are hidden with it.
     while (wi < widgets.length && widgets[wi].start < replace.end) {
@@ -244,7 +301,10 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
   final styled = <StyledRange>[];
   for (final inline in inlines) {
     final start = viewMap.docToView(inline.start, assoc: 1);
-    final end = viewMap.docToView(inline.end, assoc: -1);
+    // An inline ending with replacement content keeps covering it even
+    // when a hide right after joins the replaced span in the view map.
+    final end =
+        replacementEnds[inline.end] ?? viewMap.docToView(inline.end, assoc: -1);
     if (end > start) styled.add(StyledRange(start, end, inline));
   }
 
@@ -253,6 +313,7 @@ DerivedViewText deriveViewText(Block block, Iterable<Decoration> decorations) {
     List<StyledRange>.unmodifiable(
         stableSortedBy<StyledRange>(styled, _byStartThenEnd)),
     List<ViewSlot>.unmodifiable(slots),
+    List<ViewTextSlot>.unmodifiable(textSlots),
     viewMap,
   );
 }

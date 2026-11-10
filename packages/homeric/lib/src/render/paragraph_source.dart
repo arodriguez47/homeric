@@ -303,8 +303,8 @@ final class SlotSegment<S> implements ParagraphSegment<S> {
 /// and the block-level [spec] — a pure, deterministic value derived from
 /// `(block, decorations, reveal, resolver, spec)`.
 final class ParagraphSource<S> {
-  ParagraphSource._(
-      this.viewText, this.segments, this.slots, this.viewMap, this.spec);
+  ParagraphSource._(this.viewText, this.segments, this.slots, this.textSlots,
+      this.viewMap, this.spec);
 
   /// Derives [block]'s view text (with [reveal]-suppressed replace
   /// decorations excluded, R10) and splits it into builder segments,
@@ -399,6 +399,7 @@ final class ParagraphSource<S> {
       viewText,
       List<ParagraphSegment<S>>.unmodifiable(segments),
       List<SlotSegment<S>>.unmodifiable(slots),
+      derived.textSlots,
       derived.viewMap,
       spec,
     );
@@ -414,6 +415,11 @@ final class ParagraphSource<S> {
   /// The [SlotSegment]s among [segments], in slot-index order
   /// (unmodifiable; same instances).
   final List<SlotSegment<S>> slots;
+
+  /// The text slots drawn as words in this derivation, in view-offset
+  /// order (unmodifiable). A revealed text slot shows its source instead
+  /// and is not listed.
+  final List<ViewTextSlot> textSlots;
 
   /// The bidirectional document↔view offset map for this derivation.
   final ViewMap viewMap;

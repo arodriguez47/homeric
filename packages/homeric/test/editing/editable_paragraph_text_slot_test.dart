@@ -39,6 +39,7 @@ void main() {
     FocusNode? focusNode,
     int? caret,
     bool otherBlock = false,
+    List<Decoration> Function()? decorations,
   }) async {
     final controller = HomericEditorController(
       document: Document([
@@ -69,7 +70,8 @@ void main() {
             resolveStyle: (_) => _style,
             // A new spec each derivation, as a host whose words come from
             // live data builds them.
-            deriveDecorations: (_) => _linkDecorations(words),
+            deriveDecorations: (_) =>
+                decorations?.call() ?? _linkDecorations(words),
             textSlotBuilder: textSlotBuilder,
             spellCheckProvider: spellCheckProvider,
             spellingColor: _spellingColor,
@@ -266,6 +268,30 @@ void main() {
       expect(piece.range, const BlockTextRange(8, 13));
       expect(piece.textSlot, const _TextSlot('Shown'));
       expect(piece.decoration.kind, DecorationKind.replace);
+    });
+
+    testWidgets('words inserted where nothing was hidden get a piece too',
+        (tester) async {
+      final pieces = <HomericTextSlotPiece>[];
+      // 'see ' then 'Hi' drawn at offset 4 with nothing folded under it.
+      await pump(
+        tester,
+        decorations: () => <Decoration>[
+          Decoration.replace('b', 4, 4,
+              replacementLength: 2, spec: const _TextSlot('Hi')),
+        ],
+        textSlotBuilder: (_, piece) {
+          pieces.add(piece);
+          return null;
+        },
+      );
+
+      expect(pieces, isNotEmpty);
+      final piece = pieces.last;
+      expect(piece.rects, hasLength(1));
+      expect(piece.rect.left, 4 * 14.0);
+      expect(piece.rect.right, 6 * 14.0);
+      expect(piece.textSlot, const _TextSlot('Hi'));
     });
 
     testWidgets('wrapped words yield one piece per line', (tester) async {

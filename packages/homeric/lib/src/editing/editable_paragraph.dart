@@ -158,6 +158,17 @@ final class HomericEditableBlockGeometry {
         )
       : null;
 
+  /// [rectsForRange] over view text offsets: the ink of content with no
+  /// document range of its own (a text slot's words).
+  List<Rect>? _rectsForViewRange(int viewStart, int viewEnd) => isCurrent
+      ? List<Rect>.unmodifiable(
+          _geometry
+              .inkRectsForViewRange(viewStart, viewEnd)
+              .value
+              .map((box) => box.toRect()),
+        )
+      : null;
+
   /// [rectsForRange] in the selection shape, matching the painted selection
   /// wash ([PaintLayerFit.line]).
   List<Rect>? _lineRectsForRange(BlockTextRange range) => isCurrent
@@ -4055,18 +4066,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   ) {
     final builder = widget.textSlotBuilder;
     if (builder == null || source.textSlots.isEmpty) return const <Widget>[];
-    final map = source.viewMap;
     final pieces = <Widget>[];
     for (var ordinal = 0; ordinal < source.textSlots.length; ordinal++) {
       final slot = source.textSlots[ordinal];
       final decoration = slot.decoration;
-      // The words' view range, widened in the document to the folds
-      // around it: a hide right after the words joins their span in the
-      // view map, so the decoration's own end would draw nothing.
-      final rects = geometry.rectsForRange(BlockTextRange(
-        map.viewToDoc(slot.viewStart, assoc: -1),
-        map.viewToDoc(slot.viewEnd, assoc: 1),
-      ));
+      // Measured on the words' own view range: the decoration's document
+      // range can't reach them (a hide right after the words joins their
+      // span in the view map, and words inserted where nothing was hidden
+      // have no document width at all).
+      final rects = geometry._rectsForViewRange(slot.viewStart, slot.viewEnd);
       // Stale geometry offers nothing until the next layout.
       if (rects == null) return const <Widget>[];
       for (var index = 0; index < rects.length; index++) {

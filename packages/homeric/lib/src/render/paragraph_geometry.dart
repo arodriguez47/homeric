@@ -692,6 +692,21 @@ class ParagraphGeometry {
   }) {
     _checkRange(range);
     final (viewStart, viewEnd) = _viewRangeOf(range);
+    return inkRectsForViewRange(viewStart, viewEnd, heightStyle: heightStyle);
+  }
+
+  /// [inkRectsForRange] over view text offsets [viewStart] to [viewEnd]
+  /// (clamped to the view text): for content that has no document range
+  /// of its own, such as the words of a text slot inserted where nothing
+  /// was hidden, which a document range cannot reach.
+  GeometryResult<List<ui.TextBox>> inkRectsForViewRange(
+    int viewStart,
+    int viewEnd, {
+    ui.BoxHeightStyle heightStyle = ui.BoxHeightStyle.includeLineSpacingMiddle,
+  }) {
+    final length = _viewText.length;
+    viewStart = viewStart.clamp(0, length);
+    viewEnd = viewEnd.clamp(0, length);
     if (viewEnd <= viewStart) {
       return _stamp(const <ui.TextBox>[]);
     }

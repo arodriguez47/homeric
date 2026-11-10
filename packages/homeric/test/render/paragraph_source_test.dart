@@ -299,6 +299,33 @@ void main() {
     });
   });
 
+  group('text slots', () {
+    final slot = Decoration.replace('b', 2, 7,
+        replacementLength: 3, spec: const _TextSlot('Ref'));
+
+    test('lists the text slots drawn as words', () {
+      final source = ParagraphSource<String>.build(
+        block: para('b', 'a [ref] b'),
+        decorations: [slot],
+        resolveStyle: tagStyle,
+      );
+      expect(source.viewText, 'a Ref b');
+      expect(source.textSlots, [ViewTextSlot(2, 5, slot)]);
+      expect(source.slots, isEmpty);
+    });
+
+    test('a revealed text slot shows its source and is not listed', () {
+      final source = ParagraphSource<String>.build(
+        block: para('b', 'a [ref] b'),
+        decorations: [slot],
+        reveal: RevealState.of([slot]),
+        resolveStyle: tagStyle,
+      );
+      expect(source.viewText, 'a [ref] b');
+      expect(source.textSlots, isEmpty);
+    });
+  });
+
   group('style resolver contract (R7)', () {
     final block = para('a', 'abcdef');
     final one = Decoration.inline('a', 0, 4, spec: 'one');
@@ -498,4 +525,11 @@ void main() {
       expectCoversViewText(source);
     });
   });
+}
+
+final class _TextSlot implements HomericTextSlot {
+  const _TextSlot(this.text);
+
+  @override
+  final String text;
 }

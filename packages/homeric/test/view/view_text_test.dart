@@ -526,6 +526,205 @@ void main() {
     });
   });
 
+  group('text slots', () {
+    // 'see [[t|Label]] now' with the wiki link's source folded and its
+    // label drawn as the words 'Shown' (offsets: `[[t|` 4..8, `Label`
+    // 8..13, `]]` 13..15).
+    const text = 'see [[t|Label]] now';
+    final slot = Decoration.replace('a', 8, 13,
+        replacementLength: 5, spec: const _TextSlot('Shown'));
+    final decorations = [
+      Decoration.replace('a', 4, 8, replacementLength: 0),
+      slot,
+      Decoration.replace('a', 13, 15, replacementLength: 0),
+    ];
+
+    test('draws the words and reports their view range', () {
+      final derived = deriveViewText(para('a', text), decorations);
+      expect(derived.viewText, 'see Shown now');
+      expect(derived.textSlots, [ViewTextSlot(4, 9, slot)]);
+      expect(derived.slots, isEmpty);
+    });
+
+    test('plain replacement content is not a text slot', () {
+      final derived = deriveViewText(para('a', 'a[LONG]b'), [
+        Decoration.replace('a', 1, 7,
+            replacementLength: 3, spec: const ReplacementText('###')),
+      ]);
+      expect(derived.textSlots, isEmpty);
+    });
+
+    test('an empty text slot draws nothing and is not listed', () {
+      final derived = deriveViewText(para('a', 'a[x]b'), [
+        Decoration.replace('a', 1, 4,
+            replacementLength: 0, spec: const _TextSlot('')),
+      ]);
+      expect(derived.viewText, 'ab');
+      expect(derived.textSlots, isEmpty);
+    });
+
+    test('an inline over the label styles the words', () {
+      // The `]]` hide after the label folds into the text slot's span in
+      // the view map; an inline ending at the label still covers the
+      // words.
+      final link = Decoration.inline('a', 8, 13, spec: 'link');
+      final derived = deriveViewText(para('a', text), [...decorations, link]);
+      expect(derived.styledRanges, [StyledRange(4, 9, link)]);
+    });
+
+    test('no document offset maps inside the words', () {
+      final block = para('a', text);
+      final map = deriveViewText(block, decorations).viewMap;
+      for (var doc = 0; doc <= block.contentLength; doc++) {
+        for (final assoc in const [-1, 1]) {
+          final view = map.docToView(doc, assoc: assoc);
+          expect(view <= 4 || view >= 9, isTrue,
+              reason: 'doc $doc (assoc $assoc) mapped to view $view, '
+                  'inside the words');
+        }
+      }
+      checkViewMapRoundTrip(map, block.contentLength);
+    });
+
+    test('assoc picks an edge of the hidden source', () {
+      final map = deriveViewText(para('a', text), decorations).viewMap;
+      // Every view offset inside the words maps out to an edge, never
+      // into the label: the label's start before, and after the `]]`
+      // (the map folds that trailing hide into the text slot's span).
+      for (var view = 5; view < 9; view++) {
+        expect(map.viewToDoc(view, assoc: -1), 8, reason: 'view $view');
+        expect(map.viewToDoc(view, assoc: 1), 15, reason: 'view $view');
+      }
+      // The words' leading edge stays before the hidden `[[t|` only
+      // when asked to.
+      expect(map.viewToDoc(4, assoc: -1), 4);
+      expect(map.viewToDoc(4, assoc: 1), 8);
+      // The text either side keeps its own offsets.
+      expect(map.viewToDoc(3), 3);
+      expect(map.viewToDoc(10), 16);
+      expect(map.docToView(3), 3);
+      expect(map.docToView(16), 10);
+    });
+  });
+
+  group('an inline around a text slot', () {
+    // 'See <open>[[t|Label]]<close> now' as Homeric marks it up: the mark
+    // pair and the link's source hide, the label is drawn as 'Shown', and
+    // the mark's inline runs from after the opening mark to the end of
+    // `]]`, so it ends inside the fold the label's replacement begins.
+    for (final mark in const ['*', '==', '**']) {
+      final text = 'See $mark[[t|Label]]$mark now';
+      final open = 4 + mark.length; // after the opening mark
+      final label = open + 4; // after `[[t|`
+      final labelEnd = label + 5;
+      final close = labelEnd + 2; // after `]]`
+      final decorations = [
+        Decoration.replace('a', 4, open, replacementLength: 0),
+        Decoration.replace('a', open, label, replacementLength: 0),
+        Decoration.replace('a', label, labelEnd,
+            replacementLength: 5, spec: const _TextSlot('Shown')),
+        Decoration.replace('a', labelEnd, close, replacementLength: 0),
+        Decoration.replace('a', close, close + mark.length,
+            replacementLength: 0),
+      ];
+
+      test('$mark ending after `]]` covers the words', () {
+        final style = Decoration.inline('a', open, close, spec: mark);
+        final derived =
+            deriveViewText(para('a', text), [...decorations, style]);
+        expect(derived.viewText, 'See Shown now');
+        expect(derived.styledRanges, [StyledRange(4, 9, style)]);
+      });
+
+      test('$mark ending after the closing mark covers the words', () {
+        final style =
+            Decoration.inline('a', 4, close + mark.length, spec: mark);
+        final derived =
+            deriveViewText(para('a', text), [...decorations, style]);
+        expect(derived.styledRanges, [StyledRange(4, 9, style)]);
+      });
+
+      test('an inline ending before the words is unchanged', () {
+        final before = Decoration.inline('a', 0, 3, spec: 'before');
+        final toHide = Decoration.inline('a', 0, label, spec: 'to-hide');
+        final derived =
+            deriveViewText(para('a', text), [...decorations, before, toHide]);
+        expect(derived.styledRanges, [
+          StyledRange(0, 3, before),
+          StyledRange(0, 4, toHide),
+        ]);
+      });
+
+      test('an inline starting after the words is unchanged', () {
+        // One starting in the hides after the label, one after the fold.
+        final inFold =
+            Decoration.inline('a', labelEnd + 1, text.length, spec: 'in');
+        final after = Decoration.inline('a', close + mark.length, text.length,
+            spec: 'after');
+        final derived =
+            deriveViewText(para('a', text), [...decorations, inFold, after]);
+        expect(derived.styledRanges, [
+          StyledRange(9, 13, inFold),
+          StyledRange(9, 13, after),
+        ]);
+      });
+    }
+
+    test('a widget between the words and a hide keeps its own place', () {
+      // 'a[x]]b': 'x' drawn as 'X', a widget at its end, then the hide.
+      final style = Decoration.inline('a', 0, 5, spec: 'style');
+      final widget = Decoration.widget('a', 3);
+      final derived = deriveViewText(para('a', 'a[x]]b'), [
+        Decoration.replace('a', 1, 2, replacementLength: 0),
+        Decoration.replace('a', 2, 3,
+            replacementLength: 1, spec: const _TextSlot('X')),
+        widget,
+        Decoration.replace('a', 3, 5, replacementLength: 0),
+        style,
+      ]);
+      expect(derived.viewText, 'aX${objectReplacementCharacter}b');
+      expect(derived.styledRanges, [StyledRange(0, 3, style)]);
+    });
+  });
+
+  group('an inline next to an insertion', () {
+    test('ending where content is inserted leaves it out', () {
+      // 'abcd' with 'ZZ' inserted at 2, and an inline over 'ab'.
+      final bold = Decoration.inline('a', 0, 2, spec: 'bold');
+      final derived = deriveViewText(para('a', 'abcd'), [
+        Decoration.replace('a', 2, 2,
+            replacementLength: 2, spec: const ReplacementText('ZZ')),
+        bold,
+      ]);
+      expect(derived.viewText, 'abZZcd');
+      expect(derived.styledRanges, [StyledRange(0, 2, bold)]);
+    });
+
+    test('ending with a replacement covers it, not an insertion after', () {
+      // 'abXcd': 'X' replaced by 'Y', then 'ZZ' inserted at 3.
+      final bold = Decoration.inline('a', 0, 3, spec: 'bold');
+      final derived = deriveViewText(para('a', 'abXcd'), [
+        Decoration.replace('a', 2, 3,
+            replacementLength: 1, spec: const ReplacementText('Y')),
+        Decoration.replace('a', 3, 3,
+            replacementLength: 2, spec: const ReplacementText('ZZ')),
+        bold,
+      ]);
+      expect(derived.viewText, 'abYZZcd');
+      expect(derived.styledRanges, [StyledRange(0, 3, bold)]);
+    });
+
+    test('starting where content is inserted leaves it out too', () {
+      final bold = Decoration.inline('a', 2, 4, spec: 'bold');
+      final derived = deriveViewText(para('a', 'abcd'), [
+        Decoration.replace('a', 2, 2,
+            replacementLength: 2, spec: const ReplacementText('ZZ')),
+        bold,
+      ]);
+      expect(derived.styledRanges, [StyledRange(4, 6, bold)]);
+    });
+  });
+
   group('round-trip helper', () {
     test('accepts the identity map and rejects bad lengths', () {
       checkViewMapRoundTrip(ViewMap.identity, 10);
@@ -541,4 +740,11 @@ void main() {
       expect(ViewMap.identity, ViewMap(const []));
     });
   });
+}
+
+final class _TextSlot implements HomericTextSlot {
+  const _TextSlot(this.text);
+
+  @override
+  final String text;
 }

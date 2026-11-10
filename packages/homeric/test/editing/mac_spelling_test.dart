@@ -5,9 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Decoration;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:homeric/homeric.dart';
+import 'package:homeric/writing.dart';
 
 const _style = TextStyle(fontSize: 14);
 const _channel = MethodChannel('homeric/spelling');
+
+/// What the Windows handler answers for `settings`.
+const _windowsSettings = <String, Object?>{
+  'autocorrect': false,
+  'replacement': false,
+  'replacements': <String, String>{},
+};
 
 /// A Mac side that knows a few misspellings and remembers learned words.
 final class _FakeMac {
@@ -146,18 +154,69 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     expect(homericSystemSpellChecker(locale: () => const Locale('en')),
         same(HomericMacSpelling.instance));
+    // Windows answers the same channel, from its own checker.
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    expect(homericSystemSpellChecker(locale: () => const Locale('en')),
+        same(HomericSystemSpelling.instance));
+    expect(
+        HomericSystemSpelling.forPlatform, same(HomericMacSpelling.instance));
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     expect(homericSystemSpellChecker(locale: () => const Locale('en')), isNull);
+    expect(HomericSystemSpelling.forPlatform, isNull);
     debugDefaultTargetPlatformOverride = null;
   });
 
-  group('the right-click menu on the Mac', () {
+  test('Windows settings leave typing alone', () async {
+    mac.settings = _windowsSettings;
+    spelling.dispose();
+    spelling = HomericSystemSpelling.forTesting(_channel);
+    await Future<void>.delayed(Duration.zero);
+    expect(spelling.isAvailable, isTrue);
+    expect(spelling.correctsSpellingAutomatically, isFalse);
+    expect(spelling.replacesTextAutomatically, isFalse);
+    expect(spelling.textReplacements, isEmpty);
+    expect(await spelling.correction('a wrod', 2, 6), isNull);
+    expect(mac.calls.where((call) => call.method == 'correct'), isEmpty);
+  });
+
+  test('corrections installed on Windows change nothing as the writer types',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    mac.settings = _windowsSettings;
+    // Words the fake would correct or replace if it were asked.
+    mac.guesses['teh'] = <String>['the'];
+    spelling.dispose();
+    spelling = HomericSystemSpelling.forTesting(_channel);
+    await Future<void>.delayed(Duration.zero);
+
+    final document = Document(<Block>[
+      Block(id: 'b', type: 'paragraph', runs: const <InlineRun>[]),
+    ]);
+    final controller = HomericEditorController(
+      document: document,
+      selection: HomericSelection.collapsed(document.positionAt(0, 0)),
+    );
+    addTearDown(controller.dispose);
+    final stop =
+        HomericSystemCorrections(corrections: spelling).installOn(controller);
+    addTearDown(stop);
+    for (final char in 'teh omw '.split('')) {
+      controller.replaceSelection(char);
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.document.blocks.single.text, 'teh omw ');
+    expect(mac.calls.where((call) => call.method == 'correct'), isEmpty);
+  });
+
+  group('the right-click menu on the desktop', () {
     Future<HomericEditorController> pump(
       WidgetTester tester,
       String text, {
       int? caret,
+      TargetPlatform platform = TargetPlatform.macOS,
     }) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      debugDefaultTargetPlatformOverride = platform;
       final document = Document(<Block>[
         Block(id: 'b', type: 'paragraph', runs: <InlineRun>[InlineRun(text)]),
       ]);
@@ -268,6 +327,49 @@ void main() {
       expect(row('No Guesses Found'), findsOneWidget);
       expect(row('Ignore Spelling'), findsOneWidget);
       await tester.tap(row('Ignore Spelling'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(mac.calls.where((call) => call.method == 'ignore'), hasLength(1));
+      expect(squiggles(tester), 0);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('Windows gets the same squiggles and guesses, in its words',
+        (tester) async {
+      // What the Windows handler answers, not the Mac's settings.
+      mac.settings = _windowsSettings;
+      spelling.dispose();
+      spelling = HomericSystemSpelling.forTesting(_channel);
+      final controller = await pump(
+        tester,
+        'a wrod here',
+        platform: TargetPlatform.windows,
+      );
+      expect(squiggles(tester), 1);
+      await rightClick(tester, 2, 6);
+      expect(spelling.correctsSpellingAutomatically, isFalse);
+      expect(row('word'), findsOneWidget);
+      expect(row('Add to dictionary'), findsOneWidget);
+      expect(row('Ignore all'), findsOneWidget);
+      expect(row('Learn Spelling'), findsNothing);
+      await tester.tap(row('Add to dictionary'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(mac.calls.where((call) => call.method == 'learn'), hasLength(1));
+      expect(squiggles(tester), 0);
+      expect(controller.document.blocks.single.text, 'a wrod here');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('a word with no guesses says so in Windows words',
+        (tester) async {
+      await pump(tester, 'a zxqv here', platform: TargetPlatform.windows);
+      await rightClick(tester, 2, 6);
+      expect(row('No suggestions'), findsOneWidget);
+      expect(row('No Guesses Found'), findsNothing);
+      await tester.tap(row('Ignore all'));
       await tester.pump();
       await tester.pump();
       await tester.pump();

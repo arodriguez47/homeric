@@ -1,6 +1,7 @@
 /// The system's corrections as the writer types: autocorrect and text
 /// replacement, from a [HomericTypingCorrections] such as macOS's own
-/// checker ([HomericMacSpelling]).
+/// checker ([HomericSystemSpelling]). Windows' checker answers too, with
+/// both settings off.
 ///
 /// - Text replacement: a shortcut from the writer's list (`omw`) becomes its
 ///   phrase (`On my way!`) when a space or punctuation follows it. The

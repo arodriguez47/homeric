@@ -1,10 +1,13 @@
-/// Spelling, autocorrect and text replacement from macOS's own checker
-/// (NSSpellChecker), asked over the `homeric/spelling` channel the app
-/// answers.
+/// Spelling, autocorrect and text replacement from the desktop's own
+/// checker (NSSpellChecker on macOS, ISpellChecker on Windows), asked over
+/// the `homeric/spelling` channel the app answers.
 ///
-/// Flutter has no spell check service on macOS, so the app carries a small
-/// Swift handler (see `docs/mac-spelling.md`). An app that doesn't answer
-/// the channel gets no squiggles and no corrections; nothing else changes.
+/// Flutter has no spell check service on macOS or Windows, so the app
+/// carries a small handler: a Swift file on the Mac (see
+/// `docs/mac-spelling.md`), a C++ one on Windows (see
+/// `docs/windows-spelling.md`). Both answer the same calls with the same
+/// shapes. An app that doesn't answer the channel gets no squiggles and no
+/// corrections; nothing else changes.
 library;
 
 import 'package:flutter/foundation.dart';
@@ -16,8 +19,9 @@ import 'spell_check.dart';
 /// Words the writer teaches the checker, or tells it to pass over.
 ///
 /// A [HomericSpellCheckProvider] that is also a dictionary gets Learn
-/// Spelling and Ignore Spelling in the right-click menu, and every paragraph
-/// checks again when [spellingChanges] fires.
+/// Spelling and Ignore Spelling in the right-click menu (Add to dictionary
+/// and Ignore all on Windows), and every paragraph checks again when
+/// [spellingChanges] fires.
 abstract interface class HomericSpellingDictionary {
   /// Fires when the words the checker accepts change.
   Listenable get spellingChanges;
@@ -51,8 +55,14 @@ abstract interface class HomericTypingCorrections {
   Future<String?> correction(String text, int start, int end);
 }
 
-/// macOS spelling: red squiggles, guesses, Learn and Ignore, autocorrect and
-/// text replacement, all from NSSpellChecker in the system's own languages.
+/// Desktop spelling: red squiggles, guesses, Learn and Ignore, autocorrect
+/// and text replacement, from the system's own checker in the system's own
+/// languages. NSSpellChecker on macOS; ISpellChecker on Windows, which has
+/// no autocorrect setting an app can read and no replacement list, so
+/// there the settings stay off and typing is left alone.
+///
+/// Named for the Mac, where it began; [HomericSystemSpelling] is the same
+/// class by a name that fits both.
 ///
 /// One per app: use [instance]. On other platforms [forPlatform] is null and
 /// a host keeps whatever it passed before.
@@ -68,7 +78,7 @@ final class HomericMacSpelling extends ChangeNotifier
     _refreshSettings();
   }
 
-  /// The channel the app's macOS side answers.
+  /// The channel the app's macOS or Windows side answers.
   static const MethodChannel channel = MethodChannel('homeric/spelling');
 
   static HomericMacSpelling? _instance;
@@ -77,11 +87,12 @@ final class HomericMacSpelling extends ChangeNotifier
   static HomericMacSpelling get instance =>
       _instance ??= HomericMacSpelling._(channel);
 
-  /// [instance] on macOS; null elsewhere.
-  static HomericMacSpelling? get forPlatform =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS
-          ? instance
-          : null;
+  /// [instance] on macOS and Windows; null elsewhere.
+  static HomericMacSpelling? get forPlatform => !kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.macOS ||
+              defaultTargetPlatform == TargetPlatform.windows)
+      ? instance
+      : null;
 
   /// A checker over [channel], for tests.
   @visibleForTesting
@@ -184,7 +195,7 @@ final class HomericMacSpelling extends ChangeNotifier
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // The writer may have changed a setting or a replacement in System
-    // Settings while the app was in the background.
+    // Settings (or Windows Settings) while the app was in the background.
     if (state == AppLifecycleState.resumed) _refreshSettings();
   }
 
@@ -235,9 +246,12 @@ final class HomericMacSpelling extends ChangeNotifier
   }
 }
 
+/// [HomericMacSpelling] by a name that fits macOS and Windows alike.
+typedef HomericSystemSpelling = HomericMacSpelling;
+
 /// The system's spell checker for this platform: iOS and Android through
-/// Flutter's spell check service, macOS through [HomericMacSpelling]; null
-/// where there is none (Windows, Linux, the web).
+/// Flutter's spell check service, macOS and Windows through
+/// [HomericSystemSpelling]; null where there is none (Linux, the web).
 HomericSpellCheckProvider? homericSystemSpellChecker({
   required Locale Function() locale,
 }) {

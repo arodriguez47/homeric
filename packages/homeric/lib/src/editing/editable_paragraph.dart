@@ -7,7 +7,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart'
     show CupertinoLocalizations, CupertinoTheme;
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show AdaptiveTextSelectionToolbar;
 import 'package:flutter/rendering.dart' hide Decoration;
@@ -321,6 +321,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.onHover,
     this.onHoverExit,
     this.touchSelectionConfiguration,
+    this.stylusHandwritingEnabled = true,
   }) : assert(caretWidth > 0);
 
   /// Canonical state owner.
@@ -479,6 +480,15 @@ class HomericEditableParagraph extends StatefulWidget {
   /// cross-block overlay cannot resolve conflicting row configuration.
   final HomericTouchSelectionConfiguration? touchSelectionConfiguration;
 
+  /// Whether an iPad's Scribble can write into this paragraph.
+  ///
+  /// When on, Apple Pencil handwriting anywhere over the words focuses the
+  /// paragraph at the pen and becomes text, and the focused paragraph tells
+  /// iPadOS where each character sits, so written words land where they were
+  /// written, a scratch-out deletes, and a circle selects. Read-only
+  /// paragraphs never take handwriting. Other platforms ignore it.
+  final bool stylusHandwritingEnabled;
+
   @override
   State<HomericEditableParagraph> createState() =>
       _HomericEditableParagraphState();
@@ -527,6 +537,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   late final VoidCallback _semanticsSelectAll;
   BuildContext? _commandContext;
   BuildContext? _overlayContext;
+  late final _ParagraphScribbleClient _scribbleClient =
+      _ParagraphScribbleClient(this);
+  bool _scribbleRegistered = false;
+  // What the platform last received as Scribble character rects.
+  HomericTextInputGeometryLease? _scribbleRectsLease;
+  int? _scribbleRectsGeneration;
+  Object? _scribbleRectsDocument;
+  // The window transform the platform last received, and how to resend it.
+  Matrix4? _publishedTransform;
+  bool Function(Matrix4 transform)? _republishTransform;
+  bool _watchingTransform = false;
   Offset? _secondaryLocalPosition;
   BlockTextRange? _secondaryWordRange;
   ContextMenuController? _contextMenuController;
@@ -580,6 +601,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           const SelectAllTextIntent(SelectionChangedCause.toolbar),
         );
     _renewHostBindings();
+    _syncScribbleRegistration();
     _captureCaretState();
     _controller.addListener(_controllerChanged);
     _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
@@ -737,6 +759,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         }
       }
     }
+    _syncScribbleRegistration();
     if (controllerChanged) _captureCaretState();
     if (caretDependenciesChanged) {
       _syncCaretBlink(resetVisible: hadFocus);
@@ -747,6 +770,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   void dispose() {
     _disposing = true;
     _hostEpoch++;
+    if (_scribbleRegistered) {
+      TextInput.unregisterScribbleElement(_scribbleClient.elementIdentifier);
+      _scribbleRegistered = false;
+    }
     _clearTransientState();
     _localTouchOverlayCoordinator.dispose();
     _floatingCursorResetController?.dispose();
@@ -4273,6 +4300,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             : composingRect.expandToInclude(box.toRect());
       }
     }
+    final selectionRects = _scribbleSelectionRects(geometry, geometryLease);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
           blockRect.isStale ||
@@ -4283,20 +4311,213 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       }
       final render = overlayContext.findRenderObject();
       if (render is! RenderBox || !render.attached) return;
-      widget.inputSession.publishGeometry(
+      final transform = render.getTransformTo(null);
+      final editableSize = blockRect.value.size;
+      final caretRect = caret.value;
+      final published = widget.inputSession.publishGeometry(
         lease: geometryLease,
         documentRevision: documentRevision,
         layoutGeneration: generation,
-        editableSize: blockRect.value.size,
-        transform: render.getTransformTo(null),
-        caretRect: caret.value,
+        editableSize: editableSize,
+        transform: transform,
+        caretRect: caretRect,
         composingRect: composingRect,
+        selectionRects: selectionRects,
       );
+      if (!published) return;
+      if (selectionRects != null) {
+        _scribbleRectsLease = geometryLease;
+        _scribbleRectsGeneration = generation;
+        _scribbleRectsDocument = documentRevision;
+      }
+      _publishedTransform = transform;
+      _republishTransform = (moved) => widget.inputSession.publishGeometry(
+            lease: geometryLease,
+            documentRevision: documentRevision,
+            layoutGeneration: generation,
+            editableSize: editableSize,
+            transform: moved,
+            caretRect: caretRect,
+            composingRect: composingRect,
+          );
+      _watchPublishedTransform(render);
     });
+  }
+
+  /// Follows the focused paragraph as it scrolls or moves without a new
+  /// layout, which would not rebuild the overlay: the platform's input view,
+  /// where Scribble writes and the keyboard's candidates sit, moves with it.
+  /// Runs after frames that are drawn anyway and stops once input leaves.
+  void _watchPublishedTransform(RenderBox render) {
+    if (_watchingTransform) return;
+    _watchingTransform = true;
+    void check(Duration _) {
+      final republish = _republishTransform;
+      if (!mounted ||
+          republish == null ||
+          !render.attached ||
+          widget.inputSession.activeBlockId != widget.blockId) {
+        _watchingTransform = false;
+        return;
+      }
+      final transform = render.getTransformTo(null);
+      if (transform != _publishedTransform) {
+        if (republish(transform)) {
+          _publishedTransform = transform;
+        } else {
+          // Superseded: the next full publication restarts the watch.
+          _republishTransform = null;
+          _watchingTransform = false;
+          return;
+        }
+      }
+      WidgetsBinding.instance.addPostFrameCallback(check);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback(check);
+  }
+
+  void _syncScribbleRegistration() {
+    final enabled = widget.stylusHandwritingEnabled;
+    if (enabled == _scribbleRegistered) return;
+    if (enabled) {
+      TextInput.registerScribbleElement(
+        _scribbleClient.elementIdentifier,
+        _scribbleClient,
+      );
+    } else {
+      TextInput.unregisterScribbleElement(_scribbleClient.elementIdentifier);
+    }
+    _scribbleRegistered = enabled;
+  }
+
+  /// One rect per character of this block, for Scribble on an iPad, or null
+  /// when the platform already has this layout's rects.
+  List<SelectionRect>? _scribbleSelectionRects(
+    ParagraphGeometry geometry,
+    HomericTextInputGeometryLease lease,
+  ) {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.iOS ||
+        !widget.stylusHandwritingEnabled) {
+      return null;
+    }
+    final document = _controller.document;
+    if (identical(_scribbleRectsLease, lease) &&
+        _scribbleRectsGeneration == geometry.generation &&
+        identical(_scribbleRectsDocument, document)) {
+      return null;
+    }
+    final block = _block;
+    if (block == null) return null;
+    final length = math.min(block.text.length, geometry.docLength);
+    final rects = <SelectionRect>[];
+    var start = 0;
+    for (final character in block.text.characters) {
+      final end = start + character.length;
+      if (end > length) break;
+      final boxes = geometry
+          .rectsForRange(
+            DocRange(DocOffset(start), DocOffset(end)),
+            widthStyle: ui.BoxWidthStyle.tight,
+          )
+          .value;
+      // Hidden source (a folded mark) has no box and stays unwritable.
+      if (boxes.isNotEmpty) {
+        final box = boxes.first;
+        rects.add(SelectionRect(
+          position: start,
+          bounds: box.toRect(),
+          direction: box.direction,
+        ));
+      }
+      start = end;
+    }
+    return rects;
+  }
+
+  /// The paragraph as drawn in the window, for Scribble's hit areas.
+  Rect _scribbleBounds() {
+    final render = _overlayContext?.findRenderObject();
+    if (!mounted ||
+        render is! RenderBox ||
+        !render.attached ||
+        !render.hasSize) {
+      return Rect.zero;
+    }
+    return MatrixUtils.transformRect(
+      render.getTransformTo(null),
+      Offset.zero & render.size,
+    );
+  }
+
+  bool _isInScribbleRect(Rect rect) {
+    if (!mounted || _controller.isReadOnly) return false;
+    final bounds = _scribbleBounds();
+    if (bounds == Rect.zero || !bounds.overlaps(rect)) return false;
+    // The whole paragraph, words, slots, and the room past its last word.
+    final render = context.findRenderObject();
+    if (render == null) return false;
+    // Only where the paragraph is the thing on screen, not under a sheet.
+    final result = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(
+      result,
+      bounds.intersect(rect).center,
+      View.of(context).viewId,
+    );
+    return result.path.any((entry) => identical(entry.target, render));
+  }
+
+  /// Scribble began writing over this paragraph: the caret goes where the
+  /// pen touched and the paragraph takes input, as a tap there would.
+  void _scribbleFocus(Offset globalOffset) {
+    if (!mounted || _controller.isReadOnly) return;
+    final geometry = _currentGeometry();
+    final render = _overlayContext?.findRenderObject();
+    if (geometry == null ||
+        render is! RenderBox ||
+        !render.attached ||
+        !render.hasSize) {
+      return;
+    }
+    final rect = geometry.blockRect.value;
+    final local = render.globalToLocal(globalOffset);
+    final hit = _caretForPoint(
+      geometry,
+      Offset(
+        local.dx.clamp(rect.left, rect.right),
+        local.dy.clamp(rect.top, rect.bottom),
+      ),
+    );
+    _dismissContextMenu();
+    _hideLocalTouchSelectionChrome();
+    _relocate(hit.position, hit.position, affinity: hit.affinity);
   }
 
   static int _assoc(HomericCaretAffinity affinity) =>
       affinity == HomericCaretAffinity.upstream ? -1 : 1;
+}
+
+/// A paragraph as iPadOS Scribble sees it: somewhere to write.
+final class _ParagraphScribbleClient implements ScribbleClient {
+  _ParagraphScribbleClient(this._state)
+      : elementIdentifier = 'homeric-paragraph-${_nextIdentifier++}';
+
+  static int _nextIdentifier = 1;
+
+  final _HomericEditableParagraphState _state;
+
+  @override
+  final String elementIdentifier;
+
+  @override
+  Rect get bounds => _state._scribbleBounds();
+
+  @override
+  bool isInScribbleRect(Rect rect) => _state._isInScribbleRect(rect);
+
+  @override
+  void onScribbleFocus(Offset offset) => _state._scribbleFocus(offset);
 }
 
 /// Lets pointer input fall through to interactive inline slot children.

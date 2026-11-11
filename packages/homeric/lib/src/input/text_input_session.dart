@@ -308,6 +308,10 @@ final class HomericTextInputSession extends ChangeNotifier {
   /// [documentRevision] is an identity witness: geometry from any prior
   /// immutable [Document] is rejected. A regressing [layoutGeneration] is also
   /// rejected, allowing the host to race layout safely without pausing input.
+  ///
+  /// [selectionRects], one per character at its block offset in the same
+  /// space as [caretRect], let an iPad's Scribble place handwriting, scratch
+  /// words out, and select by circling. Null keeps the rects last sent.
   bool publishGeometry({
     required HomericTextInputGeometryLease lease,
     required Document documentRevision,
@@ -316,6 +320,7 @@ final class HomericTextInputSession extends ChangeNotifier {
     required Matrix4 transform,
     required Rect caretRect,
     Rect? composingRect,
+    List<SelectionRect>? selectionRects,
   }) {
     final connection = _connection;
     if (_disposed ||
@@ -336,6 +341,19 @@ final class HomericTextInputSession extends ChangeNotifier {
       connection.setComposingRect(composingRect);
     } else if (controller.composing == null) {
       connection.setComposingRect(Rect.zero);
+    }
+    if (selectionRects != null) {
+      final prefix = _sentinelLength;
+      // The platform text starts with the sentinel, so every block offset
+      // sits one further along there.
+      connection.setSelectionRects(<SelectionRect>[
+        for (final rect in selectionRects)
+          SelectionRect(
+            position: rect.position + prefix,
+            bounds: rect.bounds,
+            direction: rect.direction,
+          ),
+      ]);
     }
     return true;
   }

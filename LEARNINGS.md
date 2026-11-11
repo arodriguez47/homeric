@@ -1558,3 +1558,32 @@ a sized widget; reach its geometry through its view range, never through the
 decoration's own document end; key anything built per decoration by place,
 never by the decoration; and keep spelling and every other text reader off
 the words, because they stand for source the writer cannot see.
+
+## engineer — 2026-11-11 — Scribble needs a custom editor to answer iPadOS
+
+**Symptom:** Apple Pencil handwriting (Scribble) did nothing over a Homeric
+paragraph on iPad, while Flutter's own text fields (a search box) took it.
+
+**Cause:** Scribble is a conversation, not a setting. iPadOS asks the app
+which elements lie under the pen (`TextInputClient.requestElementsInRect`),
+focuses one (`TextInputClient.focusElement`), and then places strokes,
+scratch-outs and circle selections by the character rects of the focused
+input (`TextInput.setSelectionRects`). `EditableText` answers all three
+through its private `_ScribbleFocusable` and per-frame selection rects; a
+custom editor on `DeltaTextInputClient` answers none, so the engine finds no
+element and the pen is just a finger. Without rects, the engine's
+`closestPositionToPoint` falls back to the current caret.
+
+**Fix:** each `HomericEditableParagraph` registers a `ScribbleClient`
+(bounds = the paragraph as drawn; in-rect = not read-only and the
+paragraph is on the hit-test path at that point; focus = place the caret at
+the pen as a tap would). The focused paragraph sends one rect per grapheme
+with `publishGeometry(selectionRects:)` on iOS, only when the layout,
+document or lease changed. Positions are block offsets plus the iOS
+boundary sentinel, in the same space as the caret rect.
+
+**Rule going forward:** anything that replaces `EditableText` must also
+replace its platform conversations (Scribble, selection rects, placeholders
+for Scribble's insert-space gesture, which Homeric still ignores). Rects sent
+to the platform are in platform offsets, so they carry the sentinel. A
+paragraph's overlay context is null on its first frame; tests pump once more.

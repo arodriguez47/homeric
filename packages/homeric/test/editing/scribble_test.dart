@@ -214,6 +214,57 @@ void main() {
     }
   });
 
+  testWidgets('the input view follows a focused paragraph as it scrolls',
+      (tester) async {
+    setUpEditor();
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Material(
+        child: SingleChildScrollView(
+          controller: scroll,
+          child: Column(
+            children: <Widget>[
+              const SizedBox(height: 300),
+              SizedBox(
+                width: 400,
+                child: HomericEditableParagraph(
+                  key: const ValueKey<String>('a'),
+                  controller: controller,
+                  inputSession: session,
+                  blockId: 'a',
+                  resolveStyle: (_) => const TextStyle(fontSize: 20),
+                ),
+              ),
+              const SizedBox(height: 2000),
+            ],
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.tapAt(
+      tester.getRect(find.byKey(const ValueKey<String>('a'))).center,
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(session.activeBlockId, 'a');
+
+    double publishedTop() {
+      final call = tester.testTextInput.log.lastWhere(
+        (call) => call.method == 'TextInput.setEditableSizeAndTransform',
+      );
+      final transform = (call.arguments as Map<Object?, Object?>)['transform']
+          as List<Object?>;
+      return (transform[13]! as num).toDouble();
+    }
+
+    expect(publishedTop(), 300);
+    scroll.jumpTo(120);
+    await tester.pump();
+    expect(publishedTop(), 180);
+  });
+
   testWidgets('no character rects off iOS', (tester) async {
     setUpEditor();
     await tester.pumpWidget(editor());

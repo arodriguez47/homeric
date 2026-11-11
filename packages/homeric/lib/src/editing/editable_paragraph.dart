@@ -544,6 +544,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   HomericTextInputGeometryLease? _scribbleRectsLease;
   int? _scribbleRectsGeneration;
   Object? _scribbleRectsDocument;
+  // The window transform the platform last received, and how to resend it.
+  Matrix4? _publishedTransform;
+  bool Function(Matrix4 transform)? _republishTransform;
+  bool _watchingTransform = false;
   Offset? _secondaryLocalPosition;
   BlockTextRange? _secondaryWordRange;
   ContextMenuController? _contextMenuController;
@@ -4307,22 +4311,70 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       }
       final render = overlayContext.findRenderObject();
       if (render is! RenderBox || !render.attached) return;
+      final transform = render.getTransformTo(null);
+      final editableSize = blockRect.value.size;
+      final caretRect = caret.value;
       final published = widget.inputSession.publishGeometry(
         lease: geometryLease,
         documentRevision: documentRevision,
         layoutGeneration: generation,
-        editableSize: blockRect.value.size,
-        transform: render.getTransformTo(null),
-        caretRect: caret.value,
+        editableSize: editableSize,
+        transform: transform,
+        caretRect: caretRect,
         composingRect: composingRect,
         selectionRects: selectionRects,
       );
-      if (published && selectionRects != null) {
+      if (!published) return;
+      if (selectionRects != null) {
         _scribbleRectsLease = geometryLease;
         _scribbleRectsGeneration = generation;
         _scribbleRectsDocument = documentRevision;
       }
+      _publishedTransform = transform;
+      _republishTransform = (moved) => widget.inputSession.publishGeometry(
+            lease: geometryLease,
+            documentRevision: documentRevision,
+            layoutGeneration: generation,
+            editableSize: editableSize,
+            transform: moved,
+            caretRect: caretRect,
+            composingRect: composingRect,
+          );
+      _watchPublishedTransform(render);
     });
+  }
+
+  /// Follows the focused paragraph as it scrolls or moves without a new
+  /// layout, which would not rebuild the overlay: the platform's input view,
+  /// where Scribble writes and the keyboard's candidates sit, moves with it.
+  /// Runs after frames that are drawn anyway and stops once input leaves.
+  void _watchPublishedTransform(RenderBox render) {
+    if (_watchingTransform) return;
+    _watchingTransform = true;
+    void check(Duration _) {
+      final republish = _republishTransform;
+      if (!mounted ||
+          republish == null ||
+          !render.attached ||
+          widget.inputSession.activeBlockId != widget.blockId) {
+        _watchingTransform = false;
+        return;
+      }
+      final transform = render.getTransformTo(null);
+      if (transform != _publishedTransform) {
+        if (republish(transform)) {
+          _publishedTransform = transform;
+        } else {
+          // Superseded: the next full publication restarts the watch.
+          _republishTransform = null;
+          _watchingTransform = false;
+          return;
+        }
+      }
+      WidgetsBinding.instance.addPostFrameCallback(check);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback(check);
   }
 
   void _syncScribbleRegistration() {

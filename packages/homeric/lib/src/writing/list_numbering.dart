@@ -15,6 +15,7 @@
 /// up from its first item's number, so a list can start at 3. When the
 /// first item leaves (deleted, moved, unlisted), the item that takes its
 /// place starts where the list started, not at its own old number. An item
+/// moved to the head of another list takes that list's start, and one
 /// nested or outdented into a list of its own starts it at 1.
 library;
 
@@ -91,38 +92,14 @@ final class HomericListNumbering extends HomericWritingFeature {
   }) {
     final runs = _Runs.of(after, accepts).runs;
     if (runs.isEmpty) return const <HomericListNumberFix>[];
-    _Runs? previous;
-    Map<String, _Run>? runOf;
+    final old = _Runs.of(before, accepts);
+    final now = <String, _Run>{
+      for (final r in runs)
+        for (final item in r.items) item.blockId: r,
+    };
     final fixes = <HomericListNumberFix>[];
     for (final run in runs) {
-      var start = run.items.first.number;
-      final first = run.items.first.blockId;
-      previous ??= _Runs.of(before, accepts);
-      final old = previous.byBlock[first];
-      if (old != null && old.items.first.blockId != first) {
-        final was = old.items.firstWhere((item) => item.blockId == first);
-        if (was.depth != run.items.first.depth) {
-          // Nested or outdented out of its list into a new one.
-          start = 1;
-        } else {
-          // It opens a list it was inside of before. If no item above it
-          // there is in another list now (they left, or moved below it),
-          // it takes that list's place and start; if some are, the list
-          // was split and it keeps its own number.
-          final listed = runOf ??= <String, _Run>{
-            for (final r in runs)
-              for (final item in r.items) item.blockId: r,
-          };
-          final above = old.items.takeWhile((item) => item.blockId != first);
-          final split = above.any((item) {
-            final now = listed[item.blockId];
-            return now != null && !identical(now, run);
-          });
-          if (!split) {
-            start = old.items.first.number;
-          }
-        }
-      }
+      final start = _startOf(run, old, now);
       for (var i = 0; i < run.items.length; i++) {
         final item = run.items[i];
         final want = start + i;
@@ -142,6 +119,48 @@ final class HomericListNumbering extends HomericWritingFeature {
       return ai.compareTo(bi);
     });
     return fixes;
+  }
+
+  /// Where [run] counts from, given the lists before the edit ([old]) and
+  /// which list each numbered line is in now ([now]).
+  static int _startOf(_Run run, _Runs old, Map<String, _Run> now) {
+    final first = run.items.first;
+    final was = old.itemOf[first.blockId];
+    // A line that was not numbered before: its number is what was typed.
+    if (was == null) return first.number;
+    final list = old.byBlock[first.blockId]!;
+    if (identical(list.items.first, was)) {
+      // Still the first line. Its number is the start if only the number
+      // was edited; if its words changed (a join or a replaced selection
+      // left the next item's words in it), the list keeps its start.
+      return first.words == was.words ? first.number : was.number;
+    }
+    // It came from inside a list to the head of another (moved there):
+    // that list's start.
+    for (final item in run.items.skip(1)) {
+      final from = old.byBlock[item.blockId];
+      if (from == null) continue;
+      if (!identical(from, list)) return from.items.first.number;
+      break;
+    }
+    // Nested or outdented out of its list into a new one.
+    if (was.depth != first.depth) return 1;
+    // It opens a list it was inside of. When the nearest line above it
+    // there that is still numbered now ends a list that list still heads,
+    // the list was split (a plain line between): it keeps counting.
+    // Otherwise the lines above it left, or moved below it, and it takes
+    // the list's place and start.
+    var split = false;
+    for (final above
+        in list.items.reversed.skipWhile((i) => i != was).skip(1)) {
+      final aboveNow = now[above.blockId];
+      if (aboveNow == null) continue;
+      split = !identical(aboveNow, run) &&
+          aboveNow.items.last.blockId == above.blockId &&
+          identical(old.byBlock[aboveNow.items.first.blockId], list);
+      break;
+    }
+    return split ? first.number : list.items.first.number;
   }
 
   static Attributes _attributesAt(Block block, int offset) {
@@ -200,6 +219,7 @@ final class _Item {
     this.number,
     this.digitsStart,
     this.digitsEnd,
+    this.words,
   );
 
   final String blockId;
@@ -207,6 +227,9 @@ final class _Item {
   final int number;
   final int digitsStart;
   final int digitsEnd;
+
+  /// The line's text after its marker.
+  final String words;
 }
 
 final class _Run {
@@ -215,11 +238,12 @@ final class _Run {
 
 /// Every run in a document, and which run each numbered line is in.
 final class _Runs {
-  _Runs._(this.runs, this.byBlock);
+  _Runs._(this.runs, this.byBlock, this.itemOf);
 
   factory _Runs.of(Document doc, HomericIndentFilter? accepts) {
     final runs = <_Run>[];
     final byBlock = <String, _Run>{};
+    final itemOf = <String, _Item>{};
     // Open runs by depth: open[d] is the run counting at depth d, if any.
     final open = <_Run?>[];
     void closeFrom(int depth) {
@@ -267,12 +291,15 @@ final class _Runs {
         int.tryParse(match.orderedDigits) ?? 1,
         digitsStart,
         digitsStart + match.orderedDigits.length,
+        text.substring(match.prefixEnd),
       ));
       byBlock[block.id] = run;
+      itemOf[block.id] = run.items.last;
     }
-    return _Runs._(runs, byBlock);
+    return _Runs._(runs, byBlock, itemOf);
   }
 
   final List<_Run> runs;
   final Map<String, _Run> byBlock;
+  final Map<String, _Item> itemOf;
 }

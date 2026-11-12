@@ -176,6 +176,62 @@ void main() {
       expect(linesOf(controller), ['1. three', '2. one', '3. two']);
     });
 
+    test('a line moved to the head of another list takes its start', () {
+      final controller = controllerFor(
+        ['1. a', '2. b', '3. c', 'between', '1. d', '2. e'],
+        line: 0,
+      );
+      final tx = Transaction(controller.document)..moveBlock('l2', 3);
+      expect(controller.applyTransaction(tx), isTrue);
+      expect(linesOf(controller), [
+        '1. a',
+        '2. b',
+        'between',
+        '1. c',
+        '2. d',
+        '3. e',
+      ]);
+    });
+
+    test('a first line moved into another list leaves its list at 1', () {
+      final controller = controllerFor(
+        ['1. a', '2. b', '3. c', 'between', '1. d', '2. e'],
+        line: 0,
+      );
+      final tx = Transaction(controller.document)..moveBlock('l0', 5);
+      expect(controller.applyTransaction(tx), isTrue);
+      expect(linesOf(controller), [
+        '1. b',
+        '2. c',
+        'between',
+        '1. d',
+        '2. e',
+        '3. a',
+      ]);
+    });
+
+    test('deleting the whole first line keeps the list at 1', () {
+      final document = Document([
+        _block('1. one', id: 'l0'),
+        _block('2. two', id: 'l1'),
+        _block('3. three', id: 'l2'),
+      ]);
+      final controller = HomericEditorController(
+        document: document,
+        selection: HomericSelection(
+          anchor: document.positionAt(0, 0),
+          head: document.positionAt(1, 0),
+        ),
+      );
+      final stop = const HomericListNumbering().installOn(controller);
+      addTearDown(() {
+        stop();
+        controller.dispose();
+      });
+      controller.deleteBackward();
+      expect(linesOf(controller), ['1. two', '2. three']);
+    });
+
     test('a host transaction (drag by the handle) renumbers too', () {
       final controller = controllerFor(
         ['1. one', '2. two', '3. three'],

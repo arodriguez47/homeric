@@ -1605,7 +1605,9 @@ implement: an expanded selection never reveals it; a caret or composing
 range inside still does. `HomericListHangSpec`, the unhung list glyph, and
 `MarkdownMarkHideSpec.lineMark` (via `markdownLineMarkHideReplacement`,
 used for `> ` and `- [ ] `) implement it. `isMarkdownMarkHideDecoration`
-still counts the line-mark spec, so source-visible mode shows it.
+still counts the line-mark spec, so source-visible mode shows it. A
+selection ending at a line's start reaches that line as a collapsed piece,
+so the held check reads the document's selection, not the piece.
 
 **Rule going forward:** a marker folded out of the line and drawn as
 something else takes a held spec. Marks whose source is the only thing

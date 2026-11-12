@@ -99,6 +99,62 @@ void main() {
     expect(await viewText(tester, text, from: 0, to: text.length), shown);
   });
 
+  testWidgets('a selection ending at a line start keeps its marker folded',
+      (tester) async {
+    // In a document, a selection from the line above that ends at the
+    // quote's start reaches the quote as a collapsed piece at offset 0.
+    final controller = HomericEditorController(
+      document: Document([
+        Block(id: 'a', type: 'paragraph', runs: [InlineRun('Above')]),
+        Block(id: 'b', type: 'paragraph', runs: [InlineRun('> A quote')]),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+    controller.setSelection(HomericSelection(
+      anchor: controller.globalPositionForBlockOffset('a', 0),
+      head: controller.globalPositionForBlockOffset('b', 0),
+    ));
+    await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: Localizations(
+        locale: const Locale('en'),
+        delegates: const <LocalizationsDelegate<dynamic>>[
+          DefaultWidgetsLocalizations.delegate,
+        ],
+        child: Overlay(initialEntries: [
+          OverlayEntry(
+            builder: (_) => SizedBox(
+              width: 600,
+              child: HomericEditableDocument.builder(
+                controller: controller,
+                inputSession: session,
+                cacheExtent: 0,
+                estimatedBlockHeight: 44,
+                blockBuilder: (context, block, focusNode) =>
+                    HomericEditableParagraph(
+                  controller: controller,
+                  inputSession: session,
+                  blockId: block.id,
+                  focusNode: focusNode,
+                  resolveStyle: (_) => const TextStyle(fontSize: 14),
+                  deriveDecorations: (b) => _syntax.decorationsFor(b),
+                ),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    ));
+    await tester.pump();
+    final paragraph = find.byType(HomericParagraph).last;
+    expect(
+      tester.renderObject<RenderHomericParagraph>(paragraph).source.viewText,
+      'A quote',
+    );
+  });
+
   testWidgets('a caret inside a quote marker still shows it', (tester) async {
     expect(await viewText(tester, '> A quote', from: 0), '> A quote');
   });

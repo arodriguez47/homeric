@@ -25,8 +25,9 @@ import 'checklists.dart';
 import 'list_glyphs.dart';
 import 'syntax_decorations.dart' show HomericChecklistSpec;
 
-/// Replacement spec for the folded marker of a hung list line.
-final class HomericListHangSpec {
+/// Replacement spec for the folded marker of a hung list line. A selection
+/// over the marker keeps it folded: [HomericListLine] draws it already.
+final class HomericListHangSpec implements HomericHeldUnderSelection {
   const HomericListHangSpec._();
 
   /// The one instance every hung marker's hide carries.

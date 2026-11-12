@@ -1587,3 +1587,26 @@ replace its platform conversations (Scribble, selection rects, placeholders
 for Scribble's insert-space gesture, which Homeric still ignores). Rects sent
 to the platform are in platform offsets, so they carry the sentinel. A
 paragraph's overlay context is null on its first frame; tests pump once more.
+
+## engineer — 2026-11-12 — A selection showed a drawn line marker twice
+
+**Symptom:** selecting a bullet line in Sprintnotes showed the gutter
+bullet and the raw `- ` side by side ("• - words"). Numbered lines, to-dos
+and quotes did the same (number + `1. `, box + `- [ ] `, bar + `> `).
+
+**Cause:** the editable paragraph reveals the source of every `replace`
+decoration a selection touches (reveal-on-selection, so selected `**bold**`
+shows its marks). A line marker the host draws somewhere else (the hang's
+gutter, a to-do's box widget, the quote bar) does not know about that
+reveal, so the drawn mark stays while its source comes back.
+
+**Fix:** `HomericHeldUnderSelection`, an interface a `replace` spec can
+implement: an expanded selection never reveals it; a caret or composing
+range inside still does. `HomericListHangSpec`, the unhung list glyph, and
+`MarkdownMarkHideSpec.lineMark` (via `markdownLineMarkHideReplacement`,
+used for `> ` and `- [ ] `) implement it. `isMarkdownMarkHideDecoration`
+still counts the line-mark spec, so source-visible mode shows it.
+
+**Rule going forward:** a marker folded out of the line and drawn as
+something else takes a held spec. Marks whose source is the only thing
+shown (`**`, `## `, `%%`) keep the plain hide spec and reveal as before.

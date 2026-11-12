@@ -1024,7 +1024,7 @@ Iterable<Decoration> _markdownBlockDecorations(
     if (quote == null) continue;
     final bodyStart = line.start + quote.end;
     final end = line.start + line.text.length;
-    yield markdownMarkHideReplacement(block.id, line.start, bodyStart);
+    yield markdownLineMarkHideReplacement(block.id, line.start, bodyStart);
     if (bodyStart < end) {
       yield Decoration.inline(
         block.id,
@@ -1192,7 +1192,7 @@ String _listGlyph(String text, HomericMarkdownListMatch match) {
   };
 }
 
-class _ListMarkSpec implements ReplacementContent {
+class _ListMarkSpec implements ReplacementContent, HomericHeldUnderSelection {
   const _ListMarkSpec(this.mark);
   final String mark;
   @override
@@ -1277,7 +1277,7 @@ Iterable<Decoration> _checklistDecorations(
             done: done,
           ),
         );
-        yield markdownMarkHideReplacement(block.id, markerStart, bodyStart);
+        yield markdownLineMarkHideReplacement(block.id, markerStart, bodyStart);
       }
       if (done && body.isNotEmpty) {
         yield Decoration.inline(

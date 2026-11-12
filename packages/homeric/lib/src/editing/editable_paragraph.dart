@@ -2078,8 +2078,14 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final revealed = <Decoration>[];
     for (final decoration in decorations) {
       if (decoration.kind != DecorationKind.replace) continue;
-      if (_touches(decoration.start, decoration.end, selection?.start,
-              selection?.end) ||
+      // A marker the host draws elsewhere stays folded under a selection;
+      // only a caret in it shows its source.
+      final held = decoration.spec is HomericHeldUnderSelection &&
+          selection != null &&
+          selection.start != selection.end;
+      if ((!held &&
+              _touches(decoration.start, decoration.end, selection?.start,
+                  selection?.end)) ||
           _touches(decoration.start, decoration.end, composing?.start,
               composing?.end)) {
         revealed.add(decoration);

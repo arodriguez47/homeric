@@ -773,7 +773,9 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (hostDependenciesChanged || spellProviderChanged) {
       _clearTransientState();
     }
-    if (blockChanged) _proofing = _ResolvedProofing.empty;
+    if (blockChanged || controllerChanged) {
+      _proofing = _ResolvedProofing.empty;
+    }
     if (!identical(
       oldWidget.touchSelectionConfiguration,
       widget.touchSelectionConfiguration,
@@ -4028,13 +4030,16 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             message: found.issue.message,
           )
         : found.issue;
+    final controller = _controller;
     return HomericProofingTap(
       issue: issue,
       words: found.words,
-      // The host's sheet may take focus: the fix holds while the words and
-      // the finding are still the ones tapped.
-      apply: (replacement) =>
-          _applyProofingFix(null, found, replacement, refocus: false),
+      // The host's sheet may take focus: the fix holds while the words, the
+      // finding and the controller are still the ones tapped.
+      apply: (replacement) {
+        if (!identical(controller, _controller)) return;
+        _applyProofingFix(null, found, replacement, refocus: false);
+      },
       ignore: () => _ignoreProofing(found),
       ruleAction: action == null
           ? null

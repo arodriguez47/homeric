@@ -400,6 +400,31 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
+    testWidgets('a tap from a replaced controller changes nothing',
+        (tester) async {
+      final first = await pump(
+        tester,
+        'We saw the the tide.',
+        platform: TargetPlatform.iOS,
+      );
+      await tester.tapAt(centerOf(tester, 7, 14));
+      await tester.pump(const Duration(milliseconds: 400));
+      final tap = first.taps.single;
+      // Same block id and words, a new controller.
+      final second = await pump(
+        tester,
+        'We saw the the tide.',
+        platform: TargetPlatform.iOS,
+      );
+      tap.apply('the');
+      await tester.pump();
+      expect(second.controller.document.blocks.single.text,
+          'We saw the the tide.');
+      expect(
+          first.controller.document.blocks.single.text, 'We saw the the tide.');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
     testWidgets('a finding over hidden ** marks offers no fix', (tester) async {
       const text = 'We saw the **the tide**.';
       final pumped = await pump(

@@ -1610,3 +1610,22 @@ run of numbered items in order.
 but stored as source (list numbers, and anything like them) is kept right
 by a normalizer, so the fix is part of the edit: one Undo, one committed
 change, and the source the host saves and exports is already right.
+
+## engineer — 2026-11-12 — A Windows input connection must name its view
+
+**Symptom:** on Windows the editor showed a caret and took no letters at all
+(Sprintnotes Quick Capture and the Capture view). Key events reached the
+framework unclaimed, and a Material `TextField` in the same window typed
+fine.
+
+**Cause:** `HomericTextInputSession` attached with a `TextInputConfiguration`
+whose `viewId` was null. The Windows engine (Flutter 3.47) routes typed
+text by view, so a connection with no view got no
+`updateEditingStateWithDeltas` and no legacy update either: the letters
+were dropped in the engine, with nothing logged. `EditableText` sets
+`viewId` from `View.of(context)`, which is why plain fields worked.
+
+**Fix:** `HomericTextInputSession.viewId`, set by each editable paragraph
+from `View.maybeOf(context)` beside the keyboard's brightness, and sent on
+attach and through `updateConfig` when it changes. Any host that opens a
+session without a paragraph has to set it too.

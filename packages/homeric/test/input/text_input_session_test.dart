@@ -1425,6 +1425,30 @@ void main() {
       controller.dispose();
     });
 
+    test('the connection names the view the host is drawn in', () {
+      // Windows drops typed text for a connection with no view id.
+      final controller = HomericEditorController(
+        document: _document(''),
+        selection: const HomericSelection.collapsed(1),
+      );
+      final session = HomericTextInputSession(controller: controller);
+      Object? lastArguments(String method) =>
+          calls.lastWhere((call) => call.method == method).arguments;
+
+      session.viewId = 7;
+      session.attach(blockId: 'a');
+      final setClient = lastArguments('TextInput.setClient')! as List<Object?>;
+      expect((setClient[1]! as Map<Object?, Object?>)['viewId'], 7);
+
+      session.viewId = 3;
+      final updated =
+          lastArguments('TextInput.updateConfig')! as Map<Object?, Object?>;
+      expect(updated['viewId'], 3);
+
+      session.dispose();
+      controller.dispose();
+    });
+
     group('dashes typed at a line start on the soft keyboard', () {
       /// Types [typed] into an empty line one character at a time, as the
       /// iOS keyboard sends it: an insertion delta after the sentinel.

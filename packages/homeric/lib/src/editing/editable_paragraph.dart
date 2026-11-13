@@ -669,7 +669,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       _documentHost = documentHost;
       documentHost?.registerCommandHost(widget.blockId, _commandDelegate);
     }
-    _syncKeyboardAppearance();
+    _syncInputConfiguration();
     // `valuesOf` postdates Homeric's Flutter 3.24 minimum.
     // ignore: deprecated_member_use
     final tickerEnabled = TickerMode.of(context);
@@ -720,7 +720,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (sessionChanged) {
       oldWidget.inputSession.removeListener(_inputSessionChanged);
       widget.inputSession.addListener(_inputSessionChanged);
-      _syncKeyboardAppearance();
+      _syncInputConfiguration();
     }
     if (sessionChanged || blockChanged) {
       _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
@@ -845,10 +845,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           ));
 
   // The keyboard follows the app's theme, not the system's light or dark. A
-  // Material Theme publishes its brightness through CupertinoTheme too.
-  void _syncKeyboardAppearance() {
-    widget.inputSession.keyboardAppearance =
-        CupertinoTheme.maybeBrightnessOf(context);
+  // Material Theme publishes its brightness through CupertinoTheme too. The
+  // connection also names the view the paragraph is drawn in, without which
+  // the Windows engine drops typed text.
+  void _syncInputConfiguration() {
+    widget.inputSession
+      ..keyboardAppearance = CupertinoTheme.maybeBrightnessOf(context)
+      ..viewId = View.maybeOf(context)?.viewId;
   }
 
   void _validateSession() {

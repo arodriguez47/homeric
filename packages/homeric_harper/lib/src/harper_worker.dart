@@ -79,9 +79,21 @@ final class HarperWorker {
     requests.listen((message) {
       switch (message) {
         case ('warm', final int dialect):
-          harperWarmUp(dialect);
+          try {
+            harperWarmUp(dialect);
+          } on Object {
+            // The first check reports it.
+          }
         case (final int id, final String text, final int dialect):
-          replies.send((id, _check(text, dialect)));
+          // A native call that throws (a missing library or symbol) still
+          // answers, so the caller falls back instead of waiting forever.
+          String? json;
+          try {
+            json = _check(text, dialect);
+          } on Object {
+            json = null;
+          }
+          replies.send((id, json));
       }
     });
   }

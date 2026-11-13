@@ -162,6 +162,7 @@ void main() {
       String text, {
       bool focus = false,
       TargetPlatform platform = TargetPlatform.macOS,
+      List<(int, int)> hidden = const [],
     }) async {
       debugDefaultTargetPlatformOverride = platform;
       final document = Document(<Block>[
@@ -191,6 +192,11 @@ void main() {
                 focusNode: focusNode,
                 blockId: 'b',
                 resolveStyle: (_) => _style,
+                deriveDecorations: (block) => [
+                  for (final (start, end) in hidden)
+                    markdownMarkHideReplacement(block.id, start, end),
+                ],
+                markdownMarkVisibility: MarkdownMarkVisibility.livePreview,
                 proofreader: suite,
                 grammarColor: _grammar,
                 styleWashColor: _wash,
@@ -372,6 +378,74 @@ void main() {
       tap.apply('the');
       await tester.pump();
       expect(pumped.controller.document.blocks.single.text, 'We saw the tide.');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('a host sheet that took focus can still apply the fix',
+        (tester) async {
+      final pumped = await pump(
+        tester,
+        'We saw the the tide.',
+        platform: TargetPlatform.iOS,
+      );
+      await tester.tapAt(centerOf(tester, 7, 14));
+      await tester.pump(const Duration(milliseconds: 400));
+      final tap = pumped.taps.single;
+      // The sheet takes focus from the paragraph.
+      pumped.focusNode.unfocus();
+      await tester.pump();
+      tap.apply('the');
+      await tester.pump();
+      expect(pumped.controller.document.blocks.single.text, 'We saw the tide.');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('a finding over hidden ** marks offers no fix', (tester) async {
+      const text = 'We saw the **the tide**.';
+      final pumped = await pump(
+        tester,
+        text,
+        platform: TargetPlatform.iOS,
+        hidden: const [(11, 13), (21, 23)],
+      );
+      expect(harper.asked, ['We saw the the tide.']);
+      expect(dots(tester), 1);
+      await tester.tapAt(centerOf(tester, 7, 16));
+      await tester.pump(const Duration(milliseconds: 400));
+      final tap = pumped.taps.single;
+      expect(tap.issue.replacements, isEmpty);
+      tap.apply('the');
+      await tester.pump();
+      expect(pumped.controller.document.blocks.single.text, text);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('Edit rule leaves the marks until the rule changes',
+        (tester) async {
+      var edited = 0;
+      suite.dispose();
+      suite = HomericProofingSuite(
+        sources: [
+          HomericPhraseRules(const [
+            HomericPhraseRule(find: 'utilize', replace: 'use'),
+          ]),
+        ],
+        onEditRule: (_) => edited++,
+      );
+      final pumped = await pump(
+        tester,
+        'We utilize the van.',
+        platform: TargetPlatform.iOS,
+      );
+      expect(washes(tester), 1);
+      await tester.tapAt(centerOf(tester, 3, 10));
+      await tester.pump(const Duration(milliseconds: 400));
+      final action = pumped.taps.single.ruleAction!;
+      expect(action.label, 'Edit rule');
+      action.onPressed();
+      await tester.pump();
+      expect(edited, 1);
+      expect(washes(tester), 1);
       debugDefaultTargetPlatformOverride = null;
     });
   });

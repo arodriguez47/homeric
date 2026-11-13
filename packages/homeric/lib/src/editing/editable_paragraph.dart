@@ -773,6 +773,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (hostDependenciesChanged || spellProviderChanged) {
       _clearTransientState();
     }
+    if (blockChanged) _proofing = _ResolvedProofing.empty;
     if (!identical(
       oldWidget.touchSelectionConfiguration,
       widget.touchSelectionConfiguration,
@@ -3879,10 +3880,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       proofreader: proofreader,
       blockId: widget.blockId,
       docText: docText,
+      projectedText: spelled.text,
     );
     if (_proofRequestKey == key) return;
     // Findings for this very text stand until the new ones come.
-    if (!_proofingStale && _proofing.docText == docText) {
+    if (!_proofingStale &&
+        _proofing.docText == docText &&
+        _proofing.projectedText == spelled.text) {
       _proofRequestKey = key;
       return;
     }
@@ -3924,7 +3928,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         ));
       }
       setState(() {
-        _proofing = _ResolvedProofing(docText, List.unmodifiable(resolved));
+        _proofing = _ResolvedProofing(
+          docText,
+          List.unmodifiable(resolved),
+          projectedText: spelled.text,
+        );
       });
     }, onError: (_) {});
   }
@@ -3964,7 +3972,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
               (dark ? const Color(0xFFE0B04A) : const Color(0xFFB8860B)));
       final action = proofreader.ruleActionFor(found.issue);
       sections.add(<HomericMenuRow>[
-        for (final replacement in found.issue.replacements.take(3))
+        for (final replacement in found.fixes.take(3))
           HomericMenuRow(
             label: _fixLabel(found, replacement),
             emphasized: true,
@@ -3988,7 +3996,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             label: action.label,
             onPressed: () {
               _dismissContextMenu();
-              _dropProofingRule(found.issue.ruleId);
+              // A rule turned off reports the change, and the marks go
+              // then; an Edit rule left unsaved keeps them.
               action.onPressed();
             },
           ),
@@ -4000,7 +4009,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   /// Fix rows for the touch menus, which keep to the fixes.
   List<ContextMenuButtonItem> _proofingFixItems(_MenuWitness witness) => [
         for (final found in _proofingUnderMenu)
-          for (final replacement in found.issue.replacements.take(2))
+          for (final replacement in found.fixes.take(2))
             ContextMenuButtonItem(
               label: _fixLabel(found, replacement),
               onPressed: _controller.isReadOnly
@@ -4010,25 +4019,28 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       ];
 
   HomericProofingTap _proofingTapFor(_ResolvedProofingIssue found) {
-    final witness = _MenuWitness(
-      epoch: _hostEpoch,
-      stateRevision: _controller.stateRevision,
-    );
     final action = widget.proofreader?.ruleActionFor(found.issue);
+    final issue = found.fixes.isEmpty && found.issue.replacements.isNotEmpty
+        ? HomericProofingIssue(
+            range: found.issue.range,
+            group: found.issue.group,
+            ruleId: found.issue.ruleId,
+            message: found.issue.message,
+          )
+        : found.issue;
     return HomericProofingTap(
-      issue: found.issue,
+      issue: issue,
       words: found.words,
+      // The host's sheet may take focus: the fix holds while the words and
+      // the finding are still the ones tapped.
       apply: (replacement) =>
-          _applyProofingFix(witness, found, replacement, refocus: false),
+          _applyProofingFix(null, found, replacement, refocus: false),
       ignore: () => _ignoreProofing(found),
       ruleAction: action == null
           ? null
           : HomericProofingRuleAction(
               label: action.label,
-              onPressed: () {
-                _dropProofingRule(found.issue.ruleId);
-                action.onPressed();
-              },
+              onPressed: action.onPressed,
             ),
     );
   }
@@ -4041,27 +4053,25 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     widget.proofreader?.ignore(widget.blockId, found.issue, found.checked);
   }
 
-  void _dropProofingRule(String ruleId) {
-    if (!mounted) return;
-    setState(() {
-      _proofing = _proofing.without((other) => other.issue.ruleId == ruleId);
-    });
-  }
-
   /// Applies [replacement] as one undoable edit, and keeps the paragraph's
   /// other marks where their words still are.
   void _applyProofingFix(
-    _MenuWitness witness,
+    _MenuWitness? witness,
     _ResolvedProofingIssue found,
     String replacement, {
     bool refocus = true,
   }) {
-    final isCurrent = _isMenuWitnessCurrent(witness);
+    final isCurrent = witness == null
+        ? mounted &&
+            _controller.composing == null &&
+            _proofing.issues.any((other) => identical(other, found))
+        : _isMenuWitnessCurrent(witness);
     _dismissContextMenu();
     final block = _block;
     if (!isCurrent ||
         block == null ||
         block.text != _proofing.docText ||
+        !found.fixes.contains(replacement) ||
         replacement.contains('\n') ||
         replacement.contains('\r')) {
       return;
@@ -4077,19 +4087,29 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         else if (other.range.start >= range.end)
           other.shifted(delta),
     ];
+    final before = _proofing;
+    final beforeKey = _proofRequestKey;
     _proofing = _ResolvedProofing(nextText, List.unmodifiable(kept));
-    _controller.applyBlockEditBatch(
+    final applied = _controller.applyBlockEditBatch(
       blockId: widget.blockId,
       edits: <CanonicalTextEdit>[
         CanonicalTextEdit(range.start, range.end, replacement),
       ],
       selection: BlockTextSelection.collapsed(range.start + replacement.length),
     );
-    // The fixed paragraph is not being written: its marks stay.
+    if (!applied || _block?.text != nextText) {
+      // Refused: the words and their marks stay as they were.
+      _proofing = before;
+      _proofRequestKey = beforeKey;
+      return;
+    }
+    // The fixed paragraph is not being written: its marks stay until the
+    // next look checks it again.
     _proofRequestKey = _ProofRequestKey(
       proofreader: widget.proofreader!,
       blockId: widget.blockId,
       docText: nextText,
+      projectedText: null,
     );
     if (refocus) _focusNode.requestFocus();
   }
@@ -5221,37 +5241,48 @@ final class _ProofRequestKey {
     required this.proofreader,
     required this.blockId,
     required this.docText,
+    required this.projectedText,
   });
 
   final HomericProofreader proofreader;
   final String blockId;
   final String docText;
 
+  /// The text the proofreader reads, which decorations can change while
+  /// [docText] stays the same; null when not yet known.
+  final String? projectedText;
+
   @override
   bool operator ==(Object other) =>
       other is _ProofRequestKey &&
       identical(other.proofreader, proofreader) &&
       other.blockId == blockId &&
-      other.docText == docText;
+      other.docText == docText &&
+      other.projectedText == projectedText;
 
   @override
-  int get hashCode =>
-      Object.hash(identityHashCode(proofreader), blockId, docText);
+  int get hashCode => Object.hash(
+      identityHashCode(proofreader), blockId, docText, projectedText);
 }
 
 final class _ResolvedProofing {
-  const _ResolvedProofing(this.docText, this.issues);
+  const _ResolvedProofing(this.docText, this.issues, {this.projectedText});
 
   static const empty = _ResolvedProofing(null, <_ResolvedProofingIssue>[]);
 
   /// The paragraph's text the findings were made for.
   final String? docText;
+
+  /// The text the proofreader read, or null when the findings were carried
+  /// over a fix and the next look should check again.
+  final String? projectedText;
   final List<_ResolvedProofingIssue> issues;
 
   _ResolvedProofing without(bool Function(_ResolvedProofingIssue) test) =>
       _ResolvedProofing(
         docText,
         List.unmodifiable(issues.where((found) => !test(found))),
+        projectedText: projectedText,
       );
 }
 
@@ -5264,6 +5295,11 @@ final class _ResolvedProofingIssue {
   });
 
   final HomericProofingIssue issue;
+
+  /// The replacements a fix may use: none when the words in the block hold
+  /// hidden source (a `**` folded away) that a replacement would delete.
+  List<String> get fixes =>
+      words == checked ? issue.replacements : const <String>[];
 
   /// Where the words sit in the block's text.
   final BlockTextRange range;

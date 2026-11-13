@@ -140,9 +140,8 @@ pub fn check(text: &str, dialect: Dialect) -> Vec<Finding> {
                     }
                     Suggestion::Remove => String::new(),
                 };
-                if replacement.trim_end() != original.trim_end()
-                    && !replacements.iter().any(|r| r.trim_end() == replacement.trim_end())
-                {
+                // Exact strings: a fix may be only whitespace ("  " -> " ").
+                if replacement != original && !replacements.contains(&replacement) {
                     replacements.push(replacement);
                 }
             }
@@ -267,5 +266,12 @@ mod tests {
     #[test]
     fn spelling_is_left_to_the_platform() {
         assert!(rules("We saw anemnoes.").is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_fixes_are_kept() {
+        let found = check("We walked  home.", Dialect::American);
+        let spaces = found.iter().find(|f| f.replacements.iter().any(|r| r.trim().is_empty()));
+        assert!(spaces.is_some(), "{:?}", found.iter().map(|f| (&f.rule, &f.replacements)).collect::<Vec<_>>());
     }
 }

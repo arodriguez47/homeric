@@ -16,7 +16,22 @@ final class HomericMenuRow {
     this.shortcut,
     this.onPressed,
     this.emphasized = false,
-  });
+  })  : isNote = false,
+        marker = null;
+
+  /// A line of explanation under a fix, not pressable: why a proofing mark
+  /// is there, with a dot in the mark's colour.
+  const HomericMenuRow.note(this.label, {this.marker})
+      : shortcut = null,
+        onPressed = null,
+        emphasized = false,
+        isNote = true;
+
+  /// Whether this row only explains.
+  final bool isNote;
+
+  /// The dot before a note.
+  final Color? marker;
 
   final String label;
 
@@ -95,7 +110,11 @@ class HomericContextMenu extends StatelessWidget {
       if (actions.isNotEmpty) _FormatBar(actions: actions, palette: palette),
       for (final section in sections.where((s) => s.isNotEmpty)) ...[
         _Rule(palette: palette),
-        for (final row in section) HomericMenuRowButton(row: row),
+        for (final row in section)
+          if (row.isNote)
+            _NoteRow(row: row, palette: palette)
+          else
+            HomericMenuRowButton(row: row),
       ],
     ];
     // A bar first has no rule above it; rows first neither.
@@ -216,6 +235,51 @@ final class _MenuPalette {
   final Color accent;
   final Color shadow;
   final bool dark;
+}
+
+/// A finding's reason, wrapped to the menu's width.
+class _NoteRow extends StatelessWidget {
+  const _NoteRow({required this.row, required this.palette});
+
+  final HomericMenuRow row;
+  final _MenuPalette palette;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(10, 2, 10, 5),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              if (row.marker case final marker?)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4.5, right: 7),
+                  child: SizedBox(
+                    width: 6,
+                    height: 6,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: marker,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                ),
+              Flexible(
+                child: Text(
+                  row.label,
+                  style: TextStyle(
+                    color: palette.quiet,
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class _Rule extends StatelessWidget {

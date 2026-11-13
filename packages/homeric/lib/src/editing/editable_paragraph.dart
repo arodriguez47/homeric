@@ -33,6 +33,7 @@ import 'editor_clipboard.dart';
 import 'editor_controller.dart';
 import 'markdown_list_indent.dart';
 import 'selection_overlay.dart';
+import 'proofreading.dart';
 import 'spell_check.dart';
 import 'system_spelling.dart';
 
@@ -315,6 +316,10 @@ class HomericEditableParagraph extends StatefulWidget {
     this.onShowToolbar,
     this.spellCheckProvider,
     this.spellingColor,
+    this.proofreader,
+    this.grammarColor,
+    this.styleWashColor,
+    this.onProofingIssueTap,
     this.overlayBuilder,
     this.textSlotBuilder,
     this.onSingleTap,
@@ -448,6 +453,24 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Color of transient spelling squiggles.
   final Color? spellingColor;
 
+  /// Optional grammar and style proofreading.
+  ///
+  /// A paragraph is proofread only while the caret is elsewhere, so
+  /// nothing is checked as the writer types in it; typing there clears its
+  /// marks until the caret leaves again.
+  final HomericProofreader? proofreader;
+
+  /// Color of the dotted line under a grammar finding.
+  final Color? grammarColor;
+
+  /// Color of the wash behind a style finding or the writer's own rule.
+  final Color? styleWashColor;
+
+  /// Called when a touch tap lands on a proofing finding, so the host can
+  /// show its own sheet. Null shows the finding's fixes in the touch menu.
+  /// A desktop click always opens the menu.
+  final ValueChanged<HomericProofingTap>? onProofingIssueTap;
+
   /// Builds consumer overlays from the current paragraph generation.
   final HomericEditableOverlayBuilder? overlayBuilder;
 
@@ -557,6 +580,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   int _spellRequestGeneration = 0;
   _SpellRequestKey? _spellRequestKey;
   List<_ResolvedSpellingSuggestion> _spellingSuggestions = const [];
+  int _proofRequestGeneration = 0;
+  _ProofRequestKey? _proofRequestKey;
+  bool _proofingStale = false;
+  _ResolvedProofing _proofing = _ResolvedProofing.empty;
   Timer? _caretTimer;
   final ValueNotifier<bool> _caretVisibility = ValueNotifier<bool>(true);
   HomericSelection? _caretSelection;
@@ -607,6 +634,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _ownsInput = widget.inputSession.activeBlockId == widget.blockId;
     widget.inputSession.addListener(_inputSessionChanged);
     _spellingDictionary(widget)?.addListener(_spellingDictionaryChanged);
+    widget.proofreader?.proofingChanges.addListener(_proofingChanged);
     WidgetsBinding.instance.addObserver(this);
     // A host may rebuild the same block under a different presentation
     // wrapper while retaining its document-owned FocusNode. The outgoing
@@ -735,6 +763,13 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           ?.removeListener(_spellingDictionaryChanged);
       _spellingDictionary(widget)?.addListener(_spellingDictionaryChanged);
     }
+    if (!identical(oldWidget.proofreader, widget.proofreader)) {
+      oldWidget.proofreader?.proofingChanges.removeListener(_proofingChanged);
+      widget.proofreader?.proofingChanges.addListener(_proofingChanged);
+      _proofRequestGeneration++;
+      _proofRequestKey = null;
+      _proofing = _ResolvedProofing.empty;
+    }
     if (hostDependenciesChanged || spellProviderChanged) {
       _clearTransientState();
     }
@@ -787,6 +822,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _controller.removeListener(_controllerChanged);
     widget.inputSession.removeListener(_inputSessionChanged);
     _spellingDictionary(widget)?.removeListener(_spellingDictionaryChanged);
+    widget.proofreader?.proofingChanges.removeListener(_proofingChanged);
     if (widget.inputSession.activeBlockId == widget.blockId) {
       widget.inputSession.blur();
     }
@@ -989,6 +1025,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _ensureSpellCheck(semanticsSource, block.text);
     final focused = localSelection != null &&
         (_ownsEditingFocus || (_documentHost?.hasEditingFocus ?? false));
+    _ensureProofreading(semanticsSource, block.text, writingHere: focused);
     final brightness = MediaQuery.maybePlatformBrightnessOf(context) ??
         ui.PlatformDispatcher.instance.platformBrightness;
     final caretColor = widget.caretColor ??
@@ -1011,6 +1048,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         (brightness == Brightness.dark
             ? const Color(0xFFFF7B72)
             : const Color(0xFFD93025));
+    final grammarColor = widget.grammarColor ??
+        (brightness == Brightness.dark
+            ? const Color(0xFF7FB2E5)
+            : const Color(0xFF2F6FA8));
+    final styleWashColor = widget.styleWashColor ??
+        (brightness == Brightness.dark
+            ? const Color(0x2EE0B04A)
+            : const Color(0x38DEAA3C));
+    final proofing = _controller.composing == null
+        ? _currentProofing
+        : const <_ResolvedProofingIssue>[];
     final derivedPaintLayers = List<PaintLayer>.unmodifiable(
       widget.derivePaintLayers?.call(block, decorations) ??
           const <PaintLayer>[],
@@ -1018,6 +1066,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final editingLayers = <PaintLayer>[
       ...widget.paintLayers,
       ...derivedPaintLayers,
+      for (final found in proofing)
+        if (found.issue.mark == HomericProofingMark.style)
+          PaintLayer(
+            range: DocRange(
+              DocOffset(found.range.start),
+              DocOffset(found.range.end),
+            ),
+            band: PaintBand.underlay,
+            painter: solidWashPainter,
+            spec: SolidWashSpec(styleWashColor),
+          ),
       if (_autocorrectionPrompt?.range case final range?)
         PaintLayer(
           range: DocRange(
@@ -1055,6 +1114,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             band: PaintBand.overlay,
             painter: _paintSpellingSquiggle,
             spec: UnderlineSpec(spellingColor),
+          ),
+      for (final found in proofing)
+        if (found.issue.mark == HomericProofingMark.grammar)
+          PaintLayer(
+            range: DocRange(
+              DocOffset(found.range.start),
+              DocOffset(found.range.end),
+            ),
+            band: PaintBand.overlay,
+            painter: _paintProofingDots,
+            spec: UnderlineSpec(grammarColor),
           ),
       if (focused && localComposing != null && !localComposing.isCollapsed)
         PaintLayer(
@@ -1259,6 +1329,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
               final current = _currentConsumerGeometry();
               if (current == null) return;
               _completeSingleTap(details.kind);
+              _completeProofingTap(details.kind);
               widget.onSingleTap?.call(
                 current,
                 details.localPosition,
@@ -2097,6 +2168,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   }
 
   void _tapDown(ParagraphGeometry geometry, TapDragDownDetails details) {
+    _proofingTapDown = null;
     if (details.consecutiveTapCount != 1 || !_canUsePointer(geometry)) return;
     _contextMenuShownAtTapDown = _isContextMenuShown;
     _dismissContextMenu();
@@ -2111,6 +2183,40 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     }
     _relocate(hit.position, hit.position, affinity: hit.affinity);
     _syncTouchSelectionChrome(details.kind);
+    // A click on a proofing mark offers its fix once the press lifts.
+    final proofing = _proofingIssueAt(hit.position);
+    if (proofing != null) {
+      _proofingTapDown = (found: proofing, point: details.localPosition);
+    }
+  }
+
+  ({_ResolvedProofingIssue found, Offset point})? _proofingTapDown;
+
+  void _completeProofingTap(PointerDeviceKind? kind) {
+    final pending = _proofingTapDown;
+    _proofingTapDown = null;
+    if (pending == null || _controller.isReadOnly) return;
+    final found = pending.found;
+    if (!_currentProofing.contains(found)) return;
+    final onTap = widget.onProofingIssueTap;
+    if (_isTouchKind(kind) && !_usesDesktopMenu && onTap != null) {
+      onTap(_proofingTapFor(found));
+      return;
+    }
+    // The click's focus settles first; then the menu has a host.
+    void show() {
+      if (!mounted || !_currentProofing.contains(found)) return;
+      _secondaryLocalPosition = pending.point;
+      _secondaryWordRange = found.range;
+      _showContextMenu(useSecondaryAnchor: true);
+    }
+
+    if (_canUseSelectionActions) {
+      show();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) => show());
+      WidgetsBinding.instance.scheduleFrame();
+    }
   }
 
   void _completeSingleTap(PointerDeviceKind? kind) {
@@ -2143,6 +2249,19 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     if (spelling != null &&
         (_usesDesktopMenu || spelling.replacements.isNotEmpty)) {
       _showContextMenu();
+      return;
+    }
+    // A tap on a proofing mark offers its fix: the menu on a desktop, the
+    // host's sheet on touch.
+    final proofing = _proofingIssueAt(pending.position);
+    if (proofing != null) {
+      final onTap = widget.onProofingIssueTap;
+      if (!_usesDesktopMenu && onTap != null) {
+        onTap(_proofingTapFor(proofing));
+      } else {
+        _secondaryWordRange = proofing.range;
+        _showContextMenu();
+      }
     }
   }
 
@@ -2696,7 +2815,11 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         final misspelled = selection.isCollapsed
             ? _spellingSuggestionAt(selection.head)
             : null;
+        final proofing = selection.isCollapsed && misspelled == null
+            ? _proofingIssueAt(selection.head)
+            : null;
         _secondaryWordRange = misspelled?.range ??
+            proofing?.range ??
             BlockTextRange(range.start.value, range.end.value);
       }
     }
@@ -2932,6 +3055,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         [
           for (final item in _spellingDictionaryMenuItems(witness)) row(item),
         ],
+        ..._proofingMenuSections(witness),
         [for (final item in _editingMenuItems(witness)) row(item)],
         [for (final item in _historyMenuItems(witness)) row(item)],
         [
@@ -2973,6 +3097,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final selection = _localSelection();
     return <ContextMenuButtonItem>[
       ..._spellingMenuItems(witness),
+      ..._proofingFixItems(witness),
       ..._editingMenuItems(witness),
       ..._historyMenuItems(witness),
       ..._hostContextMenuItems(witness, selection),
@@ -3204,6 +3329,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final selection = _localSelection();
     final collapsed = selection == null || selection.isCollapsed;
     _spellingMenuItems(witness).forEach(add);
+    _proofingFixItems(witness).forEach(add);
     if (collapsed && _block != null && _block!.contentLength > 0) {
       add(ContextMenuButtonItem(
         label: 'Select',
@@ -3371,6 +3497,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     _spellRequestGeneration++;
     _spellRequestKey = null;
     _spellingSuggestions = const [];
+    _proofRequestGeneration++;
+    _proofRequestKey = null;
   }
 
   void _updateFloatingCursor(RawFloatingCursorPoint point, int epoch) {
@@ -3704,6 +3832,266 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       }
       setState(() => _spellingSuggestions = const []);
     });
+  }
+
+  /// Findings for the paragraph's words as they stand; none once its text
+  /// has changed since they were found.
+  List<_ResolvedProofingIssue> get _currentProofing {
+    final block = _block;
+    if (block == null || block.text != _proofing.docText) {
+      return const <_ResolvedProofingIssue>[];
+    }
+    return _proofing.issues;
+  }
+
+  _ResolvedProofingIssue? _proofingIssueAt(int offset) {
+    for (final found in _currentProofing) {
+      if (found.range.start <= offset && offset <= found.range.end) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  /// The writer's choices changed: check again, keeping today's marks until
+  /// the answer comes. A paragraph being written is checked too, since the
+  /// writer is not typing in it while changing a setting.
+  void _proofingChanged() {
+    if (!mounted || _disposing) return;
+    _proofRequestKey = null;
+    _proofingStale = true;
+    setState(() {});
+  }
+
+  void _ensureProofreading(
+    ParagraphSource<Object?> source,
+    String docText, {
+    required bool writingHere,
+  }) {
+    final proofreader = widget.proofreader;
+    // Unlike spelling, every paragraph is proofread, not only the one with
+    // the caret: the one with the caret is the one that waits.
+    if (proofreader == null || _controller.composing != null) return;
+    // The paragraph being written waits until the caret leaves it.
+    if (writingHere && !_proofingStale) return;
+    final spelled = _SpelledText.of(source, docText);
+    final key = _ProofRequestKey(
+      proofreader: proofreader,
+      blockId: widget.blockId,
+      docText: docText,
+    );
+    if (_proofRequestKey == key) return;
+    // Findings for this very text stand until the new ones come.
+    if (!_proofingStale && _proofing.docText == docText) {
+      _proofRequestKey = key;
+      return;
+    }
+    _proofRequestKey = key;
+    _proofingStale = false;
+    final generation = ++_proofRequestGeneration;
+    late final Future<List<HomericProofingIssue>> pending;
+    try {
+      pending = proofreader.proofread(HomericSpellCheckRequest(
+        blockId: widget.blockId,
+        text: spelled.text,
+        contentRevision: _controller.contentRevision,
+      ));
+    } on Object {
+      return;
+    }
+    pending.then((issues) {
+      if (!mounted ||
+          _disposing ||
+          generation != _proofRequestGeneration ||
+          _proofRequestKey != key ||
+          _block?.text != docText) {
+        return;
+      }
+      final resolved = <_ResolvedProofingIssue>[];
+      for (final issue in issues) {
+        if (issue.range.start < 0 ||
+            issue.range.end <= issue.range.start ||
+            issue.range.end > spelled.text.length) {
+          continue;
+        }
+        final range = spelled.docRangeOf(issue.range.start, issue.range.end);
+        if (range == null) continue;
+        resolved.add(_ResolvedProofingIssue(
+          issue: issue,
+          range: range,
+          words: docText.substring(range.start, range.end),
+          checked: spelled.text.substring(issue.range.start, issue.range.end),
+        ));
+      }
+      setState(() {
+        _proofing = _ResolvedProofing(docText, List.unmodifiable(resolved));
+      });
+    }, onError: (_) {});
+  }
+
+  /// The findings under the right click or the click on a mark.
+  List<_ResolvedProofingIssue> get _proofingUnderMenu {
+    final word = _secondaryWordRange;
+    if (word == null) return const [];
+    return [
+      for (final found in _currentProofing)
+        if (found.range.start < word.end && found.range.end > word.start ||
+            (word.start == word.end &&
+                found.range.start <= word.start &&
+                word.start <= found.range.end))
+          found,
+    ].take(2).toList();
+  }
+
+  String _fixLabel(_ResolvedProofingIssue found, String replacement) =>
+      replacement.isEmpty ? 'Remove "${found.words.trim()}"' : replacement;
+
+  /// Each finding's fixes, its reason, Ignore here and its rule action, as
+  /// a section each.
+  List<List<HomericMenuRow>> _proofingMenuSections(_MenuWitness witness) {
+    final proofreader = widget.proofreader;
+    if (proofreader == null) return const [];
+    final dark = (MediaQuery.maybePlatformBrightnessOf(context) ??
+            ui.PlatformDispatcher.instance.platformBrightness) ==
+        Brightness.dark;
+    final windows = defaultTargetPlatform == TargetPlatform.windows;
+    final sections = <List<HomericMenuRow>>[];
+    for (final found in _proofingUnderMenu) {
+      final marker = found.issue.mark == HomericProofingMark.grammar
+          ? (widget.grammarColor ??
+              (dark ? const Color(0xFF7FB2E5) : const Color(0xFF2F6FA8)))
+          : (widget.styleWashColor?.withValues(alpha: 1) ??
+              (dark ? const Color(0xFFE0B04A) : const Color(0xFFB8860B)));
+      final action = proofreader.ruleActionFor(found.issue);
+      sections.add(<HomericMenuRow>[
+        for (final replacement in found.issue.replacements.take(3))
+          HomericMenuRow(
+            label: _fixLabel(found, replacement),
+            emphasized: true,
+            onPressed: _controller.isReadOnly
+                ? null
+                : () => _applyProofingFix(witness, found, replacement),
+          ),
+        HomericMenuRow.note(found.issue.message, marker: marker),
+      ]);
+      sections.add(<HomericMenuRow>[
+        HomericMenuRow(
+          label: windows ? 'Ignore' : 'Ignore here',
+          onPressed: () {
+            _dismissContextMenu();
+            _focusNode.requestFocus();
+            _ignoreProofing(found);
+          },
+        ),
+        if (action != null)
+          HomericMenuRow(
+            label: action.label,
+            onPressed: () {
+              _dismissContextMenu();
+              _dropProofingRule(found.issue.ruleId);
+              action.onPressed();
+            },
+          ),
+      ]);
+    }
+    return sections;
+  }
+
+  /// Fix rows for the touch menus, which keep to the fixes.
+  List<ContextMenuButtonItem> _proofingFixItems(_MenuWitness witness) => [
+        for (final found in _proofingUnderMenu)
+          for (final replacement in found.issue.replacements.take(2))
+            ContextMenuButtonItem(
+              label: _fixLabel(found, replacement),
+              onPressed: _controller.isReadOnly
+                  ? null
+                  : () => _applyProofingFix(witness, found, replacement),
+            ),
+      ];
+
+  HomericProofingTap _proofingTapFor(_ResolvedProofingIssue found) {
+    final witness = _MenuWitness(
+      epoch: _hostEpoch,
+      stateRevision: _controller.stateRevision,
+    );
+    final action = widget.proofreader?.ruleActionFor(found.issue);
+    return HomericProofingTap(
+      issue: found.issue,
+      words: found.words,
+      apply: (replacement) =>
+          _applyProofingFix(witness, found, replacement, refocus: false),
+      ignore: () => _ignoreProofing(found),
+      ruleAction: action == null
+          ? null
+          : HomericProofingRuleAction(
+              label: action.label,
+              onPressed: () {
+                _dropProofingRule(found.issue.ruleId);
+                action.onPressed();
+              },
+            ),
+    );
+  }
+
+  void _ignoreProofing(_ResolvedProofingIssue found) {
+    if (!mounted) return;
+    setState(() {
+      _proofing = _proofing.without((other) => identical(other, found));
+    });
+    widget.proofreader?.ignore(widget.blockId, found.issue, found.checked);
+  }
+
+  void _dropProofingRule(String ruleId) {
+    if (!mounted) return;
+    setState(() {
+      _proofing = _proofing.without((other) => other.issue.ruleId == ruleId);
+    });
+  }
+
+  /// Applies [replacement] as one undoable edit, and keeps the paragraph's
+  /// other marks where their words still are.
+  void _applyProofingFix(
+    _MenuWitness witness,
+    _ResolvedProofingIssue found,
+    String replacement, {
+    bool refocus = true,
+  }) {
+    final isCurrent = _isMenuWitnessCurrent(witness);
+    _dismissContextMenu();
+    final block = _block;
+    if (!isCurrent ||
+        block == null ||
+        block.text != _proofing.docText ||
+        replacement.contains('\n') ||
+        replacement.contains('\r')) {
+      return;
+    }
+    final range = found.range;
+    final nextText =
+        block.text.replaceRange(range.start, range.end, replacement);
+    final delta = replacement.length - (range.end - range.start);
+    final kept = <_ResolvedProofingIssue>[
+      for (final other in _proofing.issues)
+        if (other.range.end <= range.start)
+          other
+        else if (other.range.start >= range.end)
+          other.shifted(delta),
+    ];
+    _proofing = _ResolvedProofing(nextText, List.unmodifiable(kept));
+    _controller.applyBlockEditBatch(
+      blockId: widget.blockId,
+      edits: <CanonicalTextEdit>[
+        CanonicalTextEdit(range.start, range.end, replacement),
+      ],
+      selection: BlockTextSelection.collapsed(range.start + replacement.length),
+    );
+    // The fixed paragraph is not being written: its marks stay.
+    _proofRequestKey = _ProofRequestKey(
+      proofreader: widget.proofreader!,
+      blockId: widget.blockId,
+      docText: nextText,
+    );
+    if (refocus) _focusNode.requestFocus();
   }
 
   ({int position, HomericCaretAffinity affinity}) _caretForPoint(
@@ -4799,6 +5187,119 @@ final class _ResolvedSpellingSuggestion {
   final BlockTextRange range;
   final List<String> replacements;
   final int contentRevision;
+}
+
+/// What a host gets when a touch tap lands on a proofing finding: the
+/// finding and what the writer can do with it.
+@immutable
+final class HomericProofingTap {
+  const HomericProofingTap({
+    required this.issue,
+    required this.words,
+    required this.apply,
+    required this.ignore,
+    this.ruleAction,
+  });
+
+  final HomericProofingIssue issue;
+
+  /// The paragraph's words the finding covers.
+  final String words;
+
+  /// Replaces the words with one of [issue]'s replacements, as one Undo.
+  final ValueChanged<String> apply;
+
+  /// Stops showing this finding here until the app quits.
+  final VoidCallback ignore;
+
+  /// "Turn off this rule" or "Edit rule", when the proofreader offers one.
+  final HomericProofingRuleAction? ruleAction;
+}
+
+final class _ProofRequestKey {
+  const _ProofRequestKey({
+    required this.proofreader,
+    required this.blockId,
+    required this.docText,
+  });
+
+  final HomericProofreader proofreader;
+  final String blockId;
+  final String docText;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ProofRequestKey &&
+      identical(other.proofreader, proofreader) &&
+      other.blockId == blockId &&
+      other.docText == docText;
+
+  @override
+  int get hashCode =>
+      Object.hash(identityHashCode(proofreader), blockId, docText);
+}
+
+final class _ResolvedProofing {
+  const _ResolvedProofing(this.docText, this.issues);
+
+  static const empty = _ResolvedProofing(null, <_ResolvedProofingIssue>[]);
+
+  /// The paragraph's text the findings were made for.
+  final String? docText;
+  final List<_ResolvedProofingIssue> issues;
+
+  _ResolvedProofing without(bool Function(_ResolvedProofingIssue) test) =>
+      _ResolvedProofing(
+        docText,
+        List.unmodifiable(issues.where((found) => !test(found))),
+      );
+}
+
+final class _ResolvedProofingIssue {
+  const _ResolvedProofingIssue({
+    required this.issue,
+    required this.range,
+    required this.words,
+    required this.checked,
+  });
+
+  final HomericProofingIssue issue;
+
+  /// Where the words sit in the block's text.
+  final BlockTextRange range;
+
+  /// The block's words in [range].
+  final String words;
+
+  /// The words as the proofreader read them.
+  final String checked;
+
+  _ResolvedProofingIssue shifted(int by) => _ResolvedProofingIssue(
+        issue: issue,
+        range: BlockTextRange(range.start + by, range.end + by),
+        words: words,
+        checked: checked,
+      );
+}
+
+/// A row of round dots under a grammar finding.
+void _paintProofingDots(
+  ui.Canvas canvas,
+  Rect rect,
+  Object? spec,
+) {
+  final style = spec! as UnderlineSpec;
+  const radius = 1.15;
+  const step = 4.0;
+  final y = rect.bottom - 0.25;
+  final paint = ui.Paint()..color = style.color;
+  final count = math.max(1, ((rect.width - radius * 2) / step).floor() + 1);
+  final used = (count - 1) * step;
+  var x = rect.left + (rect.width - used) / 2;
+  for (var i = 0; i < count; i++) {
+    canvas.drawCircle(Offset(x, y), radius, paint);
+    x += step;
+  }
 }
 
 void _paintSpellingSquiggle(

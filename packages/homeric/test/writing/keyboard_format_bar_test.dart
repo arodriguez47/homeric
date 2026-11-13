@@ -65,6 +65,28 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets(
+      'a bar that mounts in the build that takes the focused editor away '
+      'does not throw', (tester) async {
+    // A hot reload or a swapped app tree builds a new bar while the
+    // focused paragraph is deactivated; looking it up then threw.
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await _pump(tester, 'one two');
+    expect(_bar, findsOneWidget);
+
+    await tester.pumpWidget(KeyedSubtree(
+      key: const ValueKey<String>('a new app tree'),
+      child: MaterialApp(
+        builder: (context, child) => HomericKeyboardFormatBar(child: child!),
+        home: const SizedBox(),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+    await tester.pump();
+    expect(_bar, findsNothing);
+    await _unmount(tester);
+  });
+
   testWidgets('no bar when the focus is outside the editor', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final harness = await _pump(tester, 'one two');

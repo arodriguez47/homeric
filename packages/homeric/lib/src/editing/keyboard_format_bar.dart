@@ -66,7 +66,13 @@ class _HomericKeyboardFormatBarState extends State<HomericKeyboardFormatBar> {
   void initState() {
     super.initState();
     FocusManager.instance.addListener(_focusChanged);
-    _focusChanged();
+    // Not now: this bar can mount in the same build that deactivates the
+    // focused paragraph (a hot reload, a route swap), and an ancestor lookup
+    // from a deactivated element throws. After the frame that element is
+    // either back in the tree or unmounted.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusChanged();
+    });
   }
 
   @override

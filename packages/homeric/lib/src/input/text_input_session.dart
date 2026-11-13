@@ -128,10 +128,28 @@ final class HomericTextInputSession extends ChangeNotifier {
     if (isAttached) _connection!.updateConfig(_effectiveConfiguration);
   }
 
+  /// The Flutter view the editor is drawn in, or null for the
+  /// configuration's own.
+  ///
+  /// The Windows engine sends typed text only to a connection that names its
+  /// view: with none, the caret blinks and every letter is dropped. Editable
+  /// paragraphs set this from their [View], as [EditableText] does; a change
+  /// reaches a connection that is already open.
+  int? get viewId => _viewId;
+  int? _viewId;
+  set viewId(int? value) {
+    if (_disposed || _viewId == value) return;
+    _viewId = value;
+    if (isAttached) _connection!.updateConfig(_effectiveConfiguration);
+  }
+
   TextInputConfiguration get _effectiveConfiguration =>
-      _keyboardAppearance == null
+      _keyboardAppearance == null && _viewId == null
           ? _configuration
-          : _configuration.copyWith(keyboardAppearance: _keyboardAppearance);
+          : _configuration.copyWith(
+              keyboardAppearance: _keyboardAppearance,
+              viewId: _viewId,
+            );
 
   /// Whether this session currently owns Flutter's active input connection.
   bool get isAttached => _connection?.attached ?? false;

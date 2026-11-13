@@ -40,6 +40,31 @@ void main() {
     expect(session.keyboardAppearance, Brightness.light);
   });
 
+  testWidgets('the input connection names the paragraph\'s view',
+      (tester) async {
+    // Without it the Windows engine drops every typed letter.
+    final controller = HomericEditorController(
+      document: Document(<Block>[
+        Block(id: 'a', type: 'paragraph', runs: <InlineRun>[InlineRun('Hi')]),
+      ]),
+    );
+    final session = HomericTextInputSession(controller: controller);
+    addTearDown(session.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Material(
+        child: HomericEditableParagraph(
+          controller: controller,
+          inputSession: session,
+          blockId: 'a',
+          resolveStyle: (_) => const TextStyle(fontSize: 14),
+        ),
+      ),
+    ));
+    expect(session.viewId, tester.view.viewId);
+  });
+
   testWidgets('a Cupertino app\'s brightness reaches the keyboard too',
       (tester) async {
     final controller = HomericEditorController(

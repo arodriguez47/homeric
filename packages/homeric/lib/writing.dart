@@ -43,6 +43,7 @@ export 'src/writing/marker_stroke.dart';
 export 'src/writing/mentions.dart';
 export 'src/writing/note_marks.dart';
 export 'src/writing/open_pairs.dart';
+export 'src/writing/phrase_rules.dart';
 export 'src/writing/quote_continuation.dart';
 export 'src/writing/sentences.dart';
 export 'src/writing/smart_punctuation.dart';

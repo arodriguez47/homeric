@@ -1,0 +1,22 @@
+[package]
+name = "homeric_harper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "C entry points over Harper's grammar checker for Homeric."
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+harper-core = "=3.0.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

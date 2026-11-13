@@ -475,6 +475,39 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
+    testWidgets('Ignore after a fix hides the right one past hidden marks',
+        (tester) async {
+      final pumped = await pump(
+        tester,
+        'the **the** tide, the the cat and the the sea.',
+        platform: TargetPlatform.iOS,
+        hidden: const [(4, 6), (9, 11)],
+      );
+      expect(dots(tester), 3);
+      await tester.tapAt(centerOf(tester, 34, 41));
+      await tester.pump(const Duration(milliseconds: 400));
+      pumped.taps.last.apply('the');
+      await tester.pump();
+      expect(pumped.controller.document.blocks.single.text,
+          'the **the** tide, the the cat and the sea.');
+      await tester.tapAt(centerOf(tester, 18, 25));
+      await tester.pump(const Duration(milliseconds: 400));
+      pumped.taps.last.ignore();
+      for (var i = 0; i < 6; i++) {
+        await tester.pump();
+      }
+      // The one ignored stays away; the one over hidden marks stays.
+      expect(dots(tester), 1);
+      final before = pumped.taps.length;
+      await tester.tapAt(centerOf(tester, 18, 25));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(pumped.taps.length, before);
+      await tester.tapAt(centerOf(tester, 0, 9));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(pumped.taps.length, before + 1);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
     testWidgets('Edit rule leaves the marks until the rule changes',
         (tester) async {
       var edited = 0;

@@ -3932,6 +3932,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           range: range,
           words: docText.substring(range.start, range.end),
           checked: spelled.text.substring(issue.range.start, issue.range.end),
+          checkedStart: issue.range.start,
         ));
       }
       setState(() {
@@ -3939,6 +3940,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           docText,
           List.unmodifiable(resolved),
           projectedText: spelled.text,
+          checkedText: spelled.text,
         );
       });
     }, onError: (_) {});
@@ -4060,16 +4062,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     setState(() {
       _proofing = _proofing.without((other) => identical(other, found));
     });
-    final checked = _proofing.projectedText;
     widget.proofreader?.ignore(
       widget.blockId,
       found.issue,
       found.checked,
-      occurrence: checked == null
-          ? HomericProofreader.occurrenceOf(
-              _proofing.docText ?? '', found.words, found.range.start)
-          : HomericProofreader.occurrenceOf(
-              checked, found.checked, found.issue.range.start),
+      occurrence: HomericProofreader.occurrenceOf(
+        _proofing.checkedText ?? '',
+        found.checked,
+        found.checkedStart,
+      ),
     );
   }
 
@@ -4109,7 +4110,18 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     ];
     final before = _proofing;
     final beforeKey = _proofRequestKey;
-    _proofing = _ResolvedProofing(nextText, List.unmodifiable(kept));
+    // A fix is offered only where the words read as checked, so the
+    // checked text takes the same edit at the same length.
+    final checkedText = _proofing.checkedText?.replaceRange(
+      found.checkedStart,
+      found.checkedStart + found.checked.length,
+      replacement,
+    );
+    _proofing = _ResolvedProofing(
+      nextText,
+      List.unmodifiable(kept),
+      checkedText: checkedText,
+    );
     final applied = _controller.applyBlockEditBatch(
       blockId: widget.blockId,
       edits: <CanonicalTextEdit>[
@@ -5286,7 +5298,12 @@ final class _ProofRequestKey {
 }
 
 final class _ResolvedProofing {
-  const _ResolvedProofing(this.docText, this.issues, {this.projectedText});
+  const _ResolvedProofing(
+    this.docText,
+    this.issues, {
+    this.projectedText,
+    this.checkedText,
+  });
 
   static const empty = _ResolvedProofing(null, <_ResolvedProofingIssue>[]);
 
@@ -5296,6 +5313,10 @@ final class _ResolvedProofing {
   /// The text the proofreader read, or null when the findings were carried
   /// over a fix and the next look should check again.
   final String? projectedText;
+
+  /// The text as the proofreader reads it now, carried over fixes, where
+  /// [_ResolvedProofingIssue.checkedStart] points.
+  final String? checkedText;
   final List<_ResolvedProofingIssue> issues;
 
   _ResolvedProofing without(bool Function(_ResolvedProofingIssue) test) =>
@@ -5303,6 +5324,7 @@ final class _ResolvedProofing {
         docText,
         List.unmodifiable(issues.where((found) => !test(found))),
         projectedText: projectedText,
+        checkedText: checkedText,
       );
 }
 
@@ -5312,6 +5334,7 @@ final class _ResolvedProofingIssue {
     required this.range,
     required this.words,
     required this.checked,
+    required this.checkedStart,
   });
 
   final HomericProofingIssue issue;
@@ -5330,11 +5353,15 @@ final class _ResolvedProofingIssue {
   /// The words as the proofreader read them.
   final String checked;
 
+  /// Where [checked] starts in [_ResolvedProofing.checkedText].
+  final int checkedStart;
+
   _ResolvedProofingIssue shifted(int by) => _ResolvedProofingIssue(
         issue: issue,
         range: BlockTextRange(range.start + by, range.end + by),
         words: words,
         checked: checked,
+        checkedStart: checkedStart + by,
       );
 }
 

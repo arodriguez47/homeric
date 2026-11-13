@@ -27,6 +27,17 @@ enum DecorationKind {
   widget,
 }
 
+/// A [Decoration.spec] for a `replace` whose folded form a selection does
+/// not undo.
+///
+/// The editor shows the source of a replaced range a selection touches, so
+/// selected `**bold**` shows its marks. A spec implementing this keeps its
+/// range folded under an expanded selection: a line marker the host draws
+/// somewhere else (a bullet in a gutter, a to-do's box, a quote's bar)
+/// would otherwise show twice, once drawn and once as source. A caret or
+/// a composing range inside the range still shows its source.
+abstract interface class HomericHeldUnderSelection {}
+
 /// A non-destructive overlay anchored to a block-local content range.
 ///
 /// A decoration never touches the document: it references a block by its

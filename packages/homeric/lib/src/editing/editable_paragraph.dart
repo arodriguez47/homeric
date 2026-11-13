@@ -968,8 +968,12 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final reveal = RevealState.forMarkdownMarkVisibility(
       visibility: widget.markdownMarkVisibility,
       decorations: decorations,
-      selectionReveal:
-          _revealState(decorations, localSelection, localComposing),
+      selectionReveal: _revealState(
+        decorations,
+        localSelection,
+        localComposing,
+        expanded: !(_controller.selection?.isCollapsed ?? true),
+      ),
     );
     final source = ParagraphSource<TextStyle>.build(
       block: block,
@@ -2076,13 +2080,20 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   RevealState _revealState(
     List<Decoration> decorations,
     BlockTextSelection? selection,
-    BlockTextRange? composing,
-  ) {
+    BlockTextRange? composing, {
+    required bool expanded,
+  }) {
     final revealed = <Decoration>[];
     for (final decoration in decorations) {
       if (decoration.kind != DecorationKind.replace) continue;
-      if (_touches(decoration.start, decoration.end, selection?.start,
-              selection?.end) ||
+      // A marker the host draws elsewhere stays folded under a selection;
+      // only a caret in it shows its source.
+      // The document's selection, not this block's piece of it: one that
+      // ends at this block's start reaches it as a collapsed piece.
+      final held = decoration.spec is HomericHeldUnderSelection && expanded;
+      if ((!held &&
+              _touches(decoration.start, decoration.end, selection?.start,
+                  selection?.end)) ||
           _touches(decoration.start, decoration.end, composing?.start,
               composing?.end)) {
         revealed.add(decoration);

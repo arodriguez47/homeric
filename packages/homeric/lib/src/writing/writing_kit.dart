@@ -7,6 +7,7 @@ import '../editing/editable_document.dart';
 import '../editing/editor_controller.dart';
 import 'block_indent.dart';
 import 'list_nesting.dart';
+import 'list_numbering.dart';
 import 'quote_continuation.dart';
 import 'smart_punctuation.dart';
 import 'typed_pairs.dart';
@@ -70,6 +71,7 @@ final class HomericWritingKit {
     // Before the indent: its Tab steps out of an open mark first.
     HomericTypedPairs(),
     HomericListNesting(),
+    HomericListNumbering(),
     HomericBlockIndent(),
     HomericQuoteContinuation(),
   ];

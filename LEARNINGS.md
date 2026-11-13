@@ -1588,6 +1588,29 @@ for Scribble's insert-space gesture, which Homeric still ignores). Rects sent
 to the platform are in platform offsets, so they carry the sentinel. A
 paragraph's overlay context is null on its first frame; tests pump once more.
 
+## engineer — 2026-11-12 — Derived source text belongs inside the edit
+
+**Symptom:** Enter after item 6 of a 7-item numbered list wrote a second
+`7. `; the items after it never renumbered (Sprintnotes, reported on Mac).
+
+**Cause:** a list number is source text, and only Enter knew how to count,
+and only for the line it made. Every other edit (delete, move, drag, nest,
+unlist, paste) left the numbers after it stale. Renumbering after the
+commit would have been a second undo step, and Undo would land on the
+broken numbers.
+
+**Fix:** `HomericEditorController.addDocumentNormalizer`, a seam where a
+writing feature appends steps to a forward edit's own transaction before it
+commits (typed text, structural edits, host transactions, prepared
+commands; never undo, redo or an open composition). The selection maps
+through the appended steps. `HomericListNumbering` uses it to count every
+run of numbered items in order.
+
+**Rule going forward:** text that is derived from the rest of the document
+but stored as source (list numbers, and anything like them) is kept right
+by a normalizer, so the fix is part of the edit: one Undo, one committed
+change, and the source the host saves and exports is already right.
+
 ## engineer — 2026-11-12 — A selection showed a drawn line marker twice
 
 **Symptom:** selecting a bullet line in Sprintnotes showed the gutter

@@ -159,6 +159,21 @@ typedef HomericCommandInterceptor = HomericCommandInterception Function(
   HomericEditorCommand command,
 );
 
+/// Tidies a forward edit before it commits, by appending steps to
+/// [transaction] (whose [Transaction.doc] is the edited document) against
+/// [before], the document the edit started from.
+///
+/// Appended steps join the edit: one undo step, one committed change, and
+/// the selection maps through them. Normalizers run for typed text,
+/// structural edits and external transactions, never for undo, redo, an
+/// open composition or a prepared command. Keep them small and text-only:
+/// renumbering a list, not restructuring the document. Use
+/// [Transaction.maybeStep] so a misfit skips rather than throws.
+typedef HomericDocumentNormalizer = void Function(
+  Document before,
+  Transaction transaction,
+);
+
 /// Describes a proposed canonical mutation before the controller accepts it.
 final class HomericMutationRequest {
   /// Creates a mutation-policy request.
@@ -626,6 +641,8 @@ class HomericEditorController extends ChangeNotifier {
   HomericSelectionSnapshot? _lastEmittedSelectionSnapshot;
   final List<HomericCommandInterceptor> _commandInterceptors =
       <HomericCommandInterceptor>[];
+  final List<HomericDocumentNormalizer> _normalizers =
+      <HomericDocumentNormalizer>[];
   _EditorSnapshot? _compositionStart;
   Mapping? _compositionMapping;
   final List<StructuralChange> _compositionStructural = <StructuralChange>[];
@@ -744,6 +761,39 @@ class HomericEditorController extends ChangeNotifier {
       registered = false;
       _commandInterceptors.remove(interceptor);
     };
+  }
+
+  /// Registers [normalizer] after every currently registered normalizer.
+  ///
+  /// The returned callback removes only this registration.
+  VoidCallback addDocumentNormalizer(HomericDocumentNormalizer normalizer) {
+    if (_disposed || _disposePending) return () {};
+    _normalizers.add(normalizer);
+    var registered = true;
+    return () {
+      if (!registered) return;
+      registered = false;
+      _normalizers.remove(normalizer);
+    };
+  }
+
+  /// Runs the normalizers over [transaction]; returns the mapping of the
+  /// steps they appended, or null when they appended none.
+  Mapping? _normalize(Transaction transaction, {Document? before}) {
+    if (_normalizers.isEmpty) return null;
+    if (before == null && !transaction.docChanged) return null;
+    final mark = transaction.steps.length;
+    for (final normalizer in List<HomericDocumentNormalizer>.of(_normalizers)) {
+      try {
+        normalizer(before ?? transaction.before, transaction);
+      } on StepFailedError {
+        // A misfit leaves the steps that did apply; each is valid alone.
+      } on ArgumentError {
+        // Same: a builder refused a position.
+      }
+    }
+    if (transaction.steps.length == mark) return null;
+    return transaction.mapping.slice(mark);
   }
 
   /// Monotonic witness for every listener-visible state transition.
@@ -1283,6 +1333,16 @@ class HomericEditorController extends ChangeNotifier {
     HomericCommitOrigin origin = HomericCommitOrigin.structural,
     Iterable<CanonicalEditTarget> revealTargets = const <CanonicalEditTarget>[],
   }) {
+    if (nextComposing == null &&
+        _compositionStart == null &&
+        identical(transaction.before, _document) &&
+        _isValidSelection(result.doc, nextSelection)) {
+      final tidy = _normalize(transaction);
+      if (tidy != null) {
+        result = transaction.finish();
+        nextSelection = nextSelection?.map(tidy);
+      }
+    }
     if (!identical(transaction.before, _document) ||
         !transaction.docChanged ||
         !_isValidSelection(result.doc, nextSelection)) {
@@ -1433,13 +1493,25 @@ class HomericEditorController extends ChangeNotifier {
       return false;
     }
 
-    final result = tx.finish();
+    var result = tx.finish();
     final finalIndex = result.doc.indexOfBlockId(blockId);
     if (finalIndex == null) return false;
     final finalLength = result.doc.blocks[finalIndex].contentLength;
     if (!_validBlockSelection(selection, finalLength) ||
         (composing != null && !_validBlockRange(composing, finalLength))) {
       return false;
+    }
+    var nextSelection = HomericSelection(
+      anchor: result.doc.positionAt(finalIndex, selection.anchor),
+      head: result.doc.positionAt(finalIndex, selection.head),
+      affinity: selection.affinity,
+    );
+    if (composing == null && _compositionStart == null) {
+      final tidy = _normalize(tx);
+      if (tidy != null) {
+        result = tx.finish();
+        nextSelection = nextSelection.map(tidy);
+      }
     }
     if (tx.docChanged &&
         !_allowsMutation(
@@ -1464,11 +1536,6 @@ class HomericEditorController extends ChangeNotifier {
     }
     if (!_revealBeforeCanonicalMutation(revealTargets)) return false;
 
-    final nextSelection = HomericSelection(
-      anchor: result.doc.positionAt(finalIndex, selection.anchor),
-      head: result.doc.positionAt(finalIndex, selection.head),
-      affinity: selection.affinity,
-    );
     final nextComposing = composing == null
         ? null
         : HomericTextRange(
@@ -1523,6 +1590,9 @@ class HomericEditorController extends ChangeNotifier {
       final compositionChanged = _finishComposition(notify: false);
       if (compositionChanged) _notifyTransition();
       return compositionChanged;
+    }
+    if (_composing == null && _compositionStart == null) {
+      _normalize(transaction);
     }
     final result = transaction.finish();
     if (!_allowsMutation(
@@ -1592,11 +1662,22 @@ class HomericEditorController extends ChangeNotifier {
       results.add(stage);
       expectedBefore = stage.after;
     }
-    final finalDocument = results.last.after;
-    if (!_isValidSelection(finalDocument, command.selection) ||
+    var finalDocument = results.last.after;
+    var finalSelection = command.selection;
+    if (command.composing == null &&
+        _isValidSelection(finalDocument, finalSelection)) {
+      final tidy = Transaction(finalDocument);
+      final tidyMapping = _normalize(tidy, before: _document);
+      if (tidyMapping != null) {
+        results.add(_HomericPreparedStage.freeze(tidy));
+        finalDocument = results.last.after;
+        finalSelection = finalSelection?.map(tidyMapping);
+      }
+    }
+    if (!_isValidSelection(finalDocument, finalSelection) ||
         !_isValidComposing(
           finalDocument,
-          command.selection,
+          finalSelection,
           command.composing,
         )) {
       return false;
@@ -1675,7 +1756,7 @@ class HomericEditorController extends ChangeNotifier {
         _mapDecorationsThroughStages(_decorations, results, 0, results.length);
     _document = finalDocument;
     _decorations = finalDecorations;
-    _selection = command.selection;
+    _selection = finalSelection;
     _composing = command.composing;
     _preferredX = null;
 

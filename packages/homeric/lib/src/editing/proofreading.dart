@@ -131,8 +131,26 @@ abstract interface class HomericProofreader {
   Listenable get proofingChanges;
 
   /// Stops showing [issue] in block [blockId], where it reads [text], until
-  /// the app quits.
-  void ignore(String blockId, HomericProofingIssue issue, String text);
+  /// the app quits. [occurrence] says which time [text] appears in the
+  /// paragraph (see [occurrenceOf]), so a second "the the" keeps its mark.
+  void ignore(
+    String blockId,
+    HomericProofingIssue issue,
+    String text, {
+    int occurrence = 0,
+  });
+
+  /// How many times [words] start in [text] before [start].
+  static int occurrenceOf(String text, String words, int start) {
+    if (words.isEmpty) return 0;
+    var count = 0;
+    for (var at = text.indexOf(words);
+        at >= 0 && at < start;
+        at = text.indexOf(words, at + 1)) {
+      count++;
+    }
+    return count;
+  }
 
   /// The rule action a menu offers for [issue], or null for none.
   HomericProofingRuleAction? ruleActionFor(HomericProofingIssue issue);
@@ -171,7 +189,7 @@ class HomericProofingSuite extends ChangeNotifier
   List<HomericProofingSource> _sources;
   Set<HomericProofingGroup> _groups;
   Set<String> _rulesOff;
-  final Set<(String, String, String)> _ignored = {};
+  final Set<(String, String, String, int)> _ignored = {};
   bool _enabled = true;
 
   /// Called with a rule the writer turned off from a menu; the host saves
@@ -250,7 +268,10 @@ class HomericProofingSuite extends ChangeNotifier
         if (!_groups.contains(issue.group)) continue;
         if (_rulesOff.contains(issue.ruleId)) continue;
         final words = text.substring(range.start, range.end);
-        if (_ignored.contains((request.blockId, issue.ruleId, words))) {
+        final occurrence =
+            HomericProofreader.occurrenceOf(text, words, range.start);
+        if (_ignored
+            .contains((request.blockId, issue.ruleId, words, occurrence))) {
           continue;
         }
         if (found.contains(issue)) continue;
@@ -264,8 +285,15 @@ class HomericProofingSuite extends ChangeNotifier
   }
 
   @override
-  void ignore(String blockId, HomericProofingIssue issue, String text) {
-    if (_ignored.add((blockId, issue.ruleId, text))) notifyListeners();
+  void ignore(
+    String blockId,
+    HomericProofingIssue issue,
+    String text, {
+    int occurrence = 0,
+  }) {
+    if (_ignored.add((blockId, issue.ruleId, text, occurrence))) {
+      notifyListeners();
+    }
   }
 
   @override

@@ -94,6 +94,18 @@ void main() {
       expect(heard, 4);
     });
 
+    test('ignores one occurrence, not every one with the same words', () async {
+      final suite = HomericProofingSuite(sources: [_FakeHarper()]);
+      const twice = HomericSpellCheckRequest(
+        blockId: 'b',
+        text: 'We saw the the tide and the the sea.',
+        contentRevision: 0,
+      );
+      final second = (await suite.proofread(twice)).last;
+      suite.ignore('b', second, 'the the', occurrence: 1);
+      expect((await suite.proofread(twice)).map((i) => i.range.start), [7]);
+    });
+
     test('ignores a finding in one paragraph only', () async {
       final suite = HomericProofingSuite(sources: [_FakeHarper()]);
       final issue = (await suite.proofread(request)).single;
@@ -358,6 +370,24 @@ void main() {
         await tester.pump();
       }
       expect(dots(tester), 0);
+      ContextMenuController.removeAny();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('Ignore here leaves the same words elsewhere marked',
+        (tester) async {
+      await pump(tester, 'We saw the the tide and the the sea.');
+      expect(dots(tester), 2);
+      await tester.tapAt(
+        centerOf(tester, 24, 31),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pump();
+      await tester.tap(row('Ignore here'));
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+      }
+      expect(dots(tester), 1);
       ContextMenuController.removeAny();
       debugDefaultTargetPlatformOverride = null;
     });

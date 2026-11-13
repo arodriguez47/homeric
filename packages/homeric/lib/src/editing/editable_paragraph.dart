@@ -3848,10 +3848,15 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
   }
 
   _ResolvedProofingIssue? _proofingIssueAt(int offset) {
+    // Inside a mark first, so a mark flush after another one wins at its
+    // first letter; then the end of a mark, for a click just past it.
     for (final found in _currentProofing) {
-      if (found.range.start <= offset && offset <= found.range.end) {
+      if (found.range.start <= offset && offset < found.range.end) {
         return found;
       }
+    }
+    for (final found in _currentProofing) {
+      if (offset == found.range.end) return found;
     }
     return null;
   }
@@ -4055,7 +4060,17 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     setState(() {
       _proofing = _proofing.without((other) => identical(other, found));
     });
-    widget.proofreader?.ignore(widget.blockId, found.issue, found.checked);
+    final checked = _proofing.projectedText;
+    widget.proofreader?.ignore(
+      widget.blockId,
+      found.issue,
+      found.checked,
+      occurrence: checked == null
+          ? HomericProofreader.occurrenceOf(
+              _proofing.docText ?? '', found.words, found.range.start)
+          : HomericProofreader.occurrenceOf(
+              checked, found.checked, found.issue.range.start),
+    );
   }
 
   /// Applies [replacement] as one undoable edit, and keeps the paragraph's

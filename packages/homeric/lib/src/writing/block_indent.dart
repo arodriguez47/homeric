@@ -26,7 +26,8 @@
 /// - The caret never rests inside a folded indent.
 ///
 /// A block moves at most one step right of the block above it, so an
-/// indent always reads as belonging to the line above.
+/// indent always reads as belonging to the line above. The first block has
+/// no line above, so it stays at the margin.
 library;
 
 import 'dart:async';
@@ -387,9 +388,10 @@ final class HomericBlockIndent extends HomericWritingFeature {
     if (range == null) return const <(int, int, String)>[];
     final edits = <(int, int, String)>[];
     // The column of the block above, as it will be once the blocks before
-    // have moved.
+    // have moved. The first block has none, so it never goes in (one
+    // already in can still come out).
     var above = range.$1 == 0
-        ? 0
+        ? -1
         : columnOf(document.blocks[range.$1 - 1],
             types: types, accepts: accepts);
     for (var index = range.$1; index <= range.$2; index++) {
@@ -474,8 +476,13 @@ final class HomericBlockIndent extends HomericWritingFeature {
                     edits.single.end != caret.offset))) {
           return false;
         }
-        return _apply(controller, document, selection,
-            outdent: false, types: types, accepts: accepts);
+        if (_apply(controller, document, selection,
+            outdent: false, types: types, accepts: accepts)) {
+          return true;
+        }
+        // The first line stays at the margin: its space is dropped rather
+        // than typed, so two of them never read as an indent.
+        return indent.level == 0 && document.indexOfBlockId(block.id) == 0;
       case HomericCommandKind.preDelete:
         // Backspace: one character before the caret.
         if (indent.level == 0 ||

@@ -10,6 +10,17 @@ const _style = TextStyle(fontSize: 14);
 const _grammar = Color(0xFF0000FF);
 const _styleMark = Color(0xFFAA7700);
 
+/// Records the lines a painter draws.
+final class _LineCanvas implements Canvas {
+  final lines = <(Offset, Offset)>[];
+
+  @override
+  void drawLine(Offset p1, Offset p2, Paint paint) => lines.add((p1, p2));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
 /// Flags "the the" as a grammar finding, and counts what it was asked.
 final class _FakeHarper implements HomericProofingSource {
   final asked = <String>[];
@@ -275,6 +286,44 @@ void main() {
       expect(dashes(tester), 1);
       expect(fills(tester), 0,
           reason: 'a style mark is a line under the words, not a wash');
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('style dashes are separate segments, one pattern per line',
+        (tester) async {
+      await pump(tester, 'We saw the the tide in order to look.');
+      final style = layers(tester).singleWhere((layer) =>
+          layer.spec is UnderlineSpec &&
+          (layer.spec! as UnderlineSpec).color == _styleMark);
+      expect(style.fit, PaintLayerFit.inkLine);
+      // Drawn before the grammar dots, so the dots stay on top.
+      final all = layers(tester);
+      expect(
+        all.indexOf(style),
+        lessThan(all.indexWhere((layer) =>
+            layer.spec is UnderlineSpec &&
+            (layer.spec! as UnderlineSpec).color == _grammar)),
+      );
+
+      final wide = _LineCanvas();
+      style.painter(wide, const Rect.fromLTWH(10, 0, 60, 20), style.spec);
+      expect(wide.lines.length, greaterThan(3));
+      for (var i = 1; i < wide.lines.length; i++) {
+        expect(wide.lines[i].$1.dx, greaterThan(wide.lines[i - 1].$2.dx),
+            reason: 'a gap between dashes');
+      }
+      for (final (a, b) in wide.lines) {
+        expect(a.dy, b.dy);
+        expect(a.dx, greaterThanOrEqualTo(10));
+        expect(b.dx, lessThanOrEqualTo(70));
+      }
+
+      // A fragment narrower than a dash still gets one mark inside it.
+      final narrow = _LineCanvas();
+      style.painter(narrow, const Rect.fromLTWH(10, 0, 2, 20), style.spec);
+      expect(narrow.lines, hasLength(1));
+      expect(narrow.lines.single.$1.dx, greaterThanOrEqualTo(10));
+      expect(narrow.lines.single.$2.dx, lessThanOrEqualTo(12));
       debugDefaultTargetPlatformOverride = null;
     });
 

@@ -1104,6 +1104,21 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           ),
           fit: PaintLayerFit.line,
         ),
+      // Style first, so spelling and grammar marks, which matter more,
+      // draw over the dashes where ranges overlap.
+      for (final found in proofing)
+        if (found.issue.mark == HomericProofingMark.style)
+          PaintLayer(
+            range: DocRange(
+              DocOffset(found.range.start),
+              DocOffset(found.range.end),
+            ),
+            band: PaintBand.overlay,
+            painter: _paintProofingDashes,
+            spec: UnderlineSpec(styleColor),
+            // One dash pattern per line, across bold or bidi runs.
+            fit: PaintLayerFit.inkLine,
+          ),
       for (final suggestion in _currentSpellingSuggestions)
         // The word still being typed, caret at its end, waits until the
         // writer moves on, as on macOS.
@@ -1129,17 +1144,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             band: PaintBand.overlay,
             painter: _paintProofingDots,
             spec: UnderlineSpec(grammarColor),
-          ),
-      for (final found in proofing)
-        if (found.issue.mark == HomericProofingMark.style)
-          PaintLayer(
-            range: DocRange(
-              DocOffset(found.range.start),
-              DocOffset(found.range.end),
-            ),
-            band: PaintBand.overlay,
-            painter: _paintProofingDashes,
-            spec: UnderlineSpec(styleColor),
+            fit: PaintLayerFit.inkLine,
           ),
       if (focused && localComposing != null && !localComposing.isCollapsed)
         PaintLayer(
@@ -5426,7 +5431,7 @@ void _paintProofingDashes(
   var x = rect.left + (rect.width - used) / 2;
   for (var i = 0; i < count; i++) {
     canvas.drawLine(
-      Offset(x, y),
+      Offset(math.max(x, rect.left), y),
       Offset(math.min(x + dash, rect.right), y),
       paint,
     );

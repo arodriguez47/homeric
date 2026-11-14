@@ -318,7 +318,7 @@ class HomericEditableParagraph extends StatefulWidget {
     this.spellingColor,
     this.proofreader,
     this.grammarColor,
-    this.styleWashColor,
+    this.styleColor,
     this.onProofingIssueTap,
     this.overlayBuilder,
     this.textSlotBuilder,
@@ -463,8 +463,13 @@ class HomericEditableParagraph extends StatefulWidget {
   /// Color of the dotted line under a grammar finding.
   final Color? grammarColor;
 
-  /// Color of the wash behind a style finding or the writer's own rule.
-  final Color? styleWashColor;
+  /// Color of the dashed line under a style finding or the writer's own
+  /// rule.
+  ///
+  /// Every proofing mark is a line under the words (spelling wavy, grammar
+  /// dotted, style dashed), never a fill behind them, so no mark reads as
+  /// a highlight the writer made.
+  final Color? styleColor;
 
   /// Called when a touch tap lands on a proofing finding, so the host can
   /// show its own sheet. Null shows the finding's fixes in the touch menu.
@@ -1062,10 +1067,10 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
         (brightness == Brightness.dark
             ? const Color(0xFF7FB2E5)
             : const Color(0xFF2F6FA8));
-    final styleWashColor = widget.styleWashColor ??
+    final styleColor = widget.styleColor ??
         (brightness == Brightness.dark
-            ? const Color(0x2EE0B04A)
-            : const Color(0x38DEAA3C));
+            ? const Color(0xFFD9A84A)
+            : const Color(0xFFA9781E));
     final proofing = _controller.composing == null
         ? _currentProofing
         : const <_ResolvedProofingIssue>[];
@@ -1076,17 +1081,6 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
     final editingLayers = <PaintLayer>[
       ...widget.paintLayers,
       ...derivedPaintLayers,
-      for (final found in proofing)
-        if (found.issue.mark == HomericProofingMark.style)
-          PaintLayer(
-            range: DocRange(
-              DocOffset(found.range.start),
-              DocOffset(found.range.end),
-            ),
-            band: PaintBand.underlay,
-            painter: solidWashPainter,
-            spec: SolidWashSpec(styleWashColor),
-          ),
       if (_autocorrectionPrompt?.range case final range?)
         PaintLayer(
           range: DocRange(
@@ -1110,6 +1104,21 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
           ),
           fit: PaintLayerFit.line,
         ),
+      // Style first, so spelling and grammar marks, which matter more,
+      // draw over the dashes where ranges overlap.
+      for (final found in proofing)
+        if (found.issue.mark == HomericProofingMark.style)
+          PaintLayer(
+            range: DocRange(
+              DocOffset(found.range.start),
+              DocOffset(found.range.end),
+            ),
+            band: PaintBand.overlay,
+            painter: _paintProofingDashes,
+            spec: UnderlineSpec(styleColor),
+            // One dash pattern per line, across bold or bidi runs.
+            fit: PaintLayerFit.inkLine,
+          ),
       for (final suggestion in _currentSpellingSuggestions)
         // The word still being typed, caret at its end, waits until the
         // writer moves on, as on macOS.
@@ -1135,6 +1144,7 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
             band: PaintBand.overlay,
             painter: _paintProofingDots,
             spec: UnderlineSpec(grammarColor),
+            fit: PaintLayerFit.inkLine,
           ),
       if (focused && localComposing != null && !localComposing.isCollapsed)
         PaintLayer(
@@ -3991,8 +4001,8 @@ class _HomericEditableParagraphState extends State<HomericEditableParagraph>
       final marker = found.issue.mark == HomericProofingMark.grammar
           ? (widget.grammarColor ??
               (dark ? const Color(0xFF7FB2E5) : const Color(0xFF2F6FA8)))
-          : (widget.styleWashColor?.withValues(alpha: 1) ??
-              (dark ? const Color(0xFFE0B04A) : const Color(0xFFB8860B)));
+          : (widget.styleColor ??
+              (dark ? const Color(0xFFD9A84A) : const Color(0xFFA9781E)));
       final action = proofreader.ruleActionFor(found.issue);
       sections.add(<HomericMenuRow>[
         for (final replacement in found.fixes.take(3))
@@ -5395,6 +5405,36 @@ void _paintProofingDots(
   var x = rect.left + (rect.width - used) / 2;
   for (var i = 0; i < count; i++) {
     canvas.drawCircle(Offset(x, y), radius, paint);
+    x += step;
+  }
+}
+
+/// Short dashes under a style finding: a nudge, quieter than grammar's
+/// dots and never a fill that could pass for a highlight.
+void _paintProofingDashes(
+  ui.Canvas canvas,
+  Rect rect,
+  Object? spec,
+) {
+  final style = spec! as UnderlineSpec;
+  const dash = 3.5;
+  const gap = 2.5;
+  const step = dash + gap;
+  final y = rect.bottom - 0.25;
+  final paint = ui.Paint()
+    ..color = style.color
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.4
+    ..strokeCap = ui.StrokeCap.round;
+  final count = math.max(1, ((rect.width + gap) / step).floor());
+  final used = count * step - gap;
+  var x = rect.left + (rect.width - used) / 2;
+  for (var i = 0; i < count; i++) {
+    canvas.drawLine(
+      Offset(math.max(x, rect.left), y),
+      Offset(math.min(x + dash, rect.right), y),
+      paint,
+    );
     x += step;
   }
 }

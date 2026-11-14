@@ -18,7 +18,7 @@ enum HomericProofingMark {
   /// Something reads as wrong: a dotted underline.
   grammar,
 
-  /// Something could read better: a soft wash.
+  /// Something could read better: a dashed underline.
   style,
 }
 

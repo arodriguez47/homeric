@@ -193,11 +193,36 @@ void main() {
       );
     });
 
-    test('the first line can step in once', () {
-      final controller = controllerFor(['only'], caret: 0);
-      expect(HomericBlockIndent.indentSelection(controller), isTrue);
+    test('the first line stays at the margin', () {
+      final controller = controllerFor(['only', 'next'], line: 0, caret: 0);
       expect(HomericBlockIndent.indentSelection(controller), isFalse);
-      expect(linesOf(controller), ['  only']);
+      expect(HomericBlockIndent.indentBlock(controller, 'l0'), isFalse);
+      expect(linesOf(controller), ['only', 'next']);
+      // A first list line doesn't nest either.
+      final list = controllerFor(['- item', '- next'], line: 0, caret: 0);
+      expect(HomericBlockIndent.indentSelection(list), isFalse);
+      expect(linesOf(list), ['- item', '- next']);
+    });
+
+    test('a first line already in still comes out', () {
+      final controller = controllerFor(['  only', 'next'], line: 0, caret: 2);
+      expect(
+        HomericBlockIndent.indentSelection(controller, outdent: true),
+        isTrue,
+      );
+      expect(linesOf(controller), ['only', 'next']);
+      expect(HomericBlockIndent.indentSelection(controller), isFalse);
+    });
+
+    test('a selection from the first line moves the lines after it', () {
+      final controller = controllerFor(['one', 'two', 'three']);
+      final doc = controller.document;
+      controller.setSelection(HomericSelection(
+        anchor: doc.positionAt(0, 1),
+        head: doc.positionAt(2, 1),
+      ));
+      expect(HomericBlockIndent.indentSelection(controller), isTrue);
+      expect(linesOf(controller), ['one', '  two', '  three']);
     });
 
     test(
@@ -290,6 +315,20 @@ void main() {
       // Further than the line above allows: a space after all.
       controller.replaceSelection(' ');
       expect(linesOf(controller), ['one', '   two']);
+    });
+
+    test('a space at the start of the first line is dropped', () {
+      final controller = controllerFor(['one', 'two'], line: 0, caret: 0);
+      controller.replaceSelection(' ');
+      controller.replaceSelection(' ');
+      expect(linesOf(controller), ['one', 'two']);
+      expect(caretOf(controller), ('l0', 0));
+      // An empty first line too, so a new note never starts indented.
+      final empty = controllerFor(['', 'two'], line: 0, caret: 0);
+      empty.replaceSelection(' ');
+      empty.replaceSelection(' ');
+      empty.replaceSelection('words');
+      expect(linesOf(empty), ['words', 'two']);
     });
 
     test('a space elsewhere, or in an empty paragraph, is a space', () {

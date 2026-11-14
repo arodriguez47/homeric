@@ -323,6 +323,12 @@ void main() {
       controller.replaceSelection(' ');
       expect(linesOf(controller), ['one', 'two']);
       expect(caretOf(controller), ('l0', 0));
+      // An empty first line too, so a new note never starts indented.
+      final empty = controllerFor(['', 'two'], line: 0, caret: 0);
+      empty.replaceSelection(' ');
+      empty.replaceSelection(' ');
+      empty.replaceSelection('words');
+      expect(linesOf(empty), ['words', 'two']);
     });
 
     test('a space elsewhere, or in an empty paragraph, is a space', () {

@@ -468,7 +468,6 @@ final class HomericBlockIndent extends HomericWritingFeature {
         // A space typed (one insertion at the caret, not a paste) at the
         // start of a paragraph's words.
         if (command.text != ' ' ||
-            empty ||
             command.replacementComposing != null ||
             (edits != null &&
                 (edits.length != 1 ||
@@ -476,13 +475,15 @@ final class HomericBlockIndent extends HomericWritingFeature {
                     edits.single.end != caret.offset))) {
           return false;
         }
-        if (_apply(controller, document, selection,
-            outdent: false, types: types, accepts: accepts)) {
+        // The first line stays at the margin, empty or not: its space is
+        // dropped rather than typed, so two of them never read as an
+        // indent.
+        if (indent.level == 0 && document.indexOfBlockId(block.id) == 0) {
           return true;
         }
-        // The first line stays at the margin: its space is dropped rather
-        // than typed, so two of them never read as an indent.
-        return indent.level == 0 && document.indexOfBlockId(block.id) == 0;
+        if (empty) return false;
+        return _apply(controller, document, selection,
+            outdent: false, types: types, accepts: accepts);
       case HomericCommandKind.preDelete:
         // Backspace: one character before the caret.
         if (indent.level == 0 ||

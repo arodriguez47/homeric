@@ -153,10 +153,11 @@ void main() {
       'Outdent and Indent stay in sight beside the hide key and move the '
       'line, not the word', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    final harness = await _pump(tester, 'one two', indents: true);
+    final harness =
+        await _pump(tester, 'one two', indents: true, above: 'above');
     final document = harness.controller.document;
     harness.controller
-        .setSelection(HomericSelection.collapsed(document.positionAt(0, 5)));
+        .setSelection(HomericSelection.collapsed(document.positionAt(1, 5)));
     await tester.pump();
 
     expect(_labels(tester), ['Link', 'Note', 'Outdent', 'Indent']);
@@ -169,10 +170,10 @@ void main() {
 
     await tester.tap(_button('Indent'));
     await tester.pump();
-    expect(harness.controller.document.blocks.single.text, '  one two');
+    expect(harness.controller.document.blocks.last.text, '  one two');
     final caret = harness.controller.selection!;
     expect(caret.isCollapsed, isTrue);
-    expect(caret.head, harness.controller.document.positionAt(0, 7));
+    expect(caret.head, harness.controller.document.positionAt(1, 7));
     expect(_enabled(tester, 'Outdent'), isTrue);
     expect(_enabled(tester, 'Indent'), isFalse);
     expect(harness.focus().hasFocus, isTrue);
@@ -263,10 +264,11 @@ void main() {
       'an empty pair left after another change is taken out, and the '
       'other change stays', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    final harness = await _pump(tester, 'one  two', indents: true);
+    final harness =
+        await _pump(tester, 'one  two', indents: true, above: 'above');
     final controller = harness.controller;
     controller.setSelection(
-        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+        HomericSelection.collapsed(controller.document.positionAt(1, 4)));
     await tester.pump();
     await _openStyles(tester);
     await tester.tap(_button('Bold'));
@@ -275,29 +277,30 @@ void main() {
     await tester.pump();
     await tester.tap(_button('Indent'));
     await tester.pump();
-    expect(controller.document.blocks.single.text, '  one **** two');
+    expect(controller.document.blocks.last.text, '  one **** two');
 
     controller.setSelection(
-        HomericSelection.collapsed(controller.document.positionAt(0, 14)));
+        HomericSelection.collapsed(controller.document.positionAt(1, 14)));
     await tester.pump();
-    expect(controller.document.blocks.single.text, '  one  two');
+    expect(controller.document.blocks.last.text, '  one  two');
     await _unmount(tester);
   });
 
   testWidgets('empty pairs opened one inside another all go together',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    final harness = await _pump(tester, 'one  two', indents: true);
+    final harness =
+        await _pump(tester, 'one  two', indents: true, above: 'above');
     final controller = harness.controller;
     controller.setSelection(
-        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+        HomericSelection.collapsed(controller.document.positionAt(1, 4)));
     await tester.pump();
     await _openStyles(tester);
     await tester.tap(_button('Bold'));
     await tester.pump();
     await tester.tap(_button('Highlight'));
     await tester.pump();
-    expect(controller.document.blocks.single.text, 'one **====** two');
+    expect(controller.document.blocks.last.text, 'one **====** two');
     // Indent first, so the pairs go by deleting rather than by undo.
     await tester.tap(_key('styles-back'));
     await tester.pump();
@@ -305,26 +308,27 @@ void main() {
     await tester.pump();
 
     controller.setSelection(
-        HomericSelection.collapsed(controller.document.positionAt(0, 0)));
+        HomericSelection.collapsed(controller.document.positionAt(1, 0)));
     await tester.pump();
-    expect(controller.document.blocks.single.text, '  one  two');
+    expect(controller.document.blocks.last.text, '  one  two');
     await _unmount(tester);
   });
 
   testWidgets('Bold then Italic, both empty, go together (`******`)',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    final harness = await _pump(tester, 'one  two', indents: true);
+    final harness =
+        await _pump(tester, 'one  two', indents: true, above: 'above');
     final controller = harness.controller;
     controller.setSelection(
-        HomericSelection.collapsed(controller.document.positionAt(0, 4)));
+        HomericSelection.collapsed(controller.document.positionAt(1, 4)));
     await tester.pump();
     await _openStyles(tester);
     await tester.tap(_button('Bold'));
     await tester.pump();
     await tester.tap(_button('Italic'));
     await tester.pump();
-    expect(controller.document.blocks.single.text, 'one ****** two');
+    expect(controller.document.blocks.last.text, 'one ****** two');
     // Indent first, so the pairs go by deleting rather than by undo.
     await tester.tap(_key('styles-back'));
     await tester.pump();
@@ -332,9 +336,9 @@ void main() {
     await tester.pump();
 
     controller.setSelection(
-        HomericSelection.collapsed(controller.document.positionAt(0, 0)));
+        HomericSelection.collapsed(controller.document.positionAt(1, 0)));
     await tester.pump();
-    expect(controller.document.blocks.single.text, '  one  two');
+    expect(controller.document.blocks.last.text, '  one  two');
     await _unmount(tester);
   });
 
@@ -726,6 +730,7 @@ Future<
   bool lines = false,
   VoidCallback? onFootnote,
   Size screen = const Size(390, 844),
+  String? above,
 }) async {
   tester.view.physicalSize = screen * 3;
   tester.view.devicePixelRatio = 3;
@@ -734,6 +739,9 @@ Future<
   addTearDown(tester.view.reset);
   final controller = HomericEditorController(
     document: Document([
+      // A line above, for a test that indents: the first never goes in.
+      if (above != null)
+        Block(id: 'z', type: 'paragraph', runs: [InlineRun(above)]),
       Block(id: 'a', type: 'paragraph', runs: [InlineRun(text)]),
     ]),
   );

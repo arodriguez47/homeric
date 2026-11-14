@@ -8,7 +8,7 @@ import 'package:homeric/writing.dart';
 
 const _style = TextStyle(fontSize: 14);
 const _grammar = Color(0xFF0000FF);
-const _wash = Color(0x33FFCC00);
+const _styleMark = Color(0xFFAA7700);
 
 /// Flags "the the" as a grammar finding, and counts what it was asked.
 final class _FakeHarper implements HomericProofingSource {
@@ -211,7 +211,7 @@ void main() {
                 markdownMarkVisibility: MarkdownMarkVisibility.livePreview,
                 proofreader: suite,
                 grammarColor: _grammar,
-                styleWashColor: _wash,
+                styleColor: _styleMark,
                 onProofingIssueTap: taps.add,
               ),
             ),
@@ -236,11 +236,18 @@ void main() {
             (layer.spec! as UnderlineSpec).color == _grammar)
         .length;
 
-    int washes(WidgetTester tester) => layers(tester)
+    int dashes(WidgetTester tester) => layers(tester)
         .where((layer) =>
-            layer.band == PaintBand.underlay &&
-            layer.spec is SolidWashSpec &&
-            (layer.spec! as SolidWashSpec).color == _wash)
+            layer.band == PaintBand.overlay &&
+            layer.spec is UnderlineSpec &&
+            (layer.spec! as UnderlineSpec).color == _styleMark)
+        .length;
+
+    /// Fills behind the words other than the selection's: a proofing mark
+    /// must never look like a highlight.
+    int fills(WidgetTester tester) => layers(tester)
+        .where((layer) =>
+            layer.band == PaintBand.underlay && layer.spec is SolidWashSpec)
         .length;
 
     Offset centerOf(WidgetTester tester, int start, int end) {
@@ -260,12 +267,14 @@ void main() {
           matching: find.text(label),
         );
 
-    testWidgets('a paragraph the caret is not in gets dots and a wash',
+    testWidgets('a paragraph the caret is not in gets dots and dashes',
         (tester) async {
       await pump(tester, 'We saw the the tide in order to look.');
       expect(harper.asked, ['We saw the the tide in order to look.']);
       expect(dots(tester), 1);
-      expect(washes(tester), 1);
+      expect(dashes(tester), 1);
+      expect(fills(tester), 0,
+          reason: 'a style mark is a line under the words, not a wash');
       debugDefaultTargetPlatformOverride = null;
     });
 
@@ -351,7 +360,7 @@ void main() {
         'We saw the tide in order to look.',
       );
       // The other mark stays where its words moved to, without a new check.
-      expect(washes(tester), 1);
+      expect(dashes(tester), 1);
       expect(dots(tester), 0);
       expect(harper.asked, hasLength(1));
       ContextMenuController.removeAny();
@@ -525,7 +534,7 @@ void main() {
         'We utilize the van.',
         platform: TargetPlatform.iOS,
       );
-      expect(washes(tester), 1);
+      expect(dashes(tester), 1);
       await tester.tapAt(centerOf(tester, 3, 10));
       await tester.pump(const Duration(milliseconds: 400));
       final action = pumped.taps.single.ruleAction!;
@@ -533,7 +542,7 @@ void main() {
       action.onPressed();
       await tester.pump();
       expect(edited, 1);
-      expect(washes(tester), 1);
+      expect(dashes(tester), 1);
       debugDefaultTargetPlatformOverride = null;
     });
   });

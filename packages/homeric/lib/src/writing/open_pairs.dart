@@ -14,6 +14,12 @@
 /// is followed the same way, except that left empty only the closing marker
 /// it added goes: the opening the writer typed stays. Tab steps out of
 /// either kind ([stepOut]).
+///
+/// Deleting into the opening of a pair still empty (Backspace at `==▍==`,
+/// or a selection taking it) takes the closing marker added for the writer
+/// with it, in the same edit and undo step: `=▍`, as if only one `=` had
+/// been typed. A pair from a format button never had an opening the writer
+/// typed, so what is left of it goes too.
 library;
 
 import 'dart:async';
@@ -31,6 +37,7 @@ final class HomericOpenPairs {
     // Both streams close with the controller, ending the listening.
     _controller.committedChanges.listen(_mapThrough);
     _controller.selectionChanges.listen((_) => _caretMoved());
+    _controller.addDocumentNormalizer(_dropOrphanedClosings);
   }
 
   static final Expando<HomericOpenPairs> _of = Expando<HomericOpenPairs>();
@@ -161,6 +168,53 @@ final class HomericOpenPairs {
       pair.close = change.mapping.map(pair.close, assoc: 1);
     }
     _pairs.removeWhere((p) => !p.standsIn(change.after));
+  }
+
+  /// When an edit breaks the opening marker of a pair still empty and
+  /// leaves its closing marker standing, the edit takes that closing marker
+  /// too (and, for a pair from a format button, what is left of the
+  /// opening). Runs before the edit commits, so it is one undo step.
+  void _dropOrphanedClosings(Document before, Transaction tx) {
+    // Pairs are kept in [before]'s positions; a transaction that starts
+    // elsewhere (a prepared command's tidy stage) can't be mapped.
+    if (_pairs.isEmpty || !identical(before, tx.before) || !tx.docChanged) {
+      return;
+    }
+    final after = tx.doc;
+    final spans = <(int, int)>[];
+    for (final pair in _pairs) {
+      if (pair.inner != pair.close || !pair.standsIn(before)) continue;
+      final length = pair.marker.length;
+      final close = tx.mapping.map(pair.close, assoc: 1);
+      // Words typed at the caret went in between: no longer empty.
+      if (tx.mapping.map(pair.inner, assoc: -1) != close) continue;
+      final at = after.resolve(close);
+      if (at is! InlinePosition) continue;
+      final text = at.block.text;
+      // The closing marker went too, or was never touched with the opening.
+      if (at.offset + length > text.length ||
+          text.substring(at.offset, at.offset + length) != pair.marker) {
+        continue;
+      }
+      final opening = tx.mapping.map(pair.inner - length, assoc: 1);
+      final rest = close - opening;
+      if (rest >= length) continue; // the opening still stands
+      var from = close;
+      if (!pair.typed && rest > 0) {
+        final left = text.substring(at.offset - rest, at.offset);
+        if (left == pair.marker[0] * rest) from = opening;
+      }
+      spans.add((from, close + length));
+    }
+    if (spans.isEmpty) return;
+    // Furthest first, so the spans still to come stay where they were.
+    spans.sort((a, b) => b.$1.compareTo(a.$1));
+    var last = -1;
+    for (final (from, to) in spans) {
+      if (last >= 0 && to > last) continue; // overlaps one already taken
+      tx.deleteRange(from, to);
+      last = from;
+    }
   }
 
   void _caretMoved() {

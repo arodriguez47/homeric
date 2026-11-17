@@ -106,6 +106,89 @@ void main() {
     expect(textOf(controller), 'a **');
   });
 
+  group('deleting the opening of an empty pair', () {
+    Future<void> backspace(HomericEditorController controller) async {
+      controller.deleteBackward();
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('Backspace takes the added closing with it', () async {
+      for (final marker in HomericTypedPairs.defaultMarkers) {
+        final controller = controllerFor('Say ');
+        await type(controller, marker);
+        expect(textOf(controller), 'Say $marker$marker', reason: marker);
+        await backspace(controller);
+        expect(textOf(controller), 'Say ${marker[0]}', reason: marker);
+        expect(caretOf(controller), 5, reason: marker);
+        await backspace(controller);
+        expect(textOf(controller), 'Say ', reason: marker);
+      }
+    });
+
+    test('one undo brings back the whole pair', () async {
+      final controller = controllerFor('a ');
+      await type(controller, '==');
+      await backspace(controller);
+      expect(textOf(controller), 'a =');
+      controller.undo();
+      expect(textOf(controller), 'a ====');
+      expect(caretOf(controller), 4);
+    });
+
+    test('a selection taking the opening takes the closing too', () async {
+      final controller = controllerFor('a ');
+      await type(controller, '==');
+      controller.setSelection(HomericSelection(
+        anchor: controller.document.positionAt(0, 1),
+        head: controller.document.positionAt(0, 4),
+      ));
+      controller.deleteBackward();
+      await Future<void>.delayed(Duration.zero);
+      expect(textOf(controller), 'a');
+    });
+
+    test('a pair with words in it keeps its closing', () async {
+      final controller = controllerFor('a ');
+      await type(controller, '==hi');
+      controller.setSelection(
+        HomericSelection.collapsed(controller.document.positionAt(0, 4)),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await backspace(controller);
+      expect(textOf(controller), 'a =hi==');
+    });
+
+    test('other markers in the text are left alone', () async {
+      final controller = controllerFor('==x== and ');
+      await type(controller, '==');
+      expect(textOf(controller), '==x== and ====');
+      await backspace(controller);
+      expect(textOf(controller), '==x== and =');
+    });
+
+    test('a selection taking the whole pair leaves the next marker', () async {
+      final controller = controllerFor('a  ==tail', caret: 2);
+      await type(controller, '==');
+      expect(textOf(controller), 'a ==== ==tail');
+      controller.setSelection(HomericSelection(
+        anchor: controller.document.positionAt(0, 2),
+        head: controller.document.positionAt(0, 7),
+      ));
+      controller.deleteBackward();
+      await Future<void>.delayed(Duration.zero);
+      expect(textOf(controller), 'a ==tail');
+    });
+
+    test('a pair from a format button goes whole', () async {
+      final controller = controllerFor('a ');
+      expect(HomericOpenPairs.of(controller).press('**'), isTrue);
+      expect(textOf(controller), 'a ****');
+      await backspace(controller);
+      expect(textOf(controller), 'a ');
+      expect(caretOf(controller), 2);
+    });
+  });
+
   test('stepOut puts the caret past the closing marker', () async {
     final controller = controllerFor('');
     await type(controller, '**hi');

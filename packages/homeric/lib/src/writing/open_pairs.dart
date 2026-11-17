@@ -185,13 +185,21 @@ final class HomericOpenPairs {
     for (final pair in _pairs) {
       if (pair.inner != pair.close || !pair.standsIn(before)) continue;
       final length = pair.marker.length;
-      final close = tx.mapping.map(pair.close, assoc: 1);
+      final start = tx.mapping.mapResult(pair.close, assoc: 1);
+      final end = tx.mapping.mapResult(pair.close + length, assoc: -1);
+      final close = start.pos;
+      // The closing marker went too (in part or whole): nothing to tidy,
+      // and a like marker now standing there is someone else's.
+      if (start.deletedAfter ||
+          end.deletedBefore ||
+          end.pos - close != length) {
+        continue;
+      }
       // Words typed at the caret went in between: no longer empty.
       if (tx.mapping.map(pair.inner, assoc: -1) != close) continue;
       final at = after.resolve(close);
       if (at is! InlinePosition) continue;
       final text = at.block.text;
-      // The closing marker went too, or was never touched with the opening.
       if (at.offset + length > text.length ||
           text.substring(at.offset, at.offset + length) != pair.marker) {
         continue;

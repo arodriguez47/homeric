@@ -166,6 +166,19 @@ void main() {
       expect(textOf(controller), '==x== and =');
     });
 
+    test('a selection taking the whole pair leaves the next marker', () async {
+      final controller = controllerFor('a  ==tail', caret: 2);
+      await type(controller, '==');
+      expect(textOf(controller), 'a ==== ==tail');
+      controller.setSelection(HomericSelection(
+        anchor: controller.document.positionAt(0, 2),
+        head: controller.document.positionAt(0, 7),
+      ));
+      controller.deleteBackward();
+      await Future<void>.delayed(Duration.zero);
+      expect(textOf(controller), 'a ==tail');
+    });
+
     test('a pair from a format button goes whole', () async {
       final controller = controllerFor('a ');
       expect(HomericOpenPairs.of(controller).press('**'), isTrue);
